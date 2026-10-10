@@ -1,0 +1,24 @@
+{
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "tea-and-tiles",
+      "runtime": "nodejs22"
+    }
+  ],
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "emulators": {
+    "auth": { "host": "127.0.0.1", "port": 9199 },
+    "firestore": { "host": "127.0.0.1", "port": 8180, "websocketPort": 9151 },
+    "functions": { "host": "127.0.0.1", "port": 5101 },
+    "hub": { "host": "127.0.0.1", "port": 4401 },
+    "logging": { "host": "127.0.0.1", "port": 4501 },
+    "eventarc": { "host": "127.0.0.1", "port": 9298 },
+    "tasks": { "host": "127.0.0.1", "port": 9498 },
+    "ui": { "enabled": false },
+    "singleProjectMode": true
+  }
+}

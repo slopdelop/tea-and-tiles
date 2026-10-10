@@ -1,0 +1,43 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function bound() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/bindings/$(request.auth.uid));
+    }
+    function slot() {
+      return get(/databases/$(database)/documents/bindings/$(request.auth.uid)).data.slot;
+    }
+    function member() {
+      return bound() && slot() in ['mom', 'aunt']
+        && get(/databases/$(database)/documents/players/$(slot())).data.uid == request.auth.uid;
+    }
+    match /bindings/{uid} {
+      allow get: if request.auth != null && request.auth.uid == uid;
+    }
+    match /players/{player} {
+      allow get: if member() && slot() == player;
+    }
+    match /pairs/family {
+      allow get: if member();
+      match /houseWords/{word} { allow get, list: if member(); }
+      match /wordRequests/{requestId} { allow get, list: if member(); }
+      match /gameRequests/{requestId} { allow get, list: if member(); }
+    }
+    match /games/{gameId} {
+      allow get: if member();
+      match /racks/{player} { allow get: if member() && slot() == player; }
+      match /commands/{commandId} {
+        // A member can listen for her not-yet-written receipt. Once it exists,
+        // only its submitting UID may read it (including through a listener).
+        allow get: if member() && (
+          !exists(/databases/$(database)/documents/games/$(gameId)/commands/$(commandId))
+          || resource.data.uid == request.auth.uid
+        );
+      }
+      // No read access to private/state (the bag and its draw order).
+    }
+    // All writes and all unlisted reads are denied, including setup credentials.
+    match /{document=**} { allow read, write: if false; }
+  }
+}

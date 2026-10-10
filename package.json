@@ -1,0 +1,53 @@
+{
+  "name": "tea-and-tiles",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "functions"
+  ],
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc -p tsconfig.json && vite build && npm run build:functions",
+    "build:functions": "tsc -p tsconfig.functions.json && node scripts/copy-dictionary.mjs",
+    "test": "vitest run tests/engine.test.ts tests/placement-guide.test.ts tests/timer-display.test.ts tests/rack-target.test.ts tests/callable-policy.test.ts tests/shared-availability.test.ts",
+    "test:backend": "vitest run tests/backend.test.ts",
+    "test:e2e": "playwright test",
+    "emulators": "npm run build:functions && node scripts/emulators.mjs",
+    "test:integration": "npm run build:functions && node scripts/emulators.mjs --test",
+    "dev:prepare": "node scripts/admin.mjs prepare --project demo-tea-and-tiles",
+    "dev:reset": "node scripts/admin.mjs reset --project demo-tea-and-tiles",
+    "format": "prettier --write src shared/engine.ts functions/*.ts tests/*.ts scripts/*.mjs *.ts *.json",
+    "test:pwa": "node tests/pwa-smoke.mjs",
+    "test:ui": "npm run build:functions && node scripts/ui-tests.mjs"
+  },
+  "dependencies": {
+    "firebase": "^12.19.0",
+    "motion": "^12.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.0",
+    "@playwright/test": "^1.56.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "firebase-admin": "^14.5.0",
+    "firebase-tools": "^15.33.0",
+    "prettier": "^3.6.0",
+    "typescript": "^5.9.0",
+    "vite": "^7.0.0",
+    "vite-plugin-pwa": "^1.0.0",
+    "vitest": "^5.0.3"
+  },
+  "overrides": {
+    "@grpc/grpc-js": "^1.14.0",
+    "@firebase/app": "0.16.2",
+    "@firebase/app-compat": "0.5.18"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}
