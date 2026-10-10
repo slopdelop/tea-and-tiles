@@ -27,10 +27,10 @@ App Check reduces automated misuse; membership still requires a private invitati
 ## 3. Add spending safeguards
 
 - Create a small billing budget with several alert thresholds. Choose an amount you are comfortable with. **Alerts do not stop spending.**
-- Functions use **zero minimum instances and one maximum instance per function**, with 30-second timeouts. This limits scaling rather than total monthly costs: seven functions can each have an instance.
+- Functions use **zero minimum instances and one maximum instance per function**, with 30-second timeouts. This limits scaling rather than total monthly costs: eight functions can each have an instance.
 - If available, configure Firebase **service-level spend caps** for each underlying Cloud Run service used by Functions, through project usage/billing settings. This Preview feature can pause those services, but reporting delays mean overages can still be billed. It does **not** cover Firestore or all deployment costs, and cannot guarantee stopping precisely at the free allowance. See [official limitations/setup](https://firebase.google.com/docs/projects/billing/spend-caps).
 - Review the public Web API key in Google Cloud Credentials. Restrict it to the Firebase APIs the app needs; do not reuse it for billable services such as Gemini or Maps. Test authentication and gameplay after restriction changes. Follow [Firebase API key guidance](https://firebase.google.com/docs/projects/api-keys) rather than guessing which APIs to remove.
-- Keep invitations private. Per-account and shared invitation-guessing limits remain enabled. All client database writes are denied; server handlers validate membership, turns and requests. Public source/configuration does not grant a seat or administrator access.
+- Keep invitations and reusable sign-in codes private. Per-account and shared guessing limits remain enabled. Authoritative game writes remain server-only; the sole client-write exception is a strictly validated heartbeat on the current device's own presence record. Server handlers validate membership, turns and requests. Public source/configuration does not grant a seat or administrator access.
 
 When requests are limited/unavailable, shared actions pause and the current local draft is retained. A known rate-limit window resumes automatically; other failures offer **Try again**. An uncertain move is retried with the same command ID to avoid playing twice. The interface does not claim every outage is a billing issue.
 
@@ -107,6 +107,8 @@ node scripts/admin.mjs issue-code --project YOUR_PROJECT_ID --cloud --slot aunt 
 On each iPad, open the website in Safari → Share → Add to Home Screen. **Then open the installed Home Screen app, choose your name and enter your private code there** (an existing passphrase or unused invitation also works). Do not rely on Safari sharing its identity with the installed app.
 
 Confirm correct names, private racks and the same match. Play alternating turns, close/reopen both apps, sleep/reconnect one device, test touch dragging/reordering and approve word/new-game requests from the other device. Check sound, reduced motion and FaceTime placement. Inspect App Check metrics and enable Firestore enforcement as above. Static assets are cached; shared turns require a connection.
+
+Presence sends a small direct Firestore heartbeat about every 60 seconds while each signed-in device is visible. Another player appears recently online while any of her device timestamps is no more than 120 seconds old. Hidden/closed devices expire naturally; this is approximate activity rather than immediate disconnect detection. Each heartbeat consumes one Firestore write plus listener/rule reads, and no Function invocation. Two continuously foreground devices add roughly 120 writes/hour; additional devices increase usage. The deployed rules must include the own-device presence exception, server-timestamp requirement and 55-second update minimum. Client deletes and all authoritative game writes remain denied. Deploying these rules does not require changing Functions or resetting any game/session.
 
 ## Local testing remains independent
 

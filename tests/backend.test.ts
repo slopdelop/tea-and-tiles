@@ -10,8 +10,21 @@ import {
   assertSucceeds,
   type RulesTestEnvironment,
 } from "@firebase/rules-unit-testing";
-import { doc, getDoc, setDoc, collection, getDocs } from "firebase/firestore";
-import { getFirestore } from "firebase-admin/firestore";
+import {
+  doc,
+  getDoc,
+  setDoc,
+  collection,
+  getDocs,
+  updateDoc,
+  deleteDoc,
+  serverTimestamp,
+  Timestamp,
+} from "firebase/firestore";
+import {
+  getFirestore,
+  Timestamp as AdminTimestamp,
+} from "firebase-admin/firestore";
 import {
   createGame,
   type Game,
@@ -476,12 +489,10 @@ describe.skipIf(!enabled)(
     it("issues private PIN links for both configured names while retaining existing games and devices", async () => {
       const db = getFirestore();
       const previousPassphrase = "maple apple river 7KQ2";
-      await db
-        .doc("playerCredentials/mom")
-        .set({
-          ...(await createCredential(previousPassphrase)),
-          enabled: true,
-        });
+      await db.doc("playerCredentials/mom").set({
+        ...(await createCredential(previousPassphrase)),
+        enabled: true,
+      });
       await login("previous-passphrase-device", {
         playerId: "mom",
         passphrase: previousPassphrase,
@@ -577,6 +588,166 @@ describe.skipIf(!enabled)(
         ),
       ).toEqual(beforePrivate);
     }, 30000);
+    it("allows current members to write their own server-timestamped presence and read both players without touching the game", async () => {
+      const db = getFirestore();
+      const before = (await db.doc(`games/${game.id}`).get()).data();
+      for (const slot of ["mom", "aunt"] as const) {
+        const client = env.authenticatedContext(uids[slot]).firestore();
+        await assertSucceeds(
+          setDoc(doc(client, `pairs/family/presence/${uids[slot]}`), {
+            slot,
+            lastSeen: serverTimestamp(),
+          }),
+        );
+      }
+      await db
+        .doc("bindings/presence-second-device")
+        .set({ slot: "mom", sessionVersion: 0 });
+      await assertSucceeds(
+        setDoc(
+          doc(
+            env.authenticatedContext("presence-second-device").firestore(),
+            "pairs/family/presence/presence-second-device",
+          ),
+          { slot: "mom", lastSeen: serverTimestamp() },
+        ),
+      );
+      const mom = env.authenticatedContext(uids.mom).firestore();
+      const records = await assertSucceeds(
+        getDocs(collection(mom, "pairs/family/presence")),
+      );
+      expect(records.docs.map((record) => record.data().slot).sort()).toEqual([
+        "aunt",
+        "mom",
+        "mom",
+      ]);
+      for (const record of records.docs) {
+        expect(Object.keys(record.data()).sort()).toEqual(["lastSeen", "slot"]);
+        expect(record.data().lastSeen).toBeInstanceOf(Timestamp);
+        expect(record.data().lastSeen.toMillis()).toBeLessThanOrEqual(
+          Date.now() + 1000,
+        );
+        expect(record.data().lastSeen.toMillis()).toBeGreaterThan(
+          Date.now() - 15000,
+        );
+      }
+      await assertSucceeds(
+        getDoc(doc(mom, `pairs/family/presence/${uids.aunt}`)),
+      );
+      expect((await db.doc(`games/${game.id}`).get()).data()).toEqual(before);
+    });
+    it("rejects forged presence identities, timestamps, extra fields, deletions and authoritative client writes", async () => {
+      const client = env.authenticatedContext(uids.mom).firestore();
+      const own = doc(client, `pairs/family/presence/${uids.mom}`);
+      for (const data of [
+        { slot: "aunt", lastSeen: serverTimestamp() },
+        { slot: "mom", lastSeen: Timestamp.fromMillis(Date.now() + 86400000) },
+        { slot: "mom", lastSeen: Timestamp.fromMillis(Date.now() - 1000) },
+        { slot: "mom", lastSeen: Date.now() },
+        { slot: "mom", lastSeen: serverTimestamp(), online: true },
+        { lastSeen: serverTimestamp() },
+        { slot: "mom" },
+      ])
+        await assertFails(setDoc(own, data));
+      await assertFails(
+        setDoc(doc(client, `pairs/family/presence/${uids.aunt}`), {
+          slot: "mom",
+          lastSeen: serverTimestamp(),
+        }),
+      );
+      await assertSucceeds(
+        setDoc(own, { slot: "mom", lastSeen: serverTimestamp() }),
+      );
+      await assertFails(deleteDoc(own));
+      await assertFails(
+        updateDoc(own, { slot: "aunt", lastSeen: serverTimestamp() }),
+      );
+      await assertFails(
+        setDoc(doc(client, `games/${game.id}`), { status: "finished" }),
+      );
+      await assertFails(
+        setDoc(doc(client, `games/${game.id}/racks/mom`), { tiles: [] }),
+      );
+      await assertFails(
+        setDoc(doc(client, "bindings/new-device"), { slot: "mom" }),
+      );
+    });
+    it("enforces the55-second presence update interval and rejects denied updates without changing lastSeen", async () => {
+      const db = getFirestore();
+      const ref = db.doc(`pairs/family/presence/${uids.mom}`);
+      const client = env.authenticatedContext(uids.mom).firestore();
+      const own = doc(client, ref.path);
+      await assertSucceeds(
+        setDoc(own, { slot: "mom", lastSeen: serverTimestamp() }),
+      );
+      const first = (await ref.get()).data()!;
+      await assertFails(
+        setDoc(own, { slot: "mom", lastSeen: serverTimestamp() }),
+      );
+      expect((await ref.get()).data()!.lastSeen.isEqual(first.lastSeen)).toBe(
+        true,
+      );
+      // Seed an earlier server record rather than sleeping for a minute.
+      await ref.set({
+        slot: "mom",
+        lastSeen: AdminTimestamp.fromMillis(Date.now() - 50000),
+      });
+      await assertFails(updateDoc(own, { lastSeen: serverTimestamp() }));
+      await ref.set({
+        slot: "mom",
+        lastSeen: AdminTimestamp.fromMillis(Date.now() - 55000),
+      });
+      await assertSucceeds(updateDoc(own, { lastSeen: serverTimestamp() }));
+      const accepted = (await ref.get()).data()!;
+      expect(accepted.lastSeen.toMillis()).toBeGreaterThan(Date.now() - 15000);
+      await assertFails(
+        updateDoc(own, { lastSeen: serverTimestamp(), extra: "not allowed" }),
+      );
+      expect(
+        (await ref.get()).data()!.lastSeen.isEqual(accepted.lastSeen),
+      ).toBe(true);
+    });
+    it("denies presence reads and writes to strangers, replaced legacy devices and stale reusable sessions", async () => {
+      const db = getFirestore();
+      await db.doc(`pairs/family/presence/${uids.mom}`).set({
+        slot: "mom",
+        lastSeen: AdminTimestamp.fromMillis(Date.now() - 60000),
+      });
+      await db
+        .doc("bindings/stale-session")
+        .set({ slot: "mom", sessionVersion: 0 });
+      await db
+        .doc("players/mom")
+        .update({ uid: "replacement", sessionVersion: 1 });
+      for (const client of [
+        env.unauthenticatedContext().firestore(),
+        env.authenticatedContext("stranger").firestore(),
+        env.authenticatedContext(uids.mom).firestore(),
+        env.authenticatedContext("stale-session").firestore(),
+      ]) {
+        await assertFails(getDocs(collection(client, "pairs/family/presence")));
+        await assertFails(
+          getDoc(doc(client, `pairs/family/presence/${uids.mom}`)),
+        );
+      }
+      for (const uid of ["stranger", uids.mom, "stale-session"]) {
+        const client = env.authenticatedContext(uid).firestore();
+        await assertFails(
+          setDoc(doc(client, `pairs/family/presence/${uid}`), {
+            slot: "mom",
+            lastSeen: serverTimestamp(),
+          }),
+        );
+      }
+      const aunt = env.authenticatedContext(uids.aunt).firestore();
+      await assertSucceeds(getDocs(collection(aunt, "pairs/family/presence")));
+      await assertSucceeds(
+        setDoc(doc(aunt, `pairs/family/presence/${uids.aunt}`), {
+          slot: "aunt",
+          lastSeen: serverTimestamp(),
+        }),
+      );
+    });
     it("authenticates membership, turn and revision before mutating state", async () => {
       await expect(submit(undefined, command())).rejects.toMatchObject({
         code: "unauthenticated",

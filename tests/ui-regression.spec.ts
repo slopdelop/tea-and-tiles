@@ -7,7 +7,7 @@ import {
   type Browser,
 } from "@playwright/test";
 import { initializeApp, deleteApp } from "firebase-admin/app";
-import { getFirestore } from "firebase-admin/firestore";
+import { getFirestore, Timestamp } from "firebase-admin/firestore";
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createCredential } from "../functions/player-login";
@@ -6009,5 +6009,120 @@ test("private invitation prefills and scrubs its fragment, joins only explicitly
     );
   } finally {
     await legacyContext.close();
+  }
+});
+
+test("opponent presence follows foreground heartbeats, expiry, extra devices and offline state without changing the game", async ({
+  page,
+  browser,
+}, info) => {
+  test.setTimeout(150_000);
+  await enroll(page);
+  const { aunt, auntContext } = await joinRita(browser);
+  const requests: string[] = [];
+  const observe = (target: Page) =>
+    target.on("request", (request) => {
+      if (request.method() === "POST" && request.url().includes(":5101/"))
+        requests.push(request.url());
+    });
+  try {
+    const momUid = (await db.doc("players/mom").get()).data()!.uid as string;
+    const auntUid = (await db.doc("players/aunt").get()).data()!.uid as string;
+    const ownRef = db.doc(`pairs/family/presence/${momUid}`);
+    const otherRef = db.doc(`pairs/family/presence/${auntUid}`);
+    const badge = page.getByTestId("player-presence-aunt");
+    const recipientBadge = aunt.getByTestId("player-presence-mom");
+    await expect(badge).toHaveAttribute("data-state", "present");
+    await expect(badge).toHaveText("At the table");
+    await expect(recipientBadge).toHaveAttribute("data-state", "present");
+    await expect(page.getByTestId("player-presence-mom")).toHaveCount(0);
+    await expect(aunt.getByTestId("player-presence-aunt")).toHaveCount(0);
+    await expect(page.getByTestId("connection-status")).toHaveCount(0);
+    await expect(page.locator(".current-player .player-caption")).toHaveText(
+      "Your turn",
+    );
+    await expect(aunt.locator(".current-player .player-caption")).toHaveText(
+      "Their turn",
+    );
+    const before = await authoritativeState();
+    const momInitial = (await ownRef.get()).data()!.lastSeen.toMillis();
+    const auntInitial = (await otherRef.get()).data()!.lastSeen.toMillis();
+    observe(page);
+    observe(aunt);
+    await page.screenshot({
+      path: info.outputPath("presence-at-table-landscape.png"),
+      fullPage: false,
+    });
+    await aunt.screenshot({
+      path: info.outputPath("presence-at-table-portrait.png"),
+      fullPage: false,
+    });
+    await aunt.evaluate(() => {
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => "hidden",
+      });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    // Wait a real heartbeat period: a hidden tab must not write, while a visible
+    // player continues updating. Advancing fake time would not prove this.
+    await page.waitForTimeout(61_000);
+    expect((await otherRef.get()).data()!.lastSeen.toMillis()).toBe(
+      auntInitial,
+    );
+    await expect
+      .poll(async () => (await ownRef.get()).data()!.lastSeen.toMillis(), {
+        timeout: 8000,
+      })
+      .toBeGreaterThan(momInitial);
+    // Start just inside the fresh window. No further snapshot is sent; the
+    // five-second local clock must switch this badge to Away after expiry.
+    await otherRef.update({
+      lastSeen: Timestamp.fromMillis(Date.now() - 118_000),
+    });
+    await expect(badge).toHaveAttribute("data-state", "present");
+    await expect(badge).toHaveAttribute("data-state", "away", {
+      timeout: 9000,
+    });
+    await expect(badge).toHaveText("Away");
+    await page.screenshot({
+      path: info.outputPath("presence-away-landscape.png"),
+      fullPage: false,
+    });
+    expect(requests).toEqual([]);
+    const secondary = db.doc("pairs/family/presence/fixture-extra-aunt-device");
+    await secondary.set({ slot: "aunt", lastSeen: Timestamp.now() });
+    await expect(badge).toHaveAttribute("data-state", "present");
+    await secondary.delete();
+    await expect(badge).toHaveAttribute("data-state", "away");
+    const staleSeen = (await otherRef.get()).data()!.lastSeen.toMillis();
+    await aunt.evaluate(() => {
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => "visible",
+      });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await expect
+      .poll(async () => (await otherRef.get()).data()!.lastSeen.toMillis())
+      .toBeGreaterThan(staleSeen);
+    await expect(badge).toHaveAttribute("data-state", "present");
+    await page.context().setOffline(true);
+    await expect(page.getByTestId("connection-status")).toHaveText(
+      "Reconnecting",
+    );
+    await expect(badge).toHaveCount(0);
+    await page.screenshot({
+      path: info.outputPath("presence-unknown-offline.png"),
+      fullPage: false,
+    });
+    await page.context().setOffline(false);
+    await expect(page.getByTestId("connection-status")).toHaveCount(0);
+    await expect(badge).toHaveAttribute("data-state", "present");
+    expect(requests).toEqual([]);
+    expect(await authoritativeState()).toEqual(before);
+  } finally {
+    await page.context().setOffline(false);
+    await auntContext.close();
   }
 });

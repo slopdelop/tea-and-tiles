@@ -33,6 +33,21 @@ service cloud.firestore {
       match /houseWords/{word} { allow get, list: if member(); }
       match /wordRequests/{requestId} { allow get, list: if member(); }
       match /gameRequests/{requestId} { allow get, list: if member(); }
+      match /presence/{uid} {
+        function validHeartbeat() {
+          return request.resource.data.keys().hasAll(['slot', 'lastSeen'])
+            && request.resource.data.keys().hasOnly(['slot', 'lastSeen'])
+            && request.resource.data.slot == slot()
+            && request.resource.data.lastSeen is timestamp
+            && request.resource.data.lastSeen == request.time;
+        }
+        allow get, list: if member();
+        allow create: if member() && uid == request.auth.uid && validHeartbeat();
+        allow update: if member() && uid == request.auth.uid && validHeartbeat()
+          && request.time >= resource.data.lastSeen + duration.value(55, 's');
+        // Hidden devices expire naturally; deletion cannot bypass throttling.
+        allow delete: if false;
+      }
     }
     match /games/{gameId} {
       allow get: if member();
@@ -47,7 +62,7 @@ service cloud.firestore {
       }
       // No read access to private/state (the bag and its draw order).
     }
-    // All writes and all unlisted reads are denied, including setup credentials.
+    // Game writes and all unlisted reads are denied, including setup credentials.
     match /{document=**} { allow read, write: if false; }
   }
 }

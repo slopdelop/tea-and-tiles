@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { initializeApp } from "firebase/app";
 import { firestoreTransport } from "./firestoreTransport";
+import { usePlayerPresence } from "./hooks/usePlayerPresence";
 import {
   initializeAppCheck,
   ReCaptchaEnterpriseProvider,
@@ -141,6 +142,7 @@ export function useGameSession() {
   const pendingRef = useRef<Command | null>(null),
     busy = useRef(false);
   const confirmedRef = useRef<CommandResult | null>(null);
+  const presenceStatus = usePlayerPresence(db, uid, slot, !!game, connected);
   const [sharedPause, setSharedPause] = useState<SharedActionPause | null>(
     null,
   );
@@ -666,6 +668,7 @@ export function useGameSession() {
       timedClock && timedClock.gameId === game?.id ? timedClock.offset : 0,
     loading,
     connected,
+    presenceStatus,
     configured,
     sharedActionsPaused: !!sharedPause,
     sharedActionMessage: sharedPause?.message ?? null,

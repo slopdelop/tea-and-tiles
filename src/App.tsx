@@ -2125,17 +2125,28 @@ export default function App() {
         </a>
       )}
       <div className="header-actions">
-        <div className="table-utility-meta">
-          <span className={`connection ${connected ? "" : "offline"}`}>
-            <span />
-            {connected ? "Connected" : "Reconnecting"}
-          </span>
-          {compactTable && (
-            <span className="sidebar-bag-count" data-testid="sidebar-bag-count">
-              {game?.bagCount} tiles in the bag
-            </span>
-          )}
-        </div>
+        {(compactTable || !connected) && (
+          <div className="table-utility-meta">
+            {!connected && (
+              <span
+                className="connection offline"
+                role="status"
+                data-testid="connection-status"
+              >
+                <span aria-hidden="true" />
+                Reconnecting
+              </span>
+            )}
+            {compactTable && (
+              <span
+                className="sidebar-bag-count"
+                data-testid="sidebar-bag-count"
+              >
+                {game?.bagCount} tiles in the bag
+              </span>
+            )}
+          </div>
+        )}
         {game?.status === "active" && slot && (
           <button
             className="secondary-button header-new-game"
@@ -2899,12 +2910,30 @@ export default function App() {
                         <span>
                           {names[player]}
                           {player === slot && <small>you</small>}
+                          {player !== slot &&
+                            session.presenceStatus[player] !== "unknown" && (
+                              <small
+                                className={`player-presence ${session.presenceStatus[player]}`}
+                                data-testid={`player-presence-${player}`}
+                                data-state={session.presenceStatus[player]}
+                                aria-label={`${names[player]}: ${session.presenceStatus[player] === "present" ? "at the table" : session.presenceStatus[player] === "away" ? "away" : "presence status unknown"}`}
+                              >
+                                <i aria-hidden="true" />
+                                {session.presenceStatus[player] === "present"
+                                  ? "At the table"
+                                  : session.presenceStatus[player] === "away"
+                                    ? "Away"
+                                    : "Status unknown"}
+                              </small>
+                            )}
                         </span>
                         <span className="player-caption">
                           {game.status === "finished"
                             ? "Final score"
                             : game.turn === player
-                              ? "At the board"
+                              ? player === slot
+                                ? "Your turn"
+                                : "Their turn"
                               : `${game.rackCounts[player]} tiles on the rack`}
                         </span>
                       </div>
@@ -4137,6 +4166,12 @@ export default function App() {
                 If you use FaceTime in picture in picture, move its floating
                 window into the clear area beside the game controls. That space
                 is kept free so you can see each other while playing.
+              </p>
+              <p data-testid="presence-help">
+                The dot beside your partner’s name shows whether they are at the
+                table on any device. It updates about once a minute, so Away can
+                take up to two minutes to appear. The indicator is hidden when
+                their status cannot be checked.
               </p>
               <p>
                 <b>New game</b> asks your partner to start fresh. Your current

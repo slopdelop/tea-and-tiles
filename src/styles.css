@@ -4267,3 +4267,45 @@ button {
     font-size: 18px !important;
   }
 }
+/* Presence belongs to the partner, separate from whose turn it is. */
+.player-details > span:first-child {
+  flex-wrap: wrap;
+  row-gap: 3px;
+}
+:root[data-theme] .player-details small.player-presence {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.player-presence > i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.55;
+  flex: none;
+}
+:root[data-theme] .player-details small.player-presence.present {
+  color: #285e3a;
+}
+.player-presence.present > i {
+  background: #2e854a;
+  opacity: 1;
+}
+:root:is([data-theme="ink"], [data-theme="midnight"])
+  .player-details
+  small.player-presence.present {
+  color: #abdcb5;
+}
+:root:is([data-theme="ink"], [data-theme="midnight"])
+  .player-presence.present
+  > i {
+  background: #8cce9d;
+}
+.table-toolbar .sidebar-bag-count {
+  margin-left: auto;
+}
