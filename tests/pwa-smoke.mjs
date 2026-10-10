@@ -77,6 +77,11 @@ try {
     expect(response.ok()).toBe(true);
     expect(response.headers()["content-type"]).toContain("image/png");
   }
+  const grain = await page.request.get(
+    origin + base + "textures/maple-grain.png",
+  );
+  expect(grain.ok()).toBe(true);
+  expect(grain.headers()["content-type"]).toContain("image/png");
   await page.evaluate(async () => {
     await navigator.serviceWorker.ready;
   });
@@ -107,6 +112,11 @@ try {
     return urls;
   });
   expect(cacheURLs.length).toBeGreaterThan(10);
+  expect(
+    cacheURLs.some((url) =>
+      new URL(url).pathname.endsWith("/textures/maple-grain.png"),
+    ),
+  ).toBe(true);
   expect(cacheURLs.every((url) => url.startsWith(origin + base))).toBe(true);
   expect(
     cacheURLs.some((url) => new URL(url).pathname.endsWith(".woff2")),

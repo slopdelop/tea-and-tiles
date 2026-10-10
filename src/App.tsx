@@ -2356,17 +2356,6 @@ export default function App() {
                       </div>
                     )}
                 </div>
-                <div className="rack-heading">
-                  <span>
-                    YOUR TILES{" "}
-                    <small>
-                      {names[slot]}
-                      {!yourTurn && game.status === "active"
-                        ? " · preparing your next turn"
-                        : ""}
-                    </small>
-                  </span>
-                </div>
                 <div className="hand-row">
                   <div
                     className={`rack ${!visibleRack.length ? "empty-rack" : ""} ${drag?.target?.kind === "rack" ? "drag-over-rack" : ""}`}
@@ -2564,11 +2553,9 @@ export default function App() {
                         ? "Choose a square, or tap the tile again to return it."
                         : "Tap an empty square."
                       : canEdit
-                        ? !yourTurn
-                          ? "Your draft stays private until your turn."
-                          : placements.length
-                            ? "Keep arranging, then play when ready."
-                            : "Tap or drag a tile to begin."
+                        ? placements.length
+                          ? "Keep arranging your word."
+                          : "Tap or drag a tile to begin."
                         : "Your tiles are saved here."}
                 </p>
               </section>
@@ -2915,20 +2902,6 @@ export default function App() {
                 />
               </aside>
             </main>
-            <footer className="app-footer" inert={zoomed}>
-              <span>
-                <i /> DL · Double letter
-              </span>
-              <span>
-                <i /> TL · Triple letter
-              </span>
-              <span>
-                <i /> DW · Double word
-              </span>
-              <span>
-                <i /> TW · Triple word
-              </span>
-            </footer>
           </>
         )}
 
@@ -3681,6 +3654,27 @@ export default function App() {
                 A blank can be any letter and scores zero. Use all seven tiles
                 in one turn for 50 extra points.
               </p>
+              <section
+                className="bonus-legend"
+                data-testid="bonus-legend"
+                aria-label="Bonus squares"
+              >
+                <h3 className="help-section-title">Bonus squares</h3>
+                <div>
+                  <span>
+                    <i className="bonus-dl" /> DL · Double letter
+                  </span>
+                  <span>
+                    <i className="bonus-tl" /> TL · Triple letter
+                  </span>
+                  <span>
+                    <i className="bonus-dw" /> DW · Double word
+                  </span>
+                  <span>
+                    <i className="bonus-tw" /> TW · Triple word
+                  </span>
+                </div>
+              </section>
               <p data-testid="game-ending-help">
                 In every mode, using your last tile ends the game only when the
                 bag is empty; otherwise, you draw replacement tiles. Your

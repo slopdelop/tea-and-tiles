@@ -254,13 +254,10 @@ async function beginMouseDrag(
     .toBeLessThan(2);
   const ghost = (await page.getByTestId("drag-ghost").boundingBox())!;
   const square = (await cell(page, 0, 0).boundingBox())!;
-  const rackTiles = page.locator(".rack-tile");
-  const rackSize = (await rackTiles.count())
-    ? await rackTiles.first().boundingBox()
-    : null;
+  // The enlarged board can have cells larger than unchanged rack tiles.
+  // The dragged tile is sized to its destination square.
   expect(Math.abs(ghost.width - square.width * 1.1)).toBeLessThan(1);
   expect(Math.abs(ghost.height - square.width * 1.1)).toBeLessThan(1);
-  if (rackSize) expect(ghost.width).toBeLessThan(rackSize.width);
   expect(Math.abs(ghost.x - (target.x - ghost.width * 0.3))).toBeLessThan(2);
   expect(Math.abs(ghost.y - (target.y - ghost.height * 0.35))).toBeLessThan(2);
   await expect(page.getByTestId("drag-ghost")).toHaveCSS(
@@ -495,7 +492,7 @@ test("tablet landscape expands the board to the top and exposes the build versio
     const board = await page.locator(".board-frame").boundingBox();
     const hand = await page.locator(".hand-row").boundingBox();
     expect(board!.y).toBeLessThanOrEqual(24);
-    expect(board!.width).toBeGreaterThan(height - 190);
+    expect(board!.width).toBeGreaterThan(height - 140);
     expect(hand!.y + hand!.height).toBeLessThanOrEqual(height);
     await expect(page.getByTestId("help-settings")).toBeVisible();
     await expect(page.getByTestId("new-game")).toBeVisible();
@@ -514,11 +511,111 @@ test("tablet landscape expands the board to the top and exposes the build versio
   }
   await page.getByTestId("help-settings").click();
   await expect(page.getByTestId("app-version")).toHaveText(
-    /^Version 0\.1\.1 · (?:[a-f0-9]{7}|local)$/,
+    /^Version 0\.1\.2 · (?:[a-f0-9]{7}|local)$/,
   );
   await page.getByRole("button", { name: "Close dialog" }).click();
   await page.setViewportSize({ width: 820, height: 1180 });
   await expect(page.locator(".brand")).toBeVisible();
+});
+
+test("wooden rack stays the same size as tiles leave and return and bonus legend lives in Help", async ({
+  page,
+}, info) => {
+  await enroll(page);
+  await expect(page.getByTestId("turn-announcement")).toBeVisible();
+  await expect(page.getByTestId("turn-announcement")).toBeHidden();
+  for (const [width, height] of [
+    [1024, 768],
+    [1366, 1024],
+    [1280, 720],
+    [820, 1180],
+  ]) {
+    await page.setViewportSize({ width, height });
+    const holder = page.getByTestId("tile-rack");
+    const before = (await holder.boundingBox())!;
+    const shuffle = (await page.getByTestId("shuffle-rack").boundingBox())!;
+    for (const [letter, col] of [
+      ["M", 6],
+      ["W", 7],
+    ] as const) {
+      await rack(page, letter).tap();
+      await cell(page, 7, col).tap();
+    }
+    await expect(holder.locator("button")).toHaveCount(5);
+    await expect
+      .poll(() =>
+        holder
+          .locator(".rack-visual")
+          .evaluateAll((nodes) =>
+            nodes.every(
+              (node) =>
+                Math.abs(
+                  node.getBoundingClientRect().left -
+                    node.parentElement!.getBoundingClientRect().left,
+                ) < 0.5,
+            ),
+          ),
+      )
+      .toBe(true);
+    const after = (await holder.boundingBox())!;
+    expect(Math.abs(after.width - before.width)).toBeLessThan(1);
+    expect(Math.abs(after.height - before.height)).toBeLessThan(1);
+    expect(Math.abs(after.x - before.x)).toBeLessThan(1);
+    const shuffleAfter = (await page
+      .getByTestId("shuffle-rack")
+      .boundingBox())!;
+    expect(Math.abs(shuffleAfter.x - shuffle.x)).toBeLessThan(1);
+    await page.screenshot({
+      path: info.outputPath(`fixed-wood-rack-${width}x${height}.png`),
+      fullPage: false,
+    });
+    await page.getByTestId("recall-tiles").tap();
+    await expect(holder.locator("button")).toHaveCount(7);
+    expect(
+      Math.abs((await holder.boundingBox())!.width - before.width),
+    ).toBeLessThan(1);
+    for (const [index, tile] of tiles.entries()) {
+      await page.getByTestId(`rack-tile-${tile.id}`).tap();
+      await cell(page, 7, index).tap();
+      if (tile.letter === "?") {
+        await page.getByTestId("blank-A").tap();
+        await expect(page.getByRole("dialog")).toHaveCount(0);
+      }
+    }
+    await expect(page.getByTestId("tile-rack").locator("button")).toHaveCount(
+      0,
+    );
+    const emptyRack = (await page.getByTestId("tile-rack").boundingBox())!;
+    expect(emptyRack.width).toBeCloseTo(before.width, 0);
+    expect(emptyRack.height).toBeCloseTo(before.height, 0);
+    await page.screenshot({
+      path: info.outputPath(`fixed-wood-rack-empty-${width}x${height}.png`),
+      fullPage: false,
+    });
+    await page.getByTestId("recall-tiles").tap();
+    await expect(page.getByTestId("tile-rack").locator("button")).toHaveCount(
+      7,
+    );
+  }
+  await expect(page.locator(".rack-heading")).toHaveCount(0);
+  await expect(page.locator(".app-footer")).toHaveCount(0);
+  await writeFixture({ ...fixtureGame, turn: "aunt" });
+  await expect(page.getByTestId("turn-status")).toContainText("Rita");
+  await expect(
+    page.getByText("Your draft stays private until your turn.", {
+      exact: true,
+    }),
+  ).toHaveCount(0);
+  await page.getByTestId("help-settings").click();
+  const help = page.getByRole("dialog", { name: "Help & settings" });
+  for (const label of [
+    "Double letter",
+    "Triple letter",
+    "Double word",
+    "Triple word",
+  ]) {
+    await expect(help.getByText(label, { exact: false })).toBeVisible();
+  }
 });
 
 test("premium labels and tile letters/values fit compact landscape and portrait", async ({

@@ -149,3 +149,9 @@ Help and the invitation screen show version 0.1.1 plus the build's seven-charact
 
 Validation: 68 unit tests and the production TypeScript/Vite/PWA/Functions build passed. Three focused tablet browser regressions passed in 21.8 seconds, including geometry at 1024×768, 1180×820 and 1366×1024, visible controls/rack, Help version, portrait restoration, tile typography and opening-word guidance. Tests used the isolated demo project; the real shared match and invitations were unchanged.
 
+
+## Larger board and fixed wooden holder — 2026-10-10
+
+Version 0.1.2 removes the rack heading/preparing text and private-draft hint, moves the bonus-square legend into Help, and gives compact tablet boards 28 additional pixels of available height. The seven-column wooden holder keeps its dimensions as tiles leave and return, with the original responsive tile sizes retained. Astra generated and visually reviewed the subtle maple-grain texture.
+
+Validation: six initial browser cases passed for landscape sizing, fixed-holder dimensions, typography, touch dragging, waiting-player reordering/returns and Shuffle. The free-placement case initially caught an obsolete assumption that a board-sized drag preview must be smaller than a rack tile; the updated assertion retains exact board-relative sizing and pointer anchors. Three final focused cases passed in 57.3 seconds, including full/partial/empty/full rack transitions at 1024×768, 1366×1024, 1280×720 and 820×1180, the Help legend and free draft placement. Frontend TypeScript and the GitHub Pages PWA smoke passed, including network and offline availability of the texture. Tests used only isolated demo services; the real shared match and invitations were unchanged.
