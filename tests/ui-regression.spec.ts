@@ -6233,3 +6233,211 @@ test("an available update sits beside New game, is keyboard reachable and stays 
   await expect(page.getByTestId("apply-update")).toBeEnabled();
   expect(await authoritativeState()).toEqual(before);
 });
+
+test("a brighter private draft breathes across complete words and crossings without moving or covering tiles", async ({
+  page,
+  context,
+}, info) => {
+  const pool = [
+    ...fixtureGame.bag,
+    ...fixtureGame.racks.mom,
+    ...fixtureGame.racks.aunt,
+    ...Object.values(fixtureGame.board).map(({ row, col, ...tile }) => tile),
+  ];
+  const take = (letter: string) =>
+    pool.splice(
+      pool.findIndex((tile) => tile.letter === letter),
+      1,
+    )[0];
+  const board = Object.fromEntries(
+    [..."TIN"].map((letter, index) => [
+      `6,${7 + index}`,
+      { ...take(letter), row: 6, col: 7 + index },
+    ]),
+  );
+  board["7,7"] = { ...take("A"), row: 7, col: 7 };
+  tiles = [..."CTEROL?"].map(take);
+  await writeFixture({
+    ...fixtureGame,
+    board,
+    racks: { mom: tiles, aunt: [..."SENLADU"].map(take) },
+    bag: pool,
+  });
+  await enroll(page);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "blue-ink");
+  const before = await authoritativeState();
+  const luminance = async (tile: Locator) =>
+    tile.evaluate((element) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = 1;
+      const context = canvas.getContext("2d")!;
+      const colors = getComputedStyle(element).backgroundImage.match(
+        /rgba?\([^)]*\)|color\(srgb[^)]*\)/g,
+      );
+      if (!colors?.length) throw new Error("Tile gradient is not measurable");
+      return (
+        colors
+          .map((color) => {
+            context.clearRect(0, 0, 1, 1);
+            context.fillStyle = color;
+            context.fillRect(0, 0, 1, 1);
+            return [...context.getImageData(0, 0, 1, 1).data]
+              .slice(0, 3)
+              .map((value) => value / 255)
+              .map((value) =>
+                value <= 0.04045
+                  ? value / 12.92
+                  : ((value + 0.055) / 1.055) ** 2.4,
+              )
+              .reduce(
+                (sum, value, index) =>
+                  sum + value * [0.2126, 0.7152, 0.0722][index],
+                0,
+              );
+          })
+          .reduce((sum, value) => sum + value, 0) / colors.length
+      );
+    });
+  const handBrightness = await luminance(rack(page, "C"));
+  const oldBrightness = await luminance(
+    cell(page, 7, 7).locator(".board-tile"),
+  );
+  for (const [letter, col] of [
+    ["C", 6],
+    ["T", 8],
+  ] as const) {
+    await rack(page, letter).tap();
+    await cell(page, 7, col).tap();
+  }
+  await expect(page.getByTestId("word-check")).toHaveAttribute(
+    "data-state",
+    "recognized",
+  );
+  const membership = () =>
+    page
+      .locator('[data-draft-word="true"]')
+      .evaluateAll((elements) =>
+        elements.map((element) => element.getAttribute("data-testid")).sort(),
+      );
+  await expect
+    .poll(membership)
+    .toEqual([
+      "board-cell-6-8",
+      "board-cell-7-6",
+      "board-cell-7-7",
+      "board-cell-7-8",
+    ]);
+  expect(
+    await luminance(cell(page, 7, 6).locator(".board-tile")),
+  ).toBeGreaterThan(Math.max(handBrightness, oldBrightness) + 0.005);
+  await expect(page.getByTestId("draft-word-pulse")).toHaveCount(4);
+  for (const [row, col] of [
+    [6, 8],
+    [7, 6],
+    [7, 7],
+    [7, 8],
+  ]) {
+    const tile = cell(page, row, col).locator(".board-tile");
+    await expect(tile).toHaveCSS("transform", "none");
+    const pulse = tile.getByTestId("draft-word-pulse");
+    await expect(pulse).toHaveCSS("pointer-events", "none");
+    await expect(pulse).toHaveCSS("animation-name", "draft-word-breathe");
+    await expect(pulse).toHaveCSS("z-index", "0");
+    await expect(tile.locator(".tile-letter")).toHaveCSS("z-index", "1");
+    await expect(pulse).toHaveCSS("transform", "none");
+  }
+  const readings = await page.evaluate(async () => {
+    const members = [
+      ...document.querySelectorAll('[data-draft-word="true"] .board-tile'),
+    ];
+    const samples: { opacity: number; rects: number[][] }[] = [];
+    const start = performance.now();
+    return await new Promise<typeof samples>((resolve) => {
+      const frame = () => {
+        samples.push({
+          opacity: Number(
+            getComputedStyle(
+              document.querySelector('[data-testid="draft-word-pulse"]')!,
+            ).opacity,
+          ),
+          rects: members.map((element) => {
+            const r = element.getBoundingClientRect();
+            return [r.x, r.y, r.width, r.height];
+          }),
+        });
+        if (performance.now() - start >= 1400) resolve(samples);
+        else requestAnimationFrame(frame);
+      };
+      requestAnimationFrame(frame);
+    });
+  });
+  const opacities = readings.map((frame) => frame.opacity);
+  expect(Math.max(...opacities) - Math.min(...opacities)).toBeGreaterThan(0.05);
+  for (const frame of readings)
+    for (let index = 0; index < frame.rects.length; index++)
+      for (let axis = 0; axis < 4; axis++)
+        expect(
+          Math.abs(frame.rects[index][axis] - readings[0].rects[index][axis]),
+        ).toBeLessThan(0.3);
+  await checkTextContrast(
+    page,
+    ".draft-word-tile > .tile-letter, .draft-word-tile > small",
+  );
+  await page.screenshot({
+    path: info.outputPath("whole-draft-cat-crossing-it.png"),
+    fullPage: false,
+  });
+  const session = await context.newCDPSession(page);
+  await touch(
+    session,
+    "touchStart",
+    await point(cell(page, 7, 8).locator(".board-tile")),
+  );
+  await touch(session, "touchMove", await point(cell(page, 9, 10)));
+  await expect(page.getByTestId("drag-ghost")).toBeVisible();
+  await expect(page.getByTestId("game-board")).toHaveAttribute(
+    "data-draft-pulse-paused",
+    "true",
+  );
+  for (const pulse of await page.getByTestId("draft-word-pulse").all())
+    await expect(pulse).toHaveCSS("animation-play-state", "paused");
+  await touch(session, "touchEnd");
+  await expect(page.getByTestId("settling-ghost")).toHaveCount(0);
+  await expect
+    .poll(membership)
+    .toEqual(["board-cell-7-6", "board-cell-7-7", "board-cell-9-10"]);
+  await expect(page.locator(".board-tile.invalid-arrangement")).toHaveCount(2);
+  await expect(cell(page, 7, 7).locator(".board-tile")).not.toHaveClass(
+    /invalid-arrangement/,
+  );
+  const red = await cell(page, 9, 10)
+    .locator(".board-tile")
+    .evaluate((element) => {
+      const style = getComputedStyle(element, "::after");
+      return {
+        border: style.borderColor,
+        width: parseFloat(style.borderWidth),
+        z: style.zIndex,
+      };
+    });
+  expect(red.border).toBe("rgb(157, 61, 60)");
+  expect(red.width).toBeGreaterThanOrEqual(2);
+  expect(Number(red.z)).toBeGreaterThan(0);
+  await expect(page.getByTestId("play-word")).toBeDisabled();
+  await page.screenshot({
+    path: info.outputPath("invalid-draft-red-above-pulse.png"),
+    fullPage: false,
+  });
+  await cell(page, 9, 10).tap();
+  await cell(page, 7, 8).tap();
+  await expect(page.getByTestId("play-word")).toBeEnabled();
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  for (const pulse of await page.getByTestId("draft-word-pulse").all())
+    await expect(pulse).toHaveCSS("animation-name", "none");
+  await page.getByTestId("recall-tiles").tap();
+  await expect(page.getByTestId("draft-word-pulse")).toHaveCount(0);
+  await expect(page.locator('[data-draft-word="true"]')).toHaveCount(0);
+  await expect(page.locator(".has-tentative")).toHaveCount(0);
+  await expect(page.getByTestId("tile-rack").locator("button")).toHaveCount(7);
+  expect(await authoritativeState()).toEqual(before);
+});

@@ -34,6 +34,7 @@ import { useWordDictionary } from "./hooks/useWordDictionary";
 import { useAppUpdate } from "./hooks/useAppUpdate";
 import { useScreenAwake } from "./hooks/useScreenAwake";
 import { canPlaceDraftTile } from "./placementGuide";
+import { draftWordCells } from "./draftWordCells";
 import { formatTimeRemaining } from "./timerDisplay";
 import AppVersion from "./components/AppVersion";
 import { readSignInLink } from "./signInLink";
@@ -791,6 +792,11 @@ export default function App() {
   const orderedIds = rackOrder.key === rackOrderKey ? rackOrder.ids : [];
   const placements =
     game?.status === "active" && draft.key === draftKey ? draft.placements : [];
+  const draftWordMembers = useMemo(
+    () => draftWordCells(game?.board ?? {}, placements),
+    [game?.board, placements],
+  );
+  const draftPulseKey = `${game?.revision}:${placements.map((p) => `${p.tileId}:${p.row}:${p.col}`).join("|")}`;
   const openingBoard =
     !!game && game.status === "active" && Object.keys(game.board).length === 0;
   const centreCovered = placements.some((p) => p.row === 7 && p.col === 7);
@@ -2453,6 +2459,9 @@ export default function App() {
                       aria-label="15 by 15 word board"
                       data-testid="game-board"
                       data-draft-error={draftErrorCode || undefined}
+                      data-draft-pulse-paused={
+                        !!drag || !!settling || recallAnimation.active
+                      }
                     >
                       {Array.from({ length: 225 }, (_, index) => {
                         const row = Math.floor(index / 15),
@@ -2476,7 +2485,8 @@ export default function App() {
                         const premium = premiumAt(row, col),
                           isLatest = lastCells.has(key),
                           isFresh = isLatest && freshMove === latest?.id,
-                          isFading = isFresh && fadingMove === latest?.id;
+                          isFading = isFresh && fadingMove === latest?.id,
+                          isDraftWord = draftWordMembers.has(key);
                         const landing =
                           drag?.target?.kind === "board" &&
                           drag.target.row === row &&
@@ -2494,6 +2504,7 @@ export default function App() {
                             data-testid={`board-cell-${row}-${col}`}
                             data-drop-row={row}
                             data-drop-col={col}
+                            data-draft-word={isDraftWord || undefined}
                             className={`square ${premium?.toLowerCase() || ""} ${openingBoard && !tile && row === 7 && col === 7 ? "opening-centre" : ""} ${tentative ? "has-tentative" : ""} ${committed ? "has-committed" : ""} ${selected === tentative?.tileId && tentative ? "selected-square" : ""} ${isLatest && committed ? "latest-square" : ""} ${isFading && committed ? "fresh-play-square" : ""} ${landing ? "drag-over-square" : ""}`}
                             data-latest-play={
                               isLatest && committed
@@ -2530,7 +2541,7 @@ export default function App() {
                           >
                             {tile ? (
                               <motion.span
-                                className={`tile board-tile ${tentative ? "tentative" : ""} ${tentative && draftErrorCode ? "invalid-arrangement" : ""} ${tentative && canEdit ? "draggable-tile" : ""} ${drag?.tile.id === tile.id ? "drag-source" : ""} ${settling?.tile.id === tile.id ? "settling-target" : ""} ${isLatest && committed ? "latest-play-tile" : ""} ${isFresh && committed ? "held-play-tile" : ""} ${isFading && committed ? "fresh-play-tile" : ""}`}
+                                className={`tile board-tile ${tentative ? "tentative" : ""} ${isDraftWord ? "draft-word-tile" : ""} ${tentative && draftErrorCode ? "invalid-arrangement" : ""} ${tentative && canEdit ? "draggable-tile" : ""} ${drag?.tile.id === tile.id ? "drag-source" : ""} ${settling?.tile.id === tile.id ? "settling-target" : ""} ${isLatest && committed ? "latest-play-tile" : ""} ${isFresh && committed ? "held-play-tile" : ""} ${isFading && committed ? "fresh-play-tile" : ""}`}
                                 key={tile.id}
                                 onPointerDown={
                                   tentative
@@ -2561,6 +2572,14 @@ export default function App() {
                                   damping: 23,
                                 }}
                               >
+                                {isDraftWord && (
+                                  <span
+                                    key={draftPulseKey}
+                                    className="draft-word-pulse"
+                                    data-testid="draft-word-pulse"
+                                    aria-hidden="true"
+                                  />
+                                )}
                                 <TileLetter letter={tile.letter} />
                                 <small>{tile.value}</small>
                                 {tile.value === 0 && (
