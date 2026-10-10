@@ -36,10 +36,11 @@ import { useScreenAwake } from "./hooks/useScreenAwake";
 import { canPlaceDraftTile } from "./placementGuide";
 import { formatTimeRemaining } from "./timerDisplay";
 import AppVersion from "./components/AppVersion";
+import { readSignInLink } from "./signInLink";
 import { GameSummary, ScoreExplanation } from "./components/ScoreExplanation";
 import {
   HANDOFF_MS,
-  NEXT_TURN_DELAY_MS,
+  celebrationDuration,
   handoffDelay,
 } from "./celebrationTiming";
 import "./styles.css";
@@ -136,12 +137,14 @@ function Celebration({
   variant = 0,
   debug = false,
   move,
+  onComplete,
 }: {
   score: number;
   bingo?: boolean;
   variant?: number;
   debug?: boolean;
   move?: MoveRecord;
+  onComplete?: () => void;
 }) {
   const reduced = useReducedMotion();
   const band: CelebrationBand = bingo
@@ -204,7 +207,9 @@ function Celebration({
         {celebrationCopy[band][variant % celebrationCopy[band].length]}
       </span>
       {bingo && <small>Seven tiles · includes 50 bonus points</small>}
-      {move && <ScoreExplanation move={move} animated />}
+      {move && (
+        <ScoreExplanation move={move} animated onComplete={onComplete} />
+      )}
     </motion.div>
   );
 }
@@ -260,7 +265,8 @@ function rejectedDictionaryWords(error: unknown): string[] | null {
 const invitationFromLink = new URLSearchParams(
   window.location.hash.slice(1),
 ).get("setup");
-if (invitationFromLink !== null) {
+const signInFromLink = readSignInLink(window.location.hash);
+if (invitationFromLink !== null || signInFromLink !== null) {
   history.replaceState(
     history.state,
     "",
@@ -586,8 +592,10 @@ export default function App() {
   const [welcomeMode, setWelcomeMode] = useState<"join" | "signin">(
     invitationFromLink ? "join" : "signin",
   );
-  const [loginPlayer, setLoginPlayer] = useState<Slot>("mom");
-  const [passphrase, setPassphrase] = useState("");
+  const [loginPlayer, setLoginPlayer] = useState<Slot>(
+    signInFromLink?.player || "mom",
+  );
+  const [passphrase, setPassphrase] = useState(signInFromLink?.code || "");
   const [enrolling, setEnrolling] = useState(false);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -683,7 +691,7 @@ export default function App() {
     const saved = localStorage.getItem("tea-tiles-theme");
     return themeChoices.some(([id]) => id === saved)
       ? (saved as Theme)
-      : "linen";
+      : "blue-ink";
   });
   const audio = useRef<AudioContext | null>(null);
   const [draft, setDraft] = useState<Draft>({
@@ -1167,7 +1175,10 @@ export default function App() {
       previous.lastMoveId !== game.lastMove.id
     ) {
       setAnimatedMove(game.lastMove.id);
-      const timer = setTimeout(() => setAnimatedMove(null), NEXT_TURN_DELAY_MS);
+      const timer = setTimeout(
+        () => setAnimatedMove(null),
+        celebrationDuration(game.lastMove, !!reduced) + HANDOFF_MS,
+      );
       return () => clearTimeout(timer);
     }
   }, [game?.id, game?.revision]);
@@ -1204,7 +1215,11 @@ export default function App() {
       id: `${game.id}:${game.revision}:${game.turn}`,
       gameId: game.id,
       turn: game.turn,
-      readyAt: Date.now() + (afterPlay ? NEXT_TURN_DELAY_MS : 0),
+      readyAt:
+        Date.now() +
+        (afterPlay
+          ? celebrationDuration(game.lastMove, !!reduced) + HANDOFF_MS
+          : 0),
       afterPlay,
     });
   }, [game?.id, game?.turn, game?.status, slot]);
@@ -1335,7 +1350,11 @@ export default function App() {
       game.lastMove?.kind === "play";
     setQueuedResult({
       gameId: game.id,
-      readyAt: Date.now() + (finalPlay ? NEXT_TURN_DELAY_MS : 0),
+      readyAt:
+        Date.now() +
+        (finalPlay
+          ? celebrationDuration(game.lastMove, !!reduced) + HANDOFF_MS
+          : 0),
     });
   }, [game?.id, game?.revision, game?.status, game?.endedReason]);
 
@@ -2057,13 +2076,21 @@ export default function App() {
       )}
     </div>
   );
-  const pointPosition = latest?.placements.length
-    ? {
-        // Allow for half the 280px card, the frame's 12px padding, and a 2px inset.
-        left: `clamp(min(154px, 50%), ${(latest.placements.reduce((sum, p) => sum + p.col, 0) / latest.placements.length / 15) * 100}%, calc(100% - min(154px, 50%)))`,
-        top: `clamp(42px, ${(latest.placements.reduce((sum, p) => sum + p.row, 0) / latest.placements.length / 15) * 100 - 12}%, calc(100% - 280px))`,
-      }
-    : {};
+  const finishScoreCelebration = (moveId: string) => {
+    if (latestGameId.current !== game?.id || game?.lastMove?.id !== moveId)
+      return;
+    setAnimatedMove((current) => (current === moveId ? null : current));
+    setQueuedTurn((current) =>
+      current?.gameId === game.id
+        ? { ...current, readyAt: Date.now() + HANDOFF_MS, afterPlay: false }
+        : current,
+    );
+    setQueuedResult((current) =>
+      current?.gameId === game.id
+        ? { ...current, readyAt: Date.now() + HANDOFF_MS }
+        : current,
+    );
+  };
   const lastCells = new Set(
     latest?.kind === "play"
       ? latest.placements.map((p) => `${p.row},${p.col}`)
@@ -2312,7 +2339,7 @@ export default function App() {
                     <option value="mom">{names.mom}</option>
                     <option value="aunt">{names.aunt}</option>
                   </select>
-                  <label htmlFor="login-password">Password</label>
+                  <label htmlFor="login-password">Your private code</label>
                   <input
                     id="login-password"
                     data-testid="login-password"
@@ -2320,6 +2347,7 @@ export default function App() {
                     value={passphrase}
                     onChange={(event) => setPassphrase(event.target.value)}
                     autoComplete="current-password"
+                    inputMode="numeric"
                     maxLength={128}
                     required
                   />
@@ -2568,17 +2596,17 @@ export default function App() {
                       <motion.div
                         key={animatedMove}
                         className="floating-points"
-                        style={pointPosition}
+                        style={{ left: "50%", top: "50%" }}
                         initial={{
                           opacity: 0,
                           x: "-50%",
-                          y: reduced ? 0 : 8,
+                          y: "-50%",
                           scale: reduced ? 1 : 0.85,
                         }}
                         animate={{
                           opacity: 1,
                           x: "-50%",
-                          y: reduced ? 0 : -20,
+                          y: "-50%",
                           scale: 1,
                         }}
                         transition={{ duration: reduced ? 0 : 0.25 }}
@@ -2592,6 +2620,7 @@ export default function App() {
                           bingo={latest.placements.length === 7}
                           variant={game.revision}
                           move={latest}
+                          onComplete={() => finishScoreCelebration(latest.id)}
                         />
                       </motion.div>
                     )}

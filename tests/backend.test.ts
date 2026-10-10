@@ -184,12 +184,10 @@ describe.skipIf(!enabled)(
 
     it("signs in the same player on multiple devices while preserving legacy membership and private racks", async () => {
       const db = getFirestore();
-      await db
-        .doc("playerCredentials/mom")
-        .set({
-          ...(await createCredential("maple apple river 7KQ2")),
-          enabled: true,
-        });
+      await db.doc("playerCredentials/mom").set({
+        ...(await createCredential("maple apple river 7KQ2")),
+        enabled: true,
+      });
       const before = (await db.doc(`games/${game.id}`).get()).data();
       for (const uid of ["mom-ipad", "mom-iphone"])
         expect(
@@ -229,12 +227,10 @@ describe.skipIf(!enabled)(
     }, 15000);
     it("requires private credentials and prevents an already bound browser from switching players", async () => {
       const db = getFirestore();
-      await db
-        .doc("playerCredentials/mom")
-        .set({
-          ...(await createCredential("maple apple river 7KQ2")),
-          enabled: true,
-        });
+      await db.doc("playerCredentials/mom").set({
+        ...(await createCredential("maple apple river 7KQ2")),
+        enabled: true,
+      });
       await expect(
         login(undefined, {
           playerId: "mom",
@@ -248,7 +244,7 @@ describe.skipIf(!enabled)(
         }),
       ).rejects.toMatchObject({
         code: "permission-denied",
-        message: "The player or passphrase is not correct.",
+        message: "The player or sign-in code is not correct.",
       });
       await expect(
         login("unknown", {
@@ -257,7 +253,7 @@ describe.skipIf(!enabled)(
         }),
       ).rejects.toMatchObject({
         code: "permission-denied",
-        message: "The player or passphrase is not correct.",
+        message: "The player or sign-in code is not correct.",
       });
       await expect(
         login(uids.aunt, {
@@ -272,23 +268,21 @@ describe.skipIf(!enabled)(
     });
     it("limits reusable-login guessing across anonymous identities and reports its cooldown", async () => {
       const db = getFirestore();
-      await db
-        .doc("playerCredentials/mom")
-        .set({
-          ...(await createCredential("maple apple river 7KQ2")),
-          enabled: true,
-        });
+      await db.doc("playerCredentials/mom").set({
+        ...(await createCredential("000123")),
+        enabled: true,
+      });
       for (let index = 0; index < 10; index++)
         await expect(
           login(`login-guess-${index}`, {
             playerId: "mom",
-            passphrase: "wrong private password",
+            passphrase: "654321",
           }),
         ).rejects.toMatchObject({ code: "permission-denied" });
       await expect(
         login("fresh-login-device", {
           playerId: "mom",
-          passphrase: "maple apple river 7KQ2",
+          passphrase: "000123",
         }),
       ).rejects.toMatchObject({
         code: "resource-exhausted",
@@ -300,7 +294,7 @@ describe.skipIf(!enabled)(
       expect(
         await login("fresh-login-device", {
           playerId: "mom",
-          passphrase: "maple apple river 7KQ2",
+          passphrase: "000123",
         }),
       ).toEqual({ slot: "mom" });
       await db
@@ -309,18 +303,16 @@ describe.skipIf(!enabled)(
       expect(
         await login("fresh-login-device", {
           playerId: "mom",
-          passphrase: "maple apple river 7KQ2",
+          passphrase: "000123",
         }),
       ).toEqual({ slot: "mom" });
     }, 15000);
     it("keeps reusable sessions connected when a one-use invitation replaces the legacy device", async () => {
       const db = getFirestore();
-      await db
-        .doc("playerCredentials/mom")
-        .set({
-          ...(await createCredential("maple apple river 7KQ2")),
-          enabled: true,
-        });
+      await db.doc("playerCredentials/mom").set({
+        ...(await createCredential("maple apple river 7KQ2")),
+        enabled: true,
+      });
       await login("reusable-mom", {
         playerId: "mom",
         passphrase: "maple apple river 7KQ2",
@@ -423,6 +415,167 @@ describe.skipIf(!enabled)(
         (await db.doc("bindings/login-a").get()).data()?.sessionVersion,
       ).toBe(1);
       expect((await db.doc(`games/${game.id}`).get()).data()).toEqual(before);
+    }, 30000);
+    it("accepts leading-zero six-digit codes on multiple devices without replacing existing sessions", async () => {
+      const db = getFirestore();
+      const credential = {
+        ...(await createCredential("000123")),
+        enabled: true,
+      };
+      await db.doc("playerCredentials/mom").set(credential);
+      const before = (await db.doc(`games/${game.id}`).get()).data();
+      for (const uid of ["pin-ipad", "pin-phone"])
+        expect(
+          await login(uid, { playerId: "mom", passphrase: " 000123 " }),
+        ).toEqual({ slot: "mom" });
+      expect((await db.doc(`bindings/${uids.mom}`).get()).data()).toEqual({
+        slot: "mom",
+      });
+      expect((await db.doc("playerCredentials/mom").get()).data()).toEqual(
+        credential,
+      );
+      expect((await db.doc(`games/${game.id}`).get()).data()).toEqual(before);
+      const client = env.authenticatedContext("pin-phone").firestore();
+      await assertSucceeds(getDoc(doc(client, `games/${game.id}/racks/mom`)));
+      await assertFails(getDoc(doc(client, `games/${game.id}/racks/aunt`)));
+      await assertFails(getDoc(doc(client, "playerCredentials/mom")));
+      const c = command();
+      const result = await submit("pin-ipad", c);
+      expect(await submit("pin-ipad", c)).toEqual(result);
+      await submit(uids.aunt, command("pass", 1));
+      await expect(
+        submit("pin-phone", command("pass", 2)),
+      ).resolves.toMatchObject({ revision: 3 });
+    }, 15000);
+    it("rejects malformed short codes and numeric payloads without granting membership", async () => {
+      const db = getFirestore();
+      await db
+        .doc("playerCredentials/mom")
+        .set({ ...(await createCredential("000123")), enabled: true });
+      for (const passphrase of [
+        "12345",
+        "1234567",
+        "abcdef",
+        123456,
+        "１２３４５６",
+        "a".repeat(257),
+      ])
+        await expect(
+          login("malformed-pin", { playerId: "mom", passphrase }),
+        ).rejects.toMatchObject({ code: "invalid-argument" });
+      await expect(
+        login("wrong-pin", { playerId: "mom", passphrase: "000124" }),
+      ).rejects.toMatchObject({
+        code: "permission-denied",
+        message: "The player or sign-in code is not correct.",
+      });
+      expect((await db.doc("bindings/malformed-pin").get()).exists).toBe(false);
+      expect((await db.doc("bindings/wrong-pin").get()).exists).toBe(false);
+      expect((await db.doc("loginAttempts/mom").get()).data()?.count).toBe(1);
+    });
+    it("issues private PIN links for both configured names while retaining existing games and devices", async () => {
+      const db = getFirestore();
+      const previousPassphrase = "maple apple river 7KQ2";
+      await db
+        .doc("playerCredentials/mom")
+        .set({
+          ...(await createCredential(previousPassphrase)),
+          enabled: true,
+        });
+      await login("previous-passphrase-device", {
+        playerId: "mom",
+        passphrase: previousPassphrase,
+      });
+      const before = (await db.doc(`games/${game.id}`).get()).data();
+      const beforeBindings = (await db.collection("bindings").get()).docs.map(
+        (record) => ({ id: record.id, ...record.data() }),
+      );
+      const beforePrivate = await Promise.all(
+        ["racks/mom", "racks/aunt", "private/state"].map(async (path) =>
+          (await db.doc(`games/${game.id}/${path}`).get()).data(),
+        ),
+      );
+      await db
+        .doc("loginAttempts/mom")
+        .set({ windowStart: Date.now(), count: 10 });
+      for (const [slot, name] of [
+        ["mom", "Elizabeth"],
+        ["aunt", "Rita"],
+      ] as const) {
+        const output = execFileSync(
+          process.execPath,
+          [
+            "scripts/admin.mjs",
+            "issue-pin",
+            "--player",
+            name,
+            "--project",
+            projectId,
+            "--app-url",
+            "https://example.test/tea/",
+          ],
+          { encoding: "utf8", timeout: 15000 },
+        );
+        const secret = output.match(/private six-digit code: ([^\r\n]+)/)![1];
+        expect(secret).toMatch(/^[0-9]{6}$/);
+        const link = new URL(output.match(/Sign-in link: ([^\r\n]+)/)![1]);
+        expect(link.origin + link.pathname).toBe("https://example.test/tea/");
+        expect(link.search).toBe("");
+        expect(new URLSearchParams(link.hash.slice(1)).get("player")).toBe(
+          name,
+        );
+        expect(new URLSearchParams(link.hash.slice(1)).get("code")).toBe(
+          secret,
+        );
+        const credential = (
+          await db.doc(`playerCredentials/${slot}`).get()
+        ).data()!;
+        expect(credential).toMatchObject({
+          algorithm: "scrypt-v1",
+          enabled: true,
+          salt: expect.stringMatching(/^[a-f0-9]{32}$/),
+          digest: expect.stringMatching(/^[a-f0-9]{128}$/),
+        });
+        expect(credential).not.toHaveProperty("code");
+        expect(credential).not.toHaveProperty("passphrase");
+        expect((await db.doc(`loginAttempts/${slot}`).get()).exists).toBe(
+          false,
+        );
+        expect(
+          await login(`new-pin-${slot}`, {
+            playerId: slot,
+            passphrase: secret,
+          }),
+        ).toEqual({ slot });
+      }
+      for (const record of beforeBindings)
+        expect((await db.doc(`bindings/${record.id}`).get()).data()).toEqual(
+          Object.fromEntries(
+            Object.entries(record).filter(([key]) => key !== "id"),
+          ),
+        );
+      await expect(
+        login("fresh-old-passphrase", {
+          playerId: "mom",
+          passphrase: previousPassphrase,
+        }),
+      ).rejects.toMatchObject({ code: "permission-denied" });
+      await assertSucceeds(
+        getDoc(
+          doc(
+            env.authenticatedContext("previous-passphrase-device").firestore(),
+            `games/${game.id}`,
+          ),
+        ),
+      );
+      expect((await db.doc(`games/${game.id}`).get()).data()).toEqual(before);
+      expect(
+        await Promise.all(
+          ["racks/mom", "racks/aunt", "private/state"].map(async (path) =>
+            (await db.doc(`games/${game.id}/${path}`).get()).data(),
+          ),
+        ),
+      ).toEqual(beforePrivate);
     }, 30000);
     it("authenticates membership, turn and revision before mutating state", async () => {
       await expect(submit(undefined, command())).rejects.toMatchObject({

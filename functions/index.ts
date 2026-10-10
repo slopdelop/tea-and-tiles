@@ -5,7 +5,7 @@ import { createHash, randomInt, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { WORD_FAILURE_BUCKET } from "./setup-words.js";
 import { callablePolicy } from "./callable-policy.js";
-import { verifyCredential } from "./player-login.js";
+import { validLoginSecret, verifyCredential } from "./player-login.js";
 import { scoreAdjustments } from "../shared/scoring.js";
 import {
   applyCommand,
@@ -192,15 +192,10 @@ export async function login(
   const uid = uidRequired(uidInput);
   const d = object(data);
   onlyKeys(d, ["playerId", "passphrase"]);
-  if (
-    !slots.includes(d.playerId as Slot) ||
-    typeof d.passphrase !== "string" ||
-    d.passphrase.length < 8 ||
-    d.passphrase.length > 256
-  )
+  if (!slots.includes(d.playerId as Slot) || !validLoginSecret(d.passphrase))
     throw new HttpsError(
       "invalid-argument",
-      "Choose your player and enter your private passphrase.",
+      "Choose your player and enter your private six-digit code or existing passphrase.",
     );
   const slot = d.playerId as Slot,
     passphrase = d.passphrase;
@@ -274,7 +269,7 @@ export async function login(
       outcome.error!,
       outcome.error === "resource-exhausted"
         ? "Too many sign-in attempts. Please wait before trying again."
-        : "The player or passphrase is not correct.",
+        : "The player or sign-in code is not correct.",
       outcome.error === "resource-exhausted"
         ? { rule: "rate-limit", retryAfterSeconds: outcome.retryAfterSeconds }
         : undefined,

@@ -4,6 +4,15 @@ export const CELEBRATION_HOLD_MS = 4500;
 export const HANDOFF_MS = 200;
 export const NEXT_TURN_DELAY_MS = CELEBRATION_HOLD_MS + HANDOFF_MS;
 
+export function celebrationDuration(
+  move: MoveRecord | null | undefined,
+  reduced = false,
+) {
+  return move?.breakdown && !reduced
+    ? buildScoreTimeline(move.breakdown).durationMs
+    : CELEBRATION_HOLD_MS;
+}
+
 export function handoffDelay(
   readyAt: number,
   now: number,
@@ -11,3 +20,5 @@ export function handoffDelay(
 ): number {
   return Math.max(0, readyAt - now, activeCelebration ? HANDOFF_MS : 0);
 }
+import type { MoveRecord } from "../shared/engine";
+import { buildScoreTimeline } from "./scoreTimeline";

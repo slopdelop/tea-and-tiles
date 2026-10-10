@@ -41,7 +41,11 @@ const cryptoRandom = () => randomInt(0, 0x100000000) / 0x100000000;
 const slots = ["mom", "aunt"];
 const defaultNames = { mom: "Elizabeth", aunt: "Rita" };
 const appUrl = option("app-url");
-if (cloud && ["prepare", "issue-code", "reset"].includes(command) && !appUrl)
+if (
+  cloud &&
+  ["prepare", "issue-code", "issue-pin", "reset"].includes(command) &&
+  !appUrl
+)
   throw new Error(
     "Cloud setup requires --app-url with this game's actual frontend URL.",
   );
@@ -168,7 +172,7 @@ async function resolvePlayer() {
     name: names[matches[0]] || defaultNames[matches[0]],
   };
 }
-async function issueLogin() {
+async function issueLogin(numericCode = false) {
   const { slot, name } = await resolvePlayer();
   const player = await db.doc(`players/${slot}`).get();
   if (!player.exists) throw new Error("Run prepare first.");
@@ -177,14 +181,25 @@ async function issueLogin() {
     import("../functions/lib/functions/player-login.js"),
   ]);
   const alphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
-  const passphrase = [
-    ...Array.from({ length: 3 }, () =>
-      SETUP_WORDS[randomInt(SETUP_WORDS.length)].toLowerCase(),
-    ),
-    Array.from({ length: 4 }, () => alphabet[randomInt(alphabet.length)]).join(
-      "",
-    ),
-  ].join(" ");
+  const passphrase = numericCode
+    ? randomInt(1000000).toString().padStart(6, "0")
+    : [
+        ...Array.from({ length: 3 }, () =>
+          SETUP_WORDS[randomInt(SETUP_WORDS.length)].toLowerCase(),
+        ),
+        Array.from(
+          { length: 4 },
+          () => alphabet[randomInt(alphabet.length)],
+        ).join(""),
+      ].join(" ");
+  const signInUrl = numericCode
+    ? new URL(appUrl || `http://127.0.0.1:${slot === "mom" ? "5173" : "5174"}/`)
+    : null;
+  if (signInUrl)
+    signInUrl.hash = new URLSearchParams({
+      player: name,
+      code: passphrase,
+    }).toString();
   const credential = await createCredential(passphrase);
   const batch = db.batch();
   batch.set(db.doc(`playerCredentials/${slot}`), {
@@ -196,9 +211,12 @@ async function issueLogin() {
   if (player.data()?.uid)
     batch.delete(db.doc(`enrollmentAttempts/${hash(player.data().uid)}`));
   await batch.commit();
-  console.log(`${name} (${slot}) private passphrase: ${passphrase}`);
   console.log(
-    "Keep this private. It signs in the same player on additional devices and does not expire. Existing signed-in devices stay connected; issuing it again replaces only the passphrase. Use revoke-login to revoke every session for this player.",
+    `${name} (${slot}) private ${numericCode ? "six-digit code" : "passphrase"}: ${passphrase}`,
+  );
+  if (signInUrl) console.log(`Sign-in link: ${signInUrl.href}`);
+  console.log(
+    "Keep this code or passphrase and its link private. It signs in the same player on additional devices and does not expire. Existing signed-in devices stay connected; issuing it again replaces only future sign-in credentials. Use revoke-login to revoke every session for this player.",
   );
 }
 async function revokeLogin() {
@@ -297,6 +315,7 @@ export async function run() {
   else if (command === "reset") await reset();
   else if (command === "issue-code") await issueCode(option("slot"));
   else if (command === "issue-login") await issueLogin();
+  else if (command === "issue-pin") await issueLogin(true);
   else if (command === "revoke-login") await revokeLogin();
   else if (command === "fixture") await fixture();
   else if (command === "names") {
@@ -315,7 +334,7 @@ export async function run() {
     await db.doc("pairs/family").update({ names });
   } else
     throw new Error(
-      "Usage: node scripts/admin.mjs prepare|reset|issue-code|issue-login|revoke-login|fixture|names --project ID [--slot mom|aunt] [--player Elizabeth|Rita] [--app-url URL] [--cloud]",
+      "Usage: node scripts/admin.mjs prepare|reset|issue-code|issue-login|issue-pin|revoke-login|fixture|names --project ID [--slot mom|aunt] [--player Elizabeth|Rita] [--app-url URL] [--cloud]",
     );
 }
 if (

@@ -966,7 +966,7 @@ button {
   inset: 0;
   border: 2px solid #357451;
   border-radius: inherit;
-  background: #46946324;
+  background: transparent;
   opacity: 0.3;
   pointer-events: none;
   z-index: 2;
@@ -979,7 +979,7 @@ button {
 }
 .fresh-play-square {
   z-index: 3;
-  animation: latest-tile-settle 580ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  animation: latest-tile-settle 1100ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
 @keyframes latest-green-fade {
   0% {
@@ -993,8 +993,9 @@ button {
   0% {
     transform: scale(1);
   }
-  38% {
-    transform: scale(1.16);
+  28%,
+  58% {
+    transform: scale(1.2);
   }
   100% {
     transform: scale(1);
@@ -4064,4 +4065,205 @@ button {
   font-size: 10px;
   color: var(--muted);
   font-weight: 500;
+}
+/* Readable scoring: a calm, centered presentation with one counted word at a time. */
+.floating-points:has(.with-score-detail) {
+  width: min(480px, calc(100% - 36px));
+  max-height: calc(100% - 32px);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.celebration-card.with-score-detail {
+  padding: 20px;
+  gap: 8px;
+  border-radius: 16px;
+}
+.celebration-card.with-score-detail > strong {
+  font-size: 36px;
+}
+.celebration-card.with-score-detail > span:not(.celebration-debug-label) {
+  font-size: 19px;
+}
+.with-score-detail .score-explanation {
+  max-height: none;
+  padding: 18px;
+  margin-top: 6px;
+}
+.score-explanation {
+  font-size: 20px;
+  line-height: 1.45;
+}
+.score-explanation .scored-word-tiles {
+  justify-content: center;
+  gap: 15px 7px;
+  padding: 9px 0 14px;
+}
+.score-explanation .score-letter {
+  flex: 0 0 52px;
+  width: 52px;
+  height: 56px;
+  border-radius: 5px;
+  box-shadow:
+    inset 0 1px #fff9e9,
+    inset 0 -3px #b89e5c55,
+    0 2px 3px #30291622;
+}
+.score-explanation .score-letter > .tile-letter {
+  font-size: 34px;
+  font-weight: 600;
+}
+.score-explanation .score-letter > small {
+  font-size: 14px;
+}
+.score-explanation .score-letter .letter-bonus {
+  font-size: 11px;
+  padding: 1px 4px;
+  bottom: -8px;
+}
+.score-explanation .counting-letter {
+  outline: 3px solid #287344;
+  outline-offset: 2px;
+}
+.score-explanation .counted-letter {
+  border-color: #448255;
+}
+.score-equation {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  font-size: 20px !important;
+  line-height: 1.5 !important;
+  margin-top: 10px !important;
+  overflow-wrap: anywhere;
+}
+.score-equation strong {
+  font-size: 24px;
+}
+.score-progress-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.score-progress-heading > span {
+  font-size: 16px;
+  color: var(--muted);
+}
+.score-progress-heading button {
+  font:
+    600 15px/1.2 "DM Sans",
+    sans-serif;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  background: var(--soft);
+  min-height: 44px;
+  border-radius: 7px;
+  padding: 8px 12px;
+}
+.score-count-beat {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-height: 74px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+  margin-top: 6px;
+}
+.score-count-beat > span {
+  font-size: 21px;
+  line-height: 1.3;
+}
+.score-count-beat > strong {
+  font: 600 44px/1 var(--serif);
+  font-variant-numeric: tabular-nums;
+}
+.score-word-totals {
+  max-height: 190px;
+  overflow: auto;
+}
+.score-word-totals > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--line);
+  padding: 8px 0;
+  font-size: 21px;
+}
+.score-word-totals strong {
+  overflow-wrap: anywhere;
+}
+.score-word-totals span {
+  white-space: nowrap;
+}
+.score-total {
+  font-size: 20px;
+  padding-top: 12px;
+  margin-top: 13px;
+}
+.score-total strong {
+  font-size: 24px;
+}
+.score-static .scored-word + .scored-word {
+  margin-top: 24px;
+  padding-top: 22px;
+}
+:root[data-theme] .tile.board-tile.latest-play-tile > .tile-letter,
+:root[data-theme] .tile.board-tile.latest-play-tile > small {
+  color: color-mix(in srgb, var(--tile-ink, #51472e) 82%, #245c39);
+}
+:root[data-theme] .tile.board-tile.held-play-tile > .tile-letter,
+:root[data-theme] .tile.board-tile.held-play-tile > small {
+  color: #245c39;
+}
+:root[data-theme] .tile.board-tile.fresh-play-tile > .tile-letter,
+:root[data-theme] .tile.board-tile.fresh-play-tile > small {
+  animation: latest-ink-fade 5s ease-out both;
+}
+@keyframes latest-ink-fade {
+  from {
+    color: #245c39;
+  }
+  to {
+    color: color-mix(in srgb, var(--tile-ink, #51472e) 82%, #245c39);
+  }
+}
+.board-tile.latest-play-tile::before {
+  border-color: #287344;
+}
+.board-tile.held-play-tile::before {
+  box-shadow: inset 0 0 0 1px #287344;
+}
+:root[data-theme] .turn-card .word-check.recognized {
+  color: #285e3a;
+}
+:root:is([data-theme="ink"], [data-theme="midnight"])
+  .turn-card
+  .word-check.recognized {
+  color: #abdcb5;
+}
+@media (max-width: 520px) {
+  .celebration-card.with-score-detail {
+    padding: 12px;
+  }
+  .with-score-detail .score-explanation {
+    padding: 12px;
+  }
+  .score-explanation .score-letter {
+    width: 45px;
+    flex-basis: 45px;
+    height: 49px;
+  }
+  .score-explanation .score-letter > .tile-letter {
+    font-size: 30px;
+  }
+  .score-explanation .scored-word-tiles {
+    gap: 14px 5px;
+  }
+  .score-count-beat > span,
+  .score-equation {
+    font-size: 18px !important;
+  }
 }

@@ -22,7 +22,7 @@ Cloud Functions now require valid App Check tokens. Complete this before cloud p
 3. Save the public site key as `VITE_APP_CHECK_SITE_KEY` in GitHub variables below. The client obtains/refreshes tokens automatically; the usual player flow has no puzzle.
 4. After the first browser/iPad test, inspect App Check metrics for valid **Cloud Firestore** requests, then enable Firestore enforcement before the family starts using it. Functions enforcement already comes from the deployed code; database rules always apply.
 
-App Check reduces automated misuse; membership still requires a private invitation or reusable player passphrase. It is not a perfect abuse barrier. See [official Web setup](https://firebase.google.com/docs/app-check/web/recaptcha-enterprise-provider) and [callable enforcement](https://firebase.google.com/docs/app-check/cloud-functions).
+App Check reduces automated misuse; membership still requires a private invitation or reusable player code/passphrase. It is not a perfect abuse barrier. See [official Web setup](https://firebase.google.com/docs/app-check/web/recaptcha-enterprise-provider) and [callable enforcement](https://firebase.google.com/docs/app-check/cloud-functions).
 
 ## 3. Add spending safeguards
 
@@ -74,14 +74,16 @@ Once the website and backend are available, run the local administrator tool:
 node scripts/admin.mjs prepare --project YOUR_PROJECT_ID --cloud --app-url https://OWNER.github.io/REPOSITORY/
 ```
 
-The tool runs on your computer with administrator credentials; it is not bundled into the website. It prints separate private invitation links/short words for **Elizabeth** and **Rita**. For reusable sign-in across devices, issue each player's private passphrase:
+The tool runs on your computer with administrator credentials; it is not bundled into the website. It prints separate private invitation links/short words for **Elizabeth** and **Rita**. For simpler reusable sign-in across devices, issue each player's private six-digit code and link:
 
 ```powershell
-node scripts/admin.mjs issue-login --project YOUR_PROJECT_ID --cloud --player Elizabeth
-node scripts/admin.mjs issue-login --project YOUR_PROJECT_ID --cloud --player Rita
+node scripts/admin.mjs issue-pin --project YOUR_PROJECT_ID --cloud --player Elizabeth --app-url https://OWNER.github.io/REPOSITORY/
+node scripts/admin.mjs issue-pin --project YOUR_PROJECT_ID --cloud --player Rita --app-url https://OWNER.github.io/REPOSITORY/
 ```
 
-Choose the matching name in the installed app and enter its passphrase. It has three random familiar words plus four random characters; capitalization and spaces/hyphens are interchangeable. The server stores a salted scrypt digest, never the passphrase. It has no automatic expiry, and a player can keep multiple devices signed in. Existing invitation-linked devices remain connected. Reissuing replaces future sign-in credentials but keeps current sessions and the game. The passphrase is printed once by the local administrator tool; keep it private and outside Git.
+The tool generates all six digits cryptographically, including possible leading zeros. Choose the matching name in the installed app and enter its code, or use the private link to prefill both and tap **Sign in**. The link carries `#player=Elizabeth&code=…` in its fragment; the app removes it from the address bar after prefilling and does not sign in automatically. Treat the link as a reusable private credential. Cloud issuance requires the actual frontend URL; the tool never guesses a published URL.
+
+The server stores a salted scrypt digest, never the code. Codes have no automatic expiry, and a player can keep multiple devices signed in. Existing invitation-linked devices remain connected. Reissuing replaces future sign-in credentials but keeps current sessions and the game. Failed sign-ins are limited to ten per player and per browser account in a one-hour window, in addition to cloud App Check protection. Six digits offer less guessing resistance than a longer passphrase; `issue-login --project YOUR_PROJECT_ID --cloud --player Elizabeth` still generates that stronger option. Existing passphrases continue working until explicitly reissued. Codes, passphrases and links are printed by the local administrator tool; keep them private and outside Git.
 
 To revoke every session for one player, including older invitation sessions, run the following and then issue a fresh login. This preserves the active game:
 
@@ -102,7 +104,7 @@ node scripts/admin.mjs issue-code --project YOUR_PROJECT_ID --cloud --slot aunt 
 
 ## 6. Test real iPads
 
-On each iPad, open the website in Safari → Share → Add to Home Screen. **Then open the installed Home Screen app, choose your name and enter your private passphrase there** (or redeem an unused invitation). Do not rely on Safari sharing its identity with the installed app.
+On each iPad, open the website in Safari → Share → Add to Home Screen. **Then open the installed Home Screen app, choose your name and enter your private code there** (an existing passphrase or unused invitation also works). Do not rely on Safari sharing its identity with the installed app.
 
 Confirm correct names, private racks and the same match. Play alternating turns, close/reopen both apps, sleep/reconnect one device, test touch dragging/reordering and approve word/new-game requests from the other device. Check sound, reduced motion and FaceTime placement. Inspect App Check metrics and enable Firestore enforcement as above. Static assets are cached; shared turns require a connection.
 

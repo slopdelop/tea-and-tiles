@@ -1,6 +1,14 @@
 import { randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 const derive = promisify(scrypt);
+/** Preserve existing passphrases while allowing the simpler private numeric code. */
+export function validLoginSecret(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length <= 256 &&
+    (value.length >= 8 || /^[0-9]{6}$/.test(value.trim()))
+  );
+}
 export function normalizePassphrase(value: string) {
   return value
     .normalize("NFKC")
