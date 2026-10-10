@@ -134,3 +134,10 @@ Astra approved all eight result themes and actual portrait/landscape endings. Re
 Created public slopdelop/tea-and-tiles, uploaded reviewed source while excluding credentials/local data/generated artifacts, saved all five public cloud build variables, and configured HTTPS Pages using GitHub Actions. Pages deployment run38064721079 succeeded. The published root returned HTTP200 and its manifest uses /tea-and-tiles/ for both start URL and scope. No Firebase backend, billing setting or cloud invitation was deployed/changed by this operation.
 
 The first GitHub verification run38064707715 passed unit/build/backend checks but exposed an outdated E2E expectation for inline CTA dictionary copy. The corrected test checks the actual dictionary popup, exact rejected word, unchanged revision/no receipts/no request, retained draft and explicit Keep editing recovery. Its uncertain-reply path also handles an optional shared-action pause without changing the command-ID replay and receipt-count assertions. First-failure artifacts are preserved locally in .tools/github-ci-first-failure. Final CI rerun status is available in repository Actions.
+# Apple browser live-update workaround (2026-10-10)
+
+- Reported: Rita's accepted moves appear locally immediately, but Elizabeth sometimes waits about 20 seconds for her board to update. Recent server request timings were about 0.14–0.24 seconds.
+- Cloud Firestore now uses forced long-polling on iOS/iPadOS (including desktop-mode iPads) and Safari. Other browsers and local emulator sessions retain automatic transport selection. This follows the workaround reported in https://github.com/firebase/firebase-js-sdk/issues/9789 for WebKit buffering streaming updates until a keep-alive arrives.
+- Verified: 68 unit tests passed, including browser-selection and emulator-compatibility coverage; TypeScript, Vite/PWA and Functions builds passed.
+- Real iPad latency remains to be verified after deployment. No shared game, player binding, invitation or zoom behavior was changed.
+

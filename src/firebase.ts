@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { initializeApp } from "firebase/app";
+import { firestoreTransport } from "./firestoreTransport";
 import {
   initializeAppCheck,
   ReCaptchaEnterpriseProvider,
@@ -74,9 +75,7 @@ if (!emulator && configured) {
 const auth = initializeAuth(app, {
   persistence: [indexedDBLocalPersistence, browserLocalPersistence],
 });
-const db = initializeFirestore(app, {
-  experimentalAutoDetectLongPolling: true,
-});
+const db = initializeFirestore(app, firestoreTransport(emulator, navigator));
 const functions = getFunctions(
   app,
   import.meta.env.VITE_FUNCTIONS_REGION || "europe-west2",
