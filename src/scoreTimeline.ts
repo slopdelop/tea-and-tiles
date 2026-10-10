@@ -1,5 +1,7 @@
 import type { MoveBreakdown } from "../shared/scoring";
 
+export const SCORE_FINAL_HOLD_MS = 3200;
+
 export type ScoreStep = {
   at: number;
   duration: number;
@@ -33,7 +35,7 @@ export function buildScoreTimeline(breakdown: MoveBreakdown) {
         wordIndex,
         tileIndex,
         runningTotal: subtotal,
-        duration: 450,
+        duration: 300,
       });
       if (tile.letterMultiplier > 1) {
         subtotal += tile.effectivePoints - tile.faceValue;
@@ -42,7 +44,7 @@ export function buildScoreTimeline(breakdown: MoveBreakdown) {
           wordIndex,
           tileIndex,
           runningTotal: subtotal,
-          duration: 300,
+          duration: 900,
         });
       }
     });
@@ -51,13 +53,13 @@ export function buildScoreTimeline(breakdown: MoveBreakdown) {
         kind: "word-bonus",
         wordIndex,
         runningTotal: word.score,
-        duration: 800,
+        duration: 1200,
       });
     add({
       kind: "word-total",
       wordIndex,
       runningTotal: word.score,
-      duration: 850,
+      duration: 650,
     });
   });
   const wordIndex = Math.max(0, breakdown.words.length - 1);
@@ -72,7 +74,7 @@ export function buildScoreTimeline(breakdown: MoveBreakdown) {
     kind: "move-total",
     wordIndex,
     runningTotal: breakdown.total,
-    duration: 1400,
+    duration: SCORE_FINAL_HOLD_MS,
   });
   return { steps, durationMs: at };
 }

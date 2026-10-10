@@ -135,6 +135,74 @@ describe("readable authoritative score timeline", () => {
     ]);
     expect(plan.steps.at(-1)?.runningTotal).toBe(57);
   });
+  it("ignores an old premium and counts a zero-point blank before combining new word bonuses", () => {
+    const scored = word("CAT", [3, 1, 0], 16, 4);
+    Object.assign(scored.tiles[0], { isNew: false, premium: "TL" });
+    Object.assign(scored.tiles[1], { premium: "DW" });
+    Object.assign(scored.tiles[2], { premium: "DW" });
+    const input = breakdown([scored]);
+    const original = structuredClone(input);
+    const plan = buildScoreTimeline(input);
+    expect(
+      plan.steps.filter((step) => step.kind === "letter-bonus"),
+    ).toHaveLength(0);
+    expect(
+      plan.steps
+        .filter((step) => step.kind === "letter")
+        .map((step) => step.runningTotal),
+    ).toEqual([3, 4, 4]);
+    expect(plan.steps.filter((step) => step.kind === "word-bonus")).toEqual([
+      expect.objectContaining({ runningTotal: 16 }),
+    ]);
+    expect(plan.steps.at(-1)).toMatchObject({
+      kind: "move-total",
+      runningTotal: 16,
+    });
+    expect(input).toEqual(original);
+  });
+  it("counts ordinary letters briskly but holds premium explanations and the full final calculation", () => {
+    const quartz = word("QUARTZ", [10, 1, 1, 1, 1, 10], 75, 3);
+    Object.assign(quartz.tiles[2], {
+      premium: "DL",
+      letterMultiplier: 2,
+      effectivePoints: 2,
+    });
+    quartz.tiles[5].premium = "TW";
+    const plan = buildScoreTimeline(breakdown([quartz]));
+    const letters = plan.steps.filter((step) => step.kind === "letter");
+    for (const step of letters) expect(step.duration).toBeLessThanOrEqual(350);
+    const letterBonus = plan.steps.find(
+      (step) => step.kind === "letter-bonus",
+    )!;
+    const wordBonus = plan.steps.find((step) => step.kind === "word-bonus")!;
+    expect(letterBonus.duration).toBeGreaterThanOrEqual(800);
+    expect(wordBonus.duration).toBeGreaterThanOrEqual(1000);
+    const final = plan.steps.at(-1)!;
+    expect(final.kind).toBe("move-total");
+    expect(final.duration).toBeGreaterThanOrEqual(3000);
+    expect(final.duration).toBeGreaterThan(wordBonus.duration);
+    expect(celebrationDuration(move(breakdown([quartz])))).toBe(
+      final.at + final.duration,
+    );
+    const tripleLetter = word("DOG", [2, 1, 2], 18, 2);
+    Object.assign(tripleLetter.tiles[0], {
+      premium: "TL",
+      letterMultiplier: 3,
+      effectivePoints: 6,
+    });
+    tripleLetter.tiles[2].premium = "DW";
+    const dog = buildScoreTimeline(breakdown([tripleLetter]));
+    expect(
+      dog.steps.find((step) => step.kind === "letter-bonus"),
+    ).toMatchObject({ runningTotal: 6, duration: expect.any(Number) });
+    expect(
+      dog.steps.find((step) => step.kind === "letter-bonus")!.duration,
+    ).toBeGreaterThanOrEqual(800);
+    expect(
+      dog.steps.find((step) => step.kind === "word-bonus")!.runningTotal,
+    ).toBe(18);
+    expect(dog.steps.at(-1)!.runningTotal).toBe(18);
+  });
   it("allocates non-overlapping readable beats without changing the server breakdown", () => {
     const score = breakdown([word("DON", [2, 1, 1], 4), word("AT", [1, 1], 2)]);
     const original = structuredClone(score);

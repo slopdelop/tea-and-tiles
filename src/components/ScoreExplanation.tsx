@@ -2,8 +2,42 @@ import { motion, useReducedMotion } from "motion/react";
 import { useEffect, useMemo, useState } from "react";
 import type { Game, MoveRecord, Slot } from "../../shared/engine";
 import type { WordScore } from "../../shared/scoring";
-import { buildScoreTimeline } from "../scoreTimeline";
+import { buildScoreTimeline, SCORE_FINAL_HOLD_MS } from "../scoreTimeline";
 import { CELEBRATION_HOLD_MS } from "../celebrationTiming";
+
+function PremiumBadge({ premium }: { premium: "DL" | "TL" | "DW" | "TW" }) {
+  const names = {
+    DL: "Double letter",
+    TL: "Triple letter",
+    DW: "Double word",
+    TW: "Triple word",
+  };
+  return (
+    <span
+      className={`score-premium-badge ${premium.toLowerCase()}`}
+      data-testid="score-premium-badge"
+      data-premium={premium}
+      aria-label={names[premium]}
+    >
+      {premium}
+    </span>
+  );
+}
+
+function WordPremiums({ word }: { word: WordScore }) {
+  return (
+    <span className="score-word-premiums" data-testid="score-word-premiums">
+      {word.tiles
+        .filter((tile) => tile.premium === "DW" || tile.premium === "TW")
+        .map((tile) => (
+          <PremiumBadge
+            key={tile.tileId}
+            premium={tile.premium as "DW" | "TW"}
+          />
+        ))}
+    </span>
+  );
+}
 
 function WordTiles({
   word,
@@ -34,7 +68,11 @@ function WordTiles({
           </span>
           <small>{tile.faceValue}</small>
           {tile.letterMultiplier > 1 && (
-            <i className="letter-bonus">{tile.premium}</i>
+            <span className="letter-bonus" data-testid="score-letter-premium">
+              <PremiumBadge
+                premium={tile.letterMultiplier === 3 ? "TL" : "DL"}
+              />
+            </span>
           )}
         </motion.span>
       ))}
@@ -55,7 +93,14 @@ function WordCalculation({ word }: { word: WordScore }) {
           .join(" + ")}
       </span>
       {word.wordMultiplier > 1 && (
-        <span className="word-bonus">Word bonus ×{word.wordMultiplier}</span>
+        <span className="word-bonus" data-testid="score-word-premium">
+          <WordPremiums word={word} />
+          <span>
+            Whole word:{" "}
+            {word.tiles.reduce((sum, tile) => sum + tile.effectivePoints, 0)} ×{" "}
+            {word.wordMultiplier} = {word.score}
+          </span>
+        </span>
       )}
       <strong>
         {word.word} = {word.score} points
@@ -88,7 +133,7 @@ export function ScoreExplanation({
       return () => clearTimeout(timer);
     }
     if (showTotal) {
-      const timer = setTimeout(() => onComplete?.(), 1400);
+      const timer = setTimeout(() => onComplete?.(), SCORE_FINAL_HOLD_MS);
       return () => clearTimeout(timer);
     }
     const timers = timeline.steps.map((step, index) =>
@@ -127,10 +172,7 @@ export function ScoreExplanation({
         : step.kind === "letter-bonus"
           ? `${tile?.premium === "TL" ? "Triple" : "Double"} letter: ${tile?.faceValue} × ${tile?.letterMultiplier}`
           : step.kind === "word-bonus"
-            ? `${word.tiles
-                .filter((t) => t.premium === "DW" || t.premium === "TW")
-                .map((t) => t.premium)
-                .join(" + ")} · word × ${word.wordMultiplier}`
+            ? `Whole word: ${word.tiles.reduce((sum, t) => sum + t.effectivePoints, 0)} × ${word.wordMultiplier}`
             : step.kind === "word-total"
               ? `${word.word} scores`
               : step.kind === "bingo"
@@ -174,17 +216,23 @@ export function ScoreExplanation({
               }
             />
           ) : (
-            <div className="score-word-totals">
+            <div
+              className="score-word-totals score-final-recap"
+              data-testid="score-final-recap"
+            >
               {breakdown.words.map((w, i) => (
-                <div key={i}>
-                  <strong>{w.word}</strong>
-                  <span>{w.score} points</span>
+                <div className="scored-word" key={i}>
+                  <WordTiles word={w} />
+                  <WordCalculation word={w} />
                 </div>
               ))}
             </div>
           )}
           <div className="score-count-beat">
-            <span>{label}</span>
+            <span>
+              {step.kind === "word-bonus" && <WordPremiums word={word} />}
+              {label}
+            </span>
             <motion.strong
               key={`${stepIndex}:${showTotal}`}
               data-testid="running-score"

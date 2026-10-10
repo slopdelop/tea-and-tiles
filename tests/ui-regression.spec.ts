@@ -4223,6 +4223,19 @@ test("a real blank crossing counts each word separately without charging the bla
   });
   await expect(score).toHaveAttribute("data-score-phase", "move-total");
   await expect(score.getByTestId("score-total")).toHaveText("Total 9");
+  const recap = score.getByTestId("score-final-recap");
+  await expect(recap.locator(".scored-word-tiles")).toHaveCount(2);
+  await expect(recap.locator('[aria-label="T, 0 points"]')).toHaveCount(2);
+  await expect(recap.locator('[data-premium="DW"]')).toHaveCount(1);
+  await expect(recap.locator('[data-premium="DL"]')).toHaveCount(0);
+  for (const oldA of await recap.locator('[aria-label="A, 1 points"]').all())
+    await expect(oldA.getByTestId("score-letter-premium")).toHaveCount(0);
+  await expect(recap.locator(".score-equation").first()).toHaveText(
+    /3 \+ 1 \+ 0.*Whole word: 4 × 2 = 8.*CAT = 8 points/,
+  );
+  await expect(recap.locator(".score-equation").last()).toHaveText(
+    /1 \+ 0.*AT = 1 points/,
+  );
   const records = await observedScores(page);
   expect(
     records
@@ -4347,6 +4360,46 @@ test("a fifteen-letter accepted word wraps its large faces and adds a single sev
     fullPage: false,
   });
   await expect(score).toHaveAttribute("data-score-phase", "move-total");
+  const recap = score.getByTestId("score-final-recap");
+  await expect(recap.locator(".tile-letter")).toHaveText([
+    ..."EXTRACURRICULAR",
+  ]);
+  const wordScore = game.lastMove.breakdown.words[0];
+  const committedScores = wordScore.tiles.filter(
+    (tile: { isNew: boolean }) => !tile.isNew,
+  );
+  expect(committedScores).toHaveLength(8);
+  expect(
+    committedScores.every(
+      (tile: { premium: string | null; letterMultiplier: number }) =>
+        tile.premium === null && tile.letterMultiplier === 1,
+    ),
+  ).toBe(true);
+  const newPremiums = wordScore.tiles
+    .filter((tile: { premium: string | null }) => tile.premium !== null)
+    .map((tile: { premium: string }) => tile.premium);
+  // Real accepted scoring supplies the new premiums; committed col3/7 bonuses are spent.
+  await expect(recap.getByTestId("score-premium-badge")).toHaveText(
+    newPremiums,
+  );
+  await expectScoredPointsClear(recap);
+  const overflow = await recap.evaluate((element) => ({
+    height: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+    overflow: getComputedStyle(element).overflowY,
+  }));
+  expect(overflow.height).toBeLessThanOrEqual(260);
+  expect(overflow.overflow).toBe("auto");
+  if (overflow.scrollHeight > overflow.height) {
+    await recap.evaluate(
+      (element) => (element.scrollTop = element.scrollHeight),
+    );
+    await expect(recap.locator(".score-equation strong")).toBeInViewport();
+  }
+  await page.screenshot({
+    path: info.outputPath("fifteen-letter-premiums-final-recap.png"),
+    fullPage: false,
+  });
   expect(
     (await observedScores(page)).filter((step) => step.phase === "bingo"),
   ).toHaveLength(1);
@@ -4363,6 +4416,29 @@ test("a private sign-in link prefills the intended player and six-digit code wit
   await expect(page.getByTestId("game-board")).toHaveCount(0);
   expect(await authoritativeState()).toEqual(before);
 });
+
+async function expectScoredPointsClear(scope: Locator) {
+  const overlaps = await scope.evaluate((element) => {
+    const badges = [
+      ...element.querySelectorAll('[data-testid="score-letter-premium"]'),
+    ].map((node) => node.getBoundingClientRect());
+    const points = [...element.querySelectorAll(".score-letter > small")].map(
+      (node) => node.getBoundingClientRect(),
+    );
+    return badges.flatMap((badge, index) =>
+      points
+        .filter(
+          (point) =>
+            Math.min(badge.right, point.right) >
+              Math.max(badge.left, point.left) &&
+            Math.min(badge.bottom, point.bottom) >
+              Math.max(badge.top, point.top),
+        )
+        .map(() => index),
+    );
+  });
+  expect(overlaps).toEqual([]);
+}
 
 test("a real high-scoring right-edge move keeps its celebration and stars inside the board", async ({
   page,
@@ -4427,9 +4503,26 @@ test("a real high-scoring right-edge move keeps its celebration and stars inside
     await expect(reduced).toHaveAttribute("data-score-phase", "complete");
     await expect(reduced.locator(".tile-letter")).toHaveText([..."QUARTZ"]);
     await expect(reduced.locator(".score-equation")).toHaveText(
-      /10 \+ 1 \+ 1×2 \+ 1 \+ 1 \+ 10.*Word bonus ×3.*QUARTZ = 75 points/,
+      /10 \+ 1 \+ 1×2 \+ 1 \+ 1 \+ 10.*Whole word: 25 × 3 = 75.*QUARTZ = 75 points/,
     );
     await expect(reduced.getByTestId("score-total")).toHaveText("Total 75");
+    await expect(reduced.getByTestId("score-premium-badge")).toHaveText([
+      "DL",
+      "TW",
+    ]);
+    await expect(
+      reduced
+        .getByTestId("score-letter-premium")
+        .getByTestId("score-premium-badge"),
+    ).toHaveAccessibleName("Double letter");
+    await expect(reduced.getByTestId("score-word-premium")).toHaveText(
+      /TW\s*Whole word: 25 × 3 = 75/,
+    );
+    await expectScoredPointsClear(reduced);
+    await recipient.screenshot({
+      path: info.outputPath("quartz-premiums-reduced-portrait.png"),
+      fullPage: false,
+    });
     await expect(progressive.locator(".tile-letter")).toHaveText([..."QUARTZ"]);
     const dimensions = await actual.evaluate((element) => {
       const rect = element.getBoundingClientRect();
@@ -4518,6 +4611,46 @@ test("a real high-scoring right-edge move keeps its celebration and stars inside
       path: info.outputPath("actual-high-score-right-edge.png"),
       fullPage: false,
     });
+    const recap = progressive.getByTestId("score-final-recap");
+    await expect(recap.getByTestId("score-premium-badge")).toHaveText([
+      "DL",
+      "TW",
+    ]);
+    await expect(recap.locator(".score-equation")).toHaveText(
+      /10 \+ 1 \+ 1×2 \+ 1 \+ 1 \+ 10.*Whole word: 25 × 3 = 75.*QUARTZ = 75 points/,
+    );
+    const badges = await recap
+      .getByTestId("score-premium-badge")
+      .evaluateAll((elements) =>
+        elements.map((element) => {
+          const rect = element.getBoundingClientRect();
+          return {
+            width: rect.width,
+            height: rect.height,
+            font: parseFloat(getComputedStyle(element).fontSize),
+          };
+        }),
+      );
+    for (const badge of badges) {
+      expect(badge.width).toBeGreaterThanOrEqual(32);
+      expect(badge.height).toBeGreaterThanOrEqual(30);
+      expect(badge.font).toBeGreaterThanOrEqual(16);
+    }
+    await expectScoredPointsClear(recap);
+    await page.waitForTimeout(2300);
+    await expect(progressive).toHaveAttribute("data-score-phase", "move-total");
+    await expect(recap.getByTestId("score-premium-badge")).toHaveText([
+      "DL",
+      "TW",
+    ]);
+    await expect(recap.getByTestId("score-word-premium")).toHaveText(
+      /Whole word: 25 × 3 = 75/,
+    );
+    await expect(page.getByTestId("turn-announcement")).toHaveCount(0);
+    await page.screenshot({
+      path: info.outputPath("quartz-premiums-readable-final-hold.png"),
+      fullPage: false,
+    });
     const observed = await observedScores(page);
     expect(
       observed
@@ -4554,6 +4687,14 @@ test("a real high-scoring right-edge move keeps its celebration and stars inside
         popup.getByTestId("score-breakdown").locator(".score-total"),
       ).toHaveText("Total 75");
       await expect(popup.locator(".tile-letter")).toHaveText([..."QUARTZ"]);
+      await expect(popup.getByTestId("score-premium-badge")).toHaveText([
+        "DL",
+        "TW",
+      ]);
+      await expect(popup.getByTestId("score-word-premium")).toHaveText(
+        /Whole word: 25 × 3 = 75/,
+      );
+      await expectScoredPointsClear(popup);
       if (view === page) {
         await view.screenshot({
           path: info.outputPath("authoritative-score-details.png"),
