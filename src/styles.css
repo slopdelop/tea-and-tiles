@@ -2125,6 +2125,13 @@ button {
 .settling-target {
   opacity: 0 !important;
 }
+.tile.recall-target {
+  opacity: 0 !important;
+}
+.drag-ghost.recall-ghost {
+  animation: none;
+  will-change: left, top, width, height;
+}
 .drag-ghost.settling-ghost {
   animation: none;
 }

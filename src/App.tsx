@@ -25,6 +25,10 @@ import {
 } from "../shared/engine";
 import { useGameSession } from "./firebase";
 import { useTileDrag } from "./components/useTileDrag";
+import {
+  useRecallAnimation,
+  type RecallSource,
+} from "./components/useRecallAnimation";
 import { useWordDictionary } from "./hooks/useWordDictionary";
 import { canPlaceDraftTile } from "./placementGuide";
 import { formatTimeRemaining } from "./timerDisplay";
@@ -753,13 +757,19 @@ export default function App() {
     !!game && game.status === "active" && Object.keys(game.board).length === 0;
   const centreCovered = placements.some((p) => p.row === 7 && p.col === 7);
   const yourTurn = !!game && game.turn === slot && game.status === "active";
+  const reduced = useReducedMotion();
+  const recallAnimation = useRecallAnimation(
+    `${gameContext}:${game?.revision}`,
+    reduced,
+  );
   const canEdit =
     !!game &&
     !!slot &&
     game.status === "active" &&
     !pending &&
     !busy &&
-    !timedExpired;
+    !timedExpired &&
+    !recallAnimation.active;
   const canSubmit =
     yourTurn &&
     !pending &&
@@ -767,8 +777,8 @@ export default function App() {
     !wordBusy &&
     !newGameBusy &&
     !timedExpired &&
-    !sharedActionsPaused;
-  const reduced = useReducedMotion();
+    !sharedActionsPaused &&
+    !recallAnimation.active;
   const [finePointer, setFinePointer] = useState(false);
   const [zoomed, setZoomed] = useState(false);
   const [tabletLandscape, setTabletLandscape] = useState(
@@ -902,6 +912,7 @@ export default function App() {
       blank ||
       drag ||
       settling ||
+      recallAnimation.active ||
       pending ||
       busy ||
       wordBusy ||
@@ -947,6 +958,7 @@ export default function App() {
     blank,
     !!drag,
     !!settling,
+    recallAnimation.active,
     pending,
     busy,
     wordBusy,
@@ -1348,6 +1360,32 @@ export default function App() {
       placements: next,
     });
     setMessage("");
+  }
+  function recallTiles() {
+    if (!canEdit || !placements.length || drag || settling) return;
+    const sources = placements.flatMap((placement): RecallSource[] => {
+      const tile = rack.find((candidate) => candidate.id === placement.tileId);
+      const element = document.querySelector<HTMLElement>(
+        `[data-testid="board-cell-${placement.row}-${placement.col}"] .board-tile`,
+      );
+      if (!tile || !element) return [];
+      const rect = element.getBoundingClientRect();
+      return [
+        {
+          tile: { ...tile, letter: placement.letter || tile.letter },
+          from: {
+            x: rect.left,
+            y: rect.top,
+            width: rect.width,
+            height: rect.height,
+          },
+        },
+      ];
+    });
+    recallAnimation.begin(sources);
+    edit([]);
+    setSelected(null);
+    tick();
   }
   function place(tileId: string, row: number, col: number, letter?: string) {
     if (!canEdit || !game || !rack.some((t) => t.id === tileId)) return;
@@ -2443,7 +2481,9 @@ export default function App() {
                               <motion.div
                                 className="rack-visual"
                                 layout={
-                                  !reduced && settling?.tile.id !== tile.id
+                                  !reduced &&
+                                  settling?.tile.id !== tile.id &&
+                                  !recallAnimation.hiddenIds.has(tile.id)
                                     ? "position"
                                     : false
                                 }
@@ -2466,7 +2506,7 @@ export default function App() {
                               >
                                 <motion.button
                                   data-testid={`rack-tile-${tile.id}`}
-                                  className={`tile rack-tile ${canEdit ? "draggable-tile" : ""} ${drag?.tile.id === tile.id ? "drag-source" : ""} ${settling?.tile.id === tile.id ? "settling-target" : ""} ${selected === tile.id ? "selected-tile" : ""}`}
+                                  className={`tile rack-tile ${canEdit ? "draggable-tile" : ""} ${drag?.tile.id === tile.id ? "drag-source" : ""} ${settling?.tile.id === tile.id ? "settling-target" : ""} ${recallAnimation.hiddenIds.has(tile.id) ? "recall-target" : ""} ${selected === tile.id ? "selected-tile" : ""}`}
                                   aria-label={`${tile.letter === "?" ? "Blank" : tile.letter}, ${tile.value} points`}
                                   aria-pressed={selected === tile.id}
                                   disabled={!canEdit}
@@ -2516,7 +2556,8 @@ export default function App() {
                                     tick();
                                   }}
                                   initial={
-                                    settling?.tile.id === tile.id
+                                    settling?.tile.id === tile.id ||
+                                    recallAnimation.hiddenIds.has(tile.id)
                                       ? false
                                       : { opacity: 0, y: 10 }
                                   }
@@ -2580,11 +2621,7 @@ export default function App() {
                     disabled={
                       !canEdit || !placements.length || !!drag || !!settling
                     }
-                    onClick={() => {
-                      edit([]);
-                      setSelected(null);
-                      tick();
-                    }}
+                    onClick={recallTiles}
                   >
                     <Icon name="recall" />
                     <span>Recall</span>
@@ -2604,17 +2641,19 @@ export default function App() {
                   </button>
                 </div>
                 <p className="rack-hint" data-testid="rack-hint">
-                  {drag
-                    ? "Drop on an empty square or back in your hand."
-                    : selected
-                      ? placements.some((p) => p.tileId === selected)
-                        ? "Choose a square, or tap the tile again to return it."
-                        : "Tap an empty square."
-                      : canEdit
-                        ? placements.length
-                          ? "Keep arranging your word."
-                          : "Tap or drag a tile to begin."
-                        : "Your tiles are saved here."}
+                  {recallAnimation.active
+                    ? "Returning your tiles…"
+                    : drag
+                      ? "Drop on an empty square or back in your hand."
+                      : selected
+                        ? placements.some((p) => p.tileId === selected)
+                          ? "Choose a square, or tap the tile again to return it."
+                          : "Tap an empty square."
+                        : canEdit
+                          ? placements.length
+                            ? "Keep arranging your word."
+                            : "Tap or drag a tile to begin."
+                          : "Your tiles are saved here."}
                 </p>
               </section>
 
@@ -3027,6 +3066,49 @@ export default function App() {
             <small>{settling.tile.value}</small>
           </motion.div>
         )}
+        {recallAnimation.flights.map((flight) => (
+          <motion.div
+            key={`${recallAnimation.id}:${flight.tile.id}`}
+            className="tile drag-ghost settling-ghost recall-ghost"
+            data-testid="recall-ghost"
+            data-tile-id={flight.tile.id}
+            data-phase="returning"
+            data-from={JSON.stringify(flight.from)}
+            data-to={JSON.stringify(flight.to)}
+            data-from-x={flight.from.x}
+            data-from-y={flight.from.y}
+            data-from-width={flight.from.width}
+            data-from-height={flight.from.height}
+            data-to-x={flight.to.x}
+            data-to-y={flight.to.y}
+            data-to-width={flight.to.width}
+            data-to-height={flight.to.height}
+            aria-hidden="true"
+            initial={{
+              left: flight.from.x,
+              top: flight.from.y,
+              width: flight.from.width,
+              height: flight.from.height,
+            }}
+            animate={{
+              left: flight.to.x,
+              top: flight.to.y,
+              width: flight.to.width,
+              height: flight.to.height,
+            }}
+            transition={{
+              duration: 0.35,
+              delay: flight.delay,
+              ease: [0.2, 0.8, 0.2, 1],
+            }}
+            onAnimationComplete={() =>
+              recallAnimation.finish(recallAnimation.id!, flight.tile.id)
+            }
+          >
+            <TileLetter letter={flight.tile.letter} />
+            <small>{flight.tile.value}</small>
+          </motion.div>
+        ))}
         <AnimatePresence>
           {dialog === "result" &&
             game?.status === "finished" &&

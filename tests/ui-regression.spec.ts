@@ -208,6 +208,20 @@ async function writeFixture(next: Game) {
   batch.set(db.doc(`games/${next.id}/private/state`), { bag });
   await batch.commit();
 }
+async function authoritativeState() {
+  const snapshots = await Promise.all([
+    db.doc("games/ui-table").get(),
+    db.doc("games/ui-table/racks/mom").get(),
+    db.doc("games/ui-table/racks/aunt").get(),
+    db.doc("games/ui-table/private/state").get(),
+    db.collection("games/ui-table/commands").get(),
+  ]);
+  return snapshots.map((snapshot) =>
+    "docs" in snapshot
+      ? snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }))
+      : snapshot.data(),
+  );
+}
 const rack = (page: Page, letter: string, index = 0) =>
   page.getByTestId(
     `rack-tile-${tiles.filter((tile) => tile.letter === letter)[index].id}`,
@@ -511,7 +525,7 @@ test("tablet landscape expands the board to the top and exposes the build versio
   }
   await page.getByTestId("help-settings").click();
   await expect(page.getByTestId("app-version")).toHaveText(
-    /^Version 0\.1\.3 · (?:[a-f0-9]{7}|local)$/,
+    /^Version 0\.1\.4 · (?:[a-f0-9]{7}|local)$/,
   );
   await page.getByRole("button", { name: "Close dialog" }).click();
   await page.setViewportSize({ width: 820, height: 1180 });
@@ -753,6 +767,216 @@ test("partial hands center gently after release while drag targets stay steady",
   await expect(slots).toHaveCount(7);
   await expect(cell(page, 7, 6)).not.toHaveClass(/has-tentative/);
   expect(await centeredError()).toBeLessThan(1);
+});
+
+test("Recall flies placed letters and a blank into their actual centered hand positions", async ({
+  page,
+}, info) => {
+  await enroll(page);
+  await expect(page.getByTestId("turn-announcement")).toBeHidden();
+  for (const [letter, col] of [
+    ["A", 1],
+    ["T", 2],
+    ["?", 3],
+  ] as const) {
+    await rack(page, letter).tap();
+    await cell(page, 0, col).tap();
+    if (letter === "?") await page.getByTestId("blank-Z").tap();
+  }
+  await expect(page.getByTestId("tile-rack").locator("button")).toHaveCount(4);
+  const before = await authoritativeState();
+  await page.evaluate(() => {
+    // Capture after tap scrolling and tile-entry motion, in the same event as Recall.
+    window.addEventListener(
+      "click",
+      () => {
+        const sources = [
+          ...document.querySelectorAll(".has-tentative .board-tile"),
+        ].map((node) => {
+          const rect = node.getBoundingClientRect();
+          return {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+          };
+        });
+        Object.assign(window, { recallSources: sources });
+      },
+      { capture: true, once: true },
+    );
+    const records: Record<
+      string,
+      {
+        from: string | null;
+        to: string | null;
+        letter: string | null;
+        points: { x: number; y: number; width: number; height: number }[];
+      }
+    > = {};
+    Object.assign(window, { recallRecords: records });
+    const until = performance.now() + 1800;
+    function sample() {
+      document
+        .querySelectorAll<HTMLElement>('[data-testid="recall-ghost"]')
+        .forEach((node) => {
+          const id = node.dataset.tileId!;
+          const record = (records[id] ||= {
+            from: node.getAttribute("data-from"),
+            to: node.getAttribute("data-to"),
+            letter:
+              node.querySelector(".tile-letter")?.getAttribute("data-letter") ??
+              null,
+            points: [],
+          });
+          const rect = node.getBoundingClientRect();
+          record.points.push({
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+          });
+        });
+      if (performance.now() < until) requestAnimationFrame(sample);
+    }
+    requestAnimationFrame(sample);
+  });
+  await page.getByTestId("recall-tiles").tap();
+  await expect(page.getByTestId("recall-ghost")).toHaveCount(3);
+  await expect(page.locator(".has-tentative")).toHaveCount(0);
+  await expect(page.getByTestId("shuffle-rack")).toBeDisabled();
+  await expect(page.getByTestId("recall-tiles")).toBeDisabled();
+  await expect(rack(page, "M")).toBeDisabled();
+  await page.screenshot({
+    path: info.outputPath("recall-letters-in-flight.png"),
+    fullPage: false,
+  });
+  await expect(page.getByTestId("recall-ghost")).toHaveCount(0);
+  await expect(page.locator(".recall-target")).toHaveCount(0);
+  await expect(page.getByTestId("shuffle-rack")).toBeEnabled();
+  await expect(page.getByTestId("tile-rack").locator("button")).toHaveCount(7);
+  const records = await page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          recallRecords: Record<
+            string,
+            {
+              from: string | null;
+              to: string | null;
+              letter: string | null;
+              points: { x: number; y: number; width: number; height: number }[];
+            }
+          >;
+        }
+      ).recallRecords,
+  );
+  const sources = await page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          recallSources: {
+            x: number;
+            y: number;
+            width: number;
+            height: number;
+          }[];
+        }
+      ).recallSources,
+  );
+  expect(Object.keys(records)).toHaveLength(3);
+  for (const record of Object.values(records)) {
+    const from = JSON.parse(record.from!);
+    const to = JSON.parse(record.to!);
+    expect(
+      sources.some(
+        (source) =>
+          Math.abs(source.x - from.x) < 1 && Math.abs(source.y - from.y) < 1,
+      ),
+    ).toBe(true);
+    expect(record.points.length).toBeGreaterThan(5);
+    expect(
+      record.points.some(
+        (point) =>
+          point.y > Math.min(from.y, to.y) + 10 &&
+          point.y < Math.max(from.y, to.y) - 10,
+      ),
+    ).toBe(true);
+  }
+  for (const [id, record] of Object.entries(records)) {
+    const target = (await page
+      .locator(`[data-rack-tile-id="${id}"]`)
+      .boundingBox())!;
+    const to = JSON.parse(record.to!);
+    for (const key of ["x", "y", "width", "height"] as const)
+      expect(to[key]).toBeCloseTo(target[key], 0);
+  }
+  const blank = Object.values(records).find((record) => record.letter === "Z");
+  expect(blank).toBeDefined();
+  await expect(rack(page, "?")).toHaveAttribute(
+    "aria-label",
+    /Blank, 0 points/,
+  );
+  await expect(rack(page, "?").locator(".tile-letter")).toHaveAttribute(
+    "data-letter",
+    "?",
+  );
+  expect(await authoritativeState()).toEqual(before);
+  await page.screenshot({
+    path: info.outputPath("recalled-centered-hand.png"),
+    fullPage: false,
+  });
+});
+
+test("Recall handles a full empty hand, interruptions, and reduced motion without stranded tiles", async ({
+  page,
+}, info) => {
+  await enroll(page);
+  await expect(page.getByTestId("turn-announcement")).toBeHidden();
+  for (const [col, tile] of tiles.entries()) {
+    await page.getByTestId(`rack-tile-${tile.id}`).tap();
+    await cell(page, 7, col).tap();
+    if (tile.letter === "?") await page.getByTestId("blank-A").tap();
+  }
+  await expect(page.getByTestId("tile-rack").locator("button")).toHaveCount(0);
+  const before = await authoritativeState();
+  await page.getByTestId("recall-tiles").tap();
+  await expect(page.getByTestId("recall-ghost")).toHaveCount(7);
+  await page.screenshot({
+    path: info.outputPath("recall-all-seven-letters.png"),
+    fullPage: false,
+  });
+  await expect(page.getByTestId("recall-ghost")).toHaveCount(0);
+  await expect(page.locator(".recall-target")).toHaveCount(0);
+  await expect(page.getByTestId("shuffle-rack")).toBeEnabled();
+  expect(await authoritativeState()).toEqual(before);
+  for (const interrupt of ["resize", "revision"] as const) {
+    await rack(page, "A").tap();
+    await cell(page, 0, 1).tap();
+    await page.getByTestId("recall-tiles").tap();
+    await expect(page.getByTestId("recall-ghost")).toHaveCount(1);
+    if (interrupt === "resize")
+      await page.setViewportSize({ width: 1180, height: 820 });
+    else
+      await writeFixture({
+        ...fixtureGame,
+        turn: "aunt",
+        revision: fixtureGame.revision + 1,
+      });
+    await expect(page.getByTestId("recall-ghost")).toHaveCount(0);
+    await expect(page.locator(".recall-target")).toHaveCount(0);
+    await expect(rack(page, "A")).toBeEnabled();
+  }
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.reload();
+  await expect(page.getByTestId("tile-rack").locator("button")).toHaveCount(7);
+  await rack(page, "A").tap();
+  await cell(page, 0, 1).tap();
+  await page.getByTestId("recall-tiles").tap();
+  await expect(page.getByTestId("tile-rack").locator("button")).toHaveCount(7);
+  await expect(page.getByTestId("recall-ghost")).toHaveCount(0);
+  await expect(page.locator(".recall-target")).toHaveCount(0);
+  await expect(page.getByTestId("shuffle-rack")).toBeEnabled();
 });
 
 test("latest plays bloom green, settle faintly, and clear on the next turn without replaying on reload", async ({
