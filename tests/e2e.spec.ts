@@ -208,10 +208,17 @@ test("two enrolled tablets play, reload, recover an interrupted reply, finish an
     await expectRevision(2);
     await expect(mom.getByTestId("board-cell-7-9")).toContainText("S");
     await expect(mom.getByTestId("score-aunt")).toContainText("6");
-    // The scoring class normally animates; reduced motion must disable it.
-    await expect(aunt.getByTestId("board-cell-7-9")).toHaveClass(
-      /scoring-square/,
+    // Reduced motion retains the latest-play marker without replaying the bloom.
+    await expect(aunt.getByTestId("board-cell-7-9")).toHaveAttribute(
+      "data-latest-play",
+      "settled",
     );
+    await expect(
+      aunt.getByTestId("board-cell-7-9").locator(".board-tile"),
+    ).toHaveClass(/latest-play-tile/);
+    await expect(
+      aunt.getByTestId("board-cell-7-9").locator(".board-tile"),
+    ).not.toHaveClass(/fresh-play-tile/);
     await expect(aunt.getByTestId("board-cell-7-9")).toHaveCSS(
       "animation-name",
       "none",
