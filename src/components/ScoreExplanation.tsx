@@ -1,5 +1,5 @@
 import { motion, useReducedMotion } from "motion/react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Game, MoveRecord, Slot } from "../../shared/engine";
 import type { WordScore } from "../../shared/scoring";
 import { buildScoreTimeline, SCORE_FINAL_HOLD_MS } from "../scoreTimeline";
@@ -80,20 +80,47 @@ function WordTiles({
   );
 }
 
-function WordCalculation({ word }: { word: WordScore }) {
+function WordCalculation({
+  word,
+  counted = word.tiles.length - 1,
+  bonusCounted = counted,
+  showWordBonus = true,
+  showWordTotal = true,
+}: {
+  word: WordScore;
+  counted?: number;
+  bonusCounted?: number;
+  showWordBonus?: boolean;
+  showWordTotal?: boolean;
+}) {
   return (
     <div className="score-equation">
-      <span>
-        {word.tiles
-          .map((tile) =>
-            tile.letterMultiplier > 1
-              ? `${tile.faceValue}×${tile.letterMultiplier}`
-              : `${tile.effectivePoints}`,
-          )
-          .join(" + ")}
+      <span className="score-letter-equation">
+        {word.tiles.map((tile, index) => (
+          <span
+            key={tile.tileId}
+            style={{ visibility: index <= counted ? "visible" : "hidden" }}
+          >
+            {index > 0 && " + "}
+            {tile.faceValue}
+            {tile.letterMultiplier > 1 && (
+              <span
+                style={{
+                  visibility: index <= bonusCounted ? "visible" : "hidden",
+                }}
+              >
+                ×{tile.letterMultiplier}
+              </span>
+            )}
+          </span>
+        ))}
       </span>
       {word.wordMultiplier > 1 && (
-        <span className="word-bonus" data-testid="score-word-premium">
+        <span
+          className="word-bonus"
+          data-testid="score-word-premium"
+          style={{ visibility: showWordBonus ? "visible" : "hidden" }}
+        >
           <WordPremiums word={word} />
           <span>
             Whole word:{" "}
@@ -102,7 +129,7 @@ function WordCalculation({ word }: { word: WordScore }) {
           </span>
         </span>
       )}
-      <strong>
+      <strong style={{ visibility: showWordTotal ? "visible" : "hidden" }}>
         {word.word} = {word.score} points
       </strong>
     </div>
@@ -126,6 +153,31 @@ export function ScoreExplanation({
   );
   const [stepIndex, setStepIndex] = useState(0);
   const [showTotal, setShowTotal] = useState(false);
+  const wordList = useRef<HTMLDivElement>(null);
+  const activeStep =
+    timeline?.steps[
+      showTotal
+        ? timeline.steps.length - 1
+        : Math.min(stepIndex, timeline.steps.length - 1)
+    ];
+  useEffect(() => {
+    if (!animated || reduced || !activeStep || showTotal) return;
+    const list = wordList.current;
+    const row = list?.querySelector<HTMLElement>(
+      `[data-score-word-index="${activeStep.wordIndex}"]`,
+    );
+    if (!list || !row) return;
+    if (activeStep.kind === "intro") list.scrollTop = row.offsetTop;
+    if (activeStep.kind === "word-bonus" || activeStep.kind === "word-total") {
+      const calculation = row.querySelector<HTMLElement>(".score-equation");
+      if (calculation) {
+        const bottom =
+          row.offsetTop + calculation.offsetTop + calculation.offsetHeight;
+        if (bottom > list.scrollTop + list.clientHeight)
+          list.scrollTop = bottom - list.clientHeight;
+      }
+    }
+  }, [activeStep?.wordIndex, activeStep?.kind, animated, reduced, showTotal]);
   useEffect(() => {
     if (!animated) return;
     if (!timeline || reduced) {
@@ -186,92 +238,94 @@ export function ScoreExplanation({
       data-word-index={step.wordIndex}
       data-tile-index={step.tileIndex}
     >
-      {progressive ? (
-        <>
-          <div className="score-progress-heading">
-            <span>
-              {final
-                ? "Played words"
-                : breakdown.words.length > 1
-                  ? `Word ${step.wordIndex + 1} of ${breakdown.words.length}`
-                  : "Played word"}
-            </span>
-            {!final && (
-              <button
-                type="button"
-                data-testid="score-show-total"
-                onClick={() => setShowTotal(true)}
-              >
-                Show total
-              </button>
-            )}
-          </div>
-          {!final && word ? (
-            <WordTiles
-              word={word}
-              active={step.tileIndex}
-              counted={
-                step.tileIndex ??
-                (step.kind === "intro" ? -1 : word.tiles.length - 1)
-              }
-            />
-          ) : (
-            <div
-              className="score-word-totals score-final-recap"
-              data-testid="score-final-recap"
-            >
-              {breakdown.words.map((w, i) => (
-                <div className="scored-word" key={i}>
-                  <WordTiles word={w} />
-                  <WordCalculation word={w} />
-                </div>
-              ))}
-            </div>
-          )}
-          <div className="score-count-beat">
-            <span>
-              {step.kind === "word-bonus" && <WordPremiums word={word} />}
-              {label}
-            </span>
-            <motion.strong
-              key={`${stepIndex}:${showTotal}`}
-              data-testid="running-score"
-              initial={{ opacity: 0.65, scale: 0.94 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={{ duration: 0.16 }}
-            >
-              {step.runningTotal}
-            </motion.strong>
-          </div>
-          {final && (
-            <div className="score-total" data-testid="score-total">
-              {breakdown.bingoBonus > 0 && (
-                <span data-testid="score-bingo">
-                  Seven tiles +{breakdown.bingoBonus}
-                </span>
-              )}
-              <strong>Total {breakdown.total}</strong>
-            </div>
-          )}
-        </>
-      ) : (
-        <>
-          {breakdown.words.map((w, i) => (
-            <div className="scored-word" key={`${i}:${w.word}`}>
-              <WordTiles word={w} />
-              <WordCalculation word={w} />
-            </div>
-          ))}
-          <div className="score-total" data-testid="score-total">
-            {breakdown.bingoBonus > 0 && (
-              <span data-testid="score-bingo">
-                Seven tiles +{breakdown.bingoBonus}
-              </span>
-            )}
-            <strong>Total {breakdown.total}</strong>
-          </div>
-        </>
+      {progressive && (
+        <div className="score-progress-heading">
+          <span>
+            {breakdown.words.length > 1 ? "Played words" : "Played word"}
+          </span>
+          <button
+            type="button"
+            data-testid="score-show-total"
+            style={{ visibility: final ? "hidden" : "visible" }}
+            disabled={final}
+            onClick={() => setShowTotal(true)}
+          >
+            Show total
+          </button>
+        </div>
       )}
+      <div
+        ref={wordList}
+        className={`score-word-list ${progressive ? "score-progress-list" : ""}`}
+        data-testid="score-word-list"
+        data-complete={!progressive || final}
+      >
+        {breakdown.words.map((w, i) => {
+          const complete = !progressive || final || i < step.wordIndex;
+          const current = progressive && !final && i === step.wordIndex;
+          const counted = complete
+            ? w.tiles.length - 1
+            : current
+              ? (step.tileIndex ??
+                (step.kind === "intro" ? -1 : w.tiles.length - 1))
+              : -1;
+          return (
+            <div
+              className="scored-word"
+              key={`${i}:${w.word}`}
+              data-testid="score-word-row"
+              data-score-word-index={i}
+              data-current={current}
+            >
+              <WordTiles
+                word={w}
+                active={current ? step.tileIndex : undefined}
+                counted={counted}
+              />
+              <WordCalculation
+                word={w}
+                counted={counted}
+                bonusCounted={
+                  current && step.kind === "letter" ? counted - 1 : counted
+                }
+                showWordBonus={
+                  complete ||
+                  (current &&
+                    (step.kind === "word-bonus" || step.kind === "word-total"))
+                }
+                showWordTotal={
+                  complete || (current && step.kind === "word-total")
+                }
+              />
+            </div>
+          );
+        })}
+      </div>
+      <div
+        className={`score-count-beat score-unified-total ${progressive ? "" : "score-static-total"}`}
+        data-testid="score-total"
+      >
+        <span>
+          <span>{progressive ? label : "Move total"}</span>
+          {breakdown.bingoBonus > 0 && (
+            <small
+              data-testid="score-bingo"
+              style={{
+                visibility: !progressive || final ? "visible" : "hidden",
+              }}
+            >
+              Seven tiles +{breakdown.bingoBonus}
+            </small>
+          )}
+        </span>
+        <motion.strong
+          data-testid="running-score"
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.16 }}
+        >
+          {progressive ? step.runningTotal : breakdown.total}
+        </motion.strong>
+      </div>
     </div>
   );
 }

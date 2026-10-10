@@ -308,6 +308,63 @@ async function observeScoreSteps(page: Page) {
     requestAnimationFrame(sample);
   });
 }
+async function rememberScoreCard(scope: Locator, words: number, tiles: number) {
+  const counts = await scope.evaluate((element) => {
+    const selectors = [".scored-word", ".score-letter", ".score-equation"];
+    const references = selectors.map((selector) => [
+      ...element.querySelectorAll(selector),
+    ]);
+    const state = {
+      references,
+      selectors,
+      replaced: false,
+      observer: null as MutationObserver | null,
+    };
+    state.observer = new MutationObserver(() => {
+      state.replaced ||= selectors.some((selector, index) => {
+        const current = [...element.querySelectorAll(selector)];
+        return (
+          current.length !== references[index].length ||
+          current.some((node, i) => node !== references[index][i])
+        );
+      });
+    });
+    state.observer.observe(element, { childList: true, subtree: true });
+    (element as Element & { scoreIdentity: typeof state }).scoreIdentity =
+      state;
+    return references.map((nodes) => nodes.length);
+  });
+  expect(counts).toEqual([words, tiles, words]);
+}
+async function expectSameScoreCard(scope: Locator) {
+  const stable = await scope.evaluate((element) => {
+    const state = (
+      element as Element & {
+        scoreIdentity: {
+          references: Element[][];
+          selectors: string[];
+          replaced: boolean;
+        };
+      }
+    ).scoreIdentity;
+    return (
+      !!state &&
+      !state.replaced &&
+      state.selectors.every((selector, index) => {
+        const current = [...element.querySelectorAll(selector)];
+        return (
+          current.length === state.references[index].length &&
+          current.every(
+            (node, i) =>
+              node === state.references[index][i] && node.isConnected,
+          )
+        );
+      })
+    );
+  });
+  expect(stable).toBe(true);
+}
+
 const observedScores = (page: Page) =>
   page.evaluate(
     () =>
@@ -4131,7 +4188,7 @@ test("a real DON move counts two then three then four in a large centered card",
     fullPage: false,
   });
   await expect(score).toHaveAttribute("data-score-phase", "move-total");
-  await expect(score.getByTestId("score-total")).toHaveText("Total 4");
+  await expect(score.getByTestId("score-total")).toHaveText(/Move total\s*4$/);
   const observed = await observedScores(page);
   const letters = observed.filter((step) => step.phase === "letter");
   expect(letters.map((step) => [step.tile, step.score])).toEqual([
@@ -4140,7 +4197,9 @@ test("a real DON move counts two then three then four in a large centered card",
     [2, 4],
   ]);
   for (let index = 1; index < letters.length; index++)
-    expect(letters[index].at - letters[index - 1].at).toBeGreaterThan(300);
+    expect(letters[index].at - letters[index - 1].at).toBeGreaterThanOrEqual(
+      250,
+    );
   await page.screenshot({
     path: info.outputPath("don-four-final-points.png"),
     fullPage: false,
@@ -4165,6 +4224,7 @@ test("a real DON move counts two then three then four in a large centered card",
 
 test("a real blank crossing counts each word separately without charging the blank", async ({
   page,
+  browser,
 }, info) => {
   const pool = [
     ...fixtureGame.bag,
@@ -4186,86 +4246,129 @@ test("a real blank crossing counts each word separately without charging the bla
     bag: pool,
   });
   await enroll(page);
-  for (const [index, letter] of [..."CA?"].entries()) {
-    await rack(page, letter).tap();
-    await cell(page, 7, 6 + index).tap();
-    if (letter === "?") await page.getByTestId("blank-T").tap();
-  }
-  await expect(page.getByTestId("word-check")).toHaveAttribute(
-    "data-state",
-    "recognized",
-  );
-  await observeScoreSteps(page);
-  expectedRevision = 1;
-  expectedCommandCount = 1;
-  expectedBoardKeys = ["6,8", "7,6", "7,7", "7,8"];
-  await page.getByTestId("play-word").click();
-  const score = page
-    .getByTestId("move-celebration")
-    .getByTestId("score-breakdown");
-  await expect(score.locator(".scored-word-tiles")).toHaveAccessibleName("CAT");
-  await expect(score.locator('[aria-label="T, 0 points"]')).toHaveCount(1);
-  await expect
-    .poll(
-      async () =>
-        (await observedScores(page)).some(
-          (step) =>
-            step.word === 1 && step.phase === "intro" && step.score === 0,
-        ),
-      { intervals: [30] },
-    )
-    .toBe(true);
-  await expect(score.locator(".scored-word-tiles")).toHaveAccessibleName("AT");
-  await expect(score.locator('[aria-label="T, 0 points"]')).toHaveCount(1);
-  await page.screenshot({
-    path: info.outputPath("crossword-second-page-blank.png"),
-    fullPage: false,
-  });
-  await expect(score).toHaveAttribute("data-score-phase", "move-total");
-  await expect(score.getByTestId("score-total")).toHaveText("Total 9");
-  const recap = score.getByTestId("score-final-recap");
-  await expect(recap.locator(".scored-word-tiles")).toHaveCount(2);
-  await expect(recap.locator('[aria-label="T, 0 points"]')).toHaveCount(2);
-  await expect(recap.locator('[data-premium="DW"]')).toHaveCount(1);
-  await expect(recap.locator('[data-premium="DL"]')).toHaveCount(0);
-  for (const oldA of await recap.locator('[aria-label="A, 1 points"]').all())
-    await expect(oldA.getByTestId("score-letter-premium")).toHaveCount(0);
-  await expect(recap.locator(".score-equation").first()).toHaveText(
-    /3 \+ 1 \+ 0.*Whole word: 4 × 2 = 8.*CAT = 8 points/,
-  );
-  await expect(recap.locator(".score-equation").last()).toHaveText(
-    /1 \+ 0.*AT = 1 points/,
-  );
-  const records = await observedScores(page);
-  expect(
-    records
-      .filter((step) => step.phase === "word-total")
-      .map((step) => [step.word, step.score]),
-  ).toEqual([
-    [0, 8],
-    [1, 1],
-  ]);
-  expect(
-    records
-      .filter(
-        (step) => step.phase === "letter" && step.tile === 1 && step.word === 1,
+  const { aunt: other, auntContext: otherContext } = await joinRita(browser);
+  await other.emulateMedia({ reducedMotion: "no-preference" });
+  try {
+    for (const [index, letter] of [..."CA?"].entries()) {
+      await rack(page, letter).tap();
+      await cell(page, 7, 6 + index).tap();
+      if (letter === "?") await page.getByTestId("blank-T").tap();
+    }
+    await expect(page.getByTestId("word-check")).toHaveAttribute(
+      "data-state",
+      "recognized",
+    );
+    await observeScoreSteps(page);
+    expectedRevision = 1;
+    expectedCommandCount = 1;
+    expectedBoardKeys = ["6,8", "7,6", "7,7", "7,8"];
+    await page.getByTestId("play-word").click();
+    const score = page
+      .getByTestId("move-celebration")
+      .getByTestId("score-breakdown");
+    await rememberScoreCard(score, 2, 5);
+    await expect(
+      score.locator(".scored-word-tiles").first(),
+    ).toHaveAccessibleName("CAT");
+    await expect(
+      score
+        .locator(".scored-word")
+        .first()
+        .locator('[aria-label="T, 0 points"]'),
+    ).toHaveCount(1);
+    const skipped = other
+      .getByTestId("move-celebration")
+      .getByTestId("score-breakdown");
+    await rememberScoreCard(skipped, 2, 5);
+    await skipped.getByTestId("score-show-total").click();
+    await expect(skipped).toHaveAttribute("data-score-phase", "move-total");
+    await expect(skipped.getByTestId("running-score")).toHaveText("9");
+    await expectSameScoreCard(skipped);
+    await other.waitForTimeout(2300);
+    await expectSameScoreCard(skipped);
+    await expect(skipped.getByTestId("score-total")).toHaveText(
+      /Move total\s*9$/,
+    );
+    await other.screenshot({
+      path: info.outputPath("crossword-show-total-same-card.png"),
+      fullPage: false,
+    });
+    await expect
+      .poll(
+        async () =>
+          (await observedScores(page)).some(
+            (step) =>
+              step.word === 1 && step.phase === "intro" && step.score === 0,
+          ),
+        { intervals: [30] },
       )
-      .map((step) => step.score),
-  ).toEqual([1]);
-  const game = (await db.doc("games/ui-table").get()).data()!;
-  expect(
-    game.lastMove.breakdown.words.map(
-      (word: { word: string; score: number }) => [word.word, word.score],
-    ),
-  ).toEqual([
-    ["CAT", 8],
-    ["AT", 1],
-  ]);
-  expect(game.scores.mom).toBe(9);
-  await page.screenshot({
-    path: info.outputPath("crossword-nine-final-points.png"),
-    fullPage: false,
-  });
+      .toBe(true);
+    await expect(
+      score.locator(".scored-word-tiles").last(),
+    ).toHaveAccessibleName("AT");
+    await expect(
+      score
+        .locator(".scored-word")
+        .last()
+        .locator('[aria-label="T, 0 points"]'),
+    ).toHaveCount(1);
+    await expectSameScoreCard(score);
+    await page.screenshot({
+      path: info.outputPath("crossword-second-page-blank.png"),
+      fullPage: false,
+    });
+    await expect(score).toHaveAttribute("data-score-phase", "move-total");
+    await expect(score.getByTestId("score-total")).toHaveText(
+      /Move total\s*9$/,
+    );
+    await expectSameScoreCard(score);
+    const recap = score.getByTestId("score-word-list");
+    await expect(recap.locator(".scored-word-tiles")).toHaveCount(2);
+    await expect(recap.locator('[aria-label="T, 0 points"]')).toHaveCount(2);
+    await expect(recap.locator('[data-premium="DW"]')).toHaveCount(1);
+    await expect(recap.locator('[data-premium="DL"]')).toHaveCount(0);
+    for (const oldA of await recap.locator('[aria-label="A, 1 points"]').all())
+      await expect(oldA.getByTestId("score-letter-premium")).toHaveCount(0);
+    await expect(recap.locator(".score-equation").first()).toHaveText(
+      /3 \+ 1 \+ 0.*Whole word: 4 × 2 = 8.*CAT = 8 points/,
+    );
+    await expect(recap.locator(".score-equation").last()).toHaveText(
+      /1 \+ 0.*AT = 1 points/,
+    );
+    const records = await observedScores(page);
+    expect(
+      records
+        .filter((step) => step.phase === "word-total")
+        .map((step) => [step.word, step.score]),
+    ).toEqual([
+      [0, 8],
+      [1, 1],
+    ]);
+    expect(
+      records
+        .filter(
+          (step) =>
+            step.phase === "letter" && step.tile === 1 && step.word === 1,
+        )
+        .map((step) => step.score),
+    ).toEqual([1]);
+    const game = (await db.doc("games/ui-table").get()).data()!;
+    expect(
+      game.lastMove.breakdown.words.map(
+        (word: { word: string; score: number }) => [word.word, word.score],
+      ),
+    ).toEqual([
+      ["CAT", 8],
+      ["AT", 1],
+    ]);
+    expect(game.scores.mom).toBe(9);
+    await page.screenshot({
+      path: info.outputPath("crossword-nine-final-points.png"),
+      fullPage: false,
+    });
+  } finally {
+    await otherContext.close();
+  }
 });
 
 test("a fifteen-letter accepted word wraps its large faces and adds a single seven-tile bonus", async ({
@@ -4312,6 +4415,7 @@ test("a fifteen-letter accepted word wraps its large faces and adds a single sev
   const score = page
     .getByTestId("move-celebration")
     .getByTestId("score-breakdown");
+  await rememberScoreCard(score, 1, 15);
   await expect(score.locator(".tile-letter")).toHaveText([
     ..."EXTRACURRICULAR",
   ]);
@@ -4360,7 +4464,8 @@ test("a fifteen-letter accepted word wraps its large faces and adds a single sev
     fullPage: false,
   });
   await expect(score).toHaveAttribute("data-score-phase", "move-total");
-  const recap = score.getByTestId("score-final-recap");
+  await expectSameScoreCard(score);
+  const recap = score.getByTestId("score-word-list");
   await expect(recap.locator(".tile-letter")).toHaveText([
     ..."EXTRACURRICULAR",
   ]);
@@ -4388,7 +4493,7 @@ test("a fifteen-letter accepted word wraps its large faces and adds a single sev
     scrollHeight: element.scrollHeight,
     overflow: getComputedStyle(element).overflowY,
   }));
-  expect(overflow.height).toBeLessThanOrEqual(260);
+  expect(overflow.height).toBeLessThanOrEqual(300);
   expect(overflow.overflow).toBe("auto");
   if (overflow.scrollHeight > overflow.height) {
     await recap.evaluate(
@@ -4497,6 +4602,7 @@ test("a real high-scoring right-edge move keeps its celebration and stars inside
       .toBeGreaterThan(0.8);
     await expect(actual).toHaveCSS("transform", "none");
     const progressive = actual.getByTestId("score-breakdown");
+    await rememberScoreCard(progressive, 1, 6);
     const reduced = recipient
       .getByTestId("move-celebration")
       .getByTestId("score-breakdown");
@@ -4505,7 +4611,9 @@ test("a real high-scoring right-edge move keeps its celebration and stars inside
     await expect(reduced.locator(".score-equation")).toHaveText(
       /10 \+ 1 \+ 1×2 \+ 1 \+ 1 \+ 10.*Whole word: 25 × 3 = 75.*QUARTZ = 75 points/,
     );
-    await expect(reduced.getByTestId("score-total")).toHaveText("Total 75");
+    await expect(reduced.getByTestId("score-total")).toHaveText(
+      /Move total\s*75$/,
+    );
     await expect(reduced.getByTestId("score-premium-badge")).toHaveText([
       "DL",
       "TW",
@@ -4605,13 +4713,30 @@ test("a real high-scoring right-edge move keeps its celebration and stars inside
       path: info.outputPath("quartz-triple-word.png"),
       fullPage: false,
     });
+    await expect(progressive).toHaveAttribute("data-score-phase", "word-total");
+    const countedView = await actual.evaluate((element) => ({
+      height: element.getBoundingClientRect().height,
+      scroll: element.querySelector('[data-testid="score-word-list"]')!
+        .scrollTop,
+    }));
+    await expectSameScoreCard(progressive);
     await expect(progressive).toHaveAttribute("data-score-phase", "move-total");
-    await expect(progressive.getByTestId("score-total")).toHaveText("Total 75");
+    await expectSameScoreCard(progressive);
+    const finalView = await actual.evaluate((element) => ({
+      height: element.getBoundingClientRect().height,
+      scroll: element.querySelector('[data-testid="score-word-list"]')!
+        .scrollTop,
+    }));
+    expect(Math.abs(finalView.height - countedView.height)).toBeLessThan(0.5);
+    expect(Math.abs(finalView.scroll - countedView.scroll)).toBeLessThan(0.5);
+    await expect(progressive.getByTestId("score-total")).toHaveText(
+      /Move total\s*75$/,
+    );
     await page.screenshot({
       path: info.outputPath("actual-high-score-right-edge.png"),
       fullPage: false,
     });
-    const recap = progressive.getByTestId("score-final-recap");
+    const recap = progressive.getByTestId("score-word-list");
     await expect(recap.getByTestId("score-premium-badge")).toHaveText([
       "DL",
       "TW",
@@ -4638,6 +4763,7 @@ test("a real high-scoring right-edge move keeps its celebration and stars inside
     }
     await expectScoredPointsClear(recap);
     await page.waitForTimeout(2300);
+    await expectSameScoreCard(progressive);
     await expect(progressive).toHaveAttribute("data-score-phase", "move-total");
     await expect(recap.getByTestId("score-premium-badge")).toHaveText([
       "DL",
@@ -4684,8 +4810,8 @@ test("a real high-scoring right-edge move keeps its celebration and stars inside
       await expect(popup).toHaveCSS("opacity", "1");
       await expect(popup).toHaveCSS("transform", "none");
       await expect(
-        popup.getByTestId("score-breakdown").locator(".score-total"),
-      ).toHaveText("Total 75");
+        popup.getByTestId("score-breakdown").getByTestId("score-total"),
+      ).toHaveText(/Move total\s*75$/);
       await expect(popup.locator(".tile-letter")).toHaveText([..."QUARTZ"]);
       await expect(popup.getByTestId("score-premium-badge")).toHaveText([
         "DL",

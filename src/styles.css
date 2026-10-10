@@ -4219,6 +4219,41 @@ button {
   margin-top: 0 !important;
   gap: 4px;
 }
+.score-word-list {
+  position: relative;
+}
+.score-progress-list {
+  max-height: 300px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 8px 5px;
+}
+.score-word-list > .scored-word {
+  position: relative;
+}
+.score-word-list > .scored-word + .scored-word {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+.score-progress-list .score-equation {
+  margin-top: 0 !important;
+  gap: 4px;
+}
+.score-letter-equation > span {
+  display: inline;
+}
+.score-unified-total {
+  min-height: 100px;
+}
+.score-unified-total > span > span {
+  display: block;
+}
+.score-unified-total small {
+  display: block;
+  margin-top: 6px;
+  font-size: 16px;
+}
 .score-explanation .counting-letter {
   outline: 3px solid #287344;
   outline-offset: 2px;
