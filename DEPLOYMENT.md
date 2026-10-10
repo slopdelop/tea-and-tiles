@@ -112,7 +112,7 @@ Presence sends a small direct Firestore heartbeat about every 60 seconds while e
 
 ## Updating the dictionary
 
-The bundled ESDB spelling list remains a prototype. Removing `TR` is a temporary validity correction; it does not make the full list NWL2023 or WOW24. An authorized recent tournament file can be validated and installed with `scripts/import-dictionary.mjs`, using `--source`, `--edition NWL2023|NSWL2023|WOW24` and `--notice`; validation is the default and `--install` is explicit. See the README dictionary section for source references and commands. The public client downloads the complete list for offline checks, so a permission limited to server-side use would require a different integration.
+The bundled ESDB spelling list remains a prototype. The curated list excludes TR plus metadata-confirmed abbreviations/nonwords unsupported by current ordinary-word and open game references; it is not NWL2023 or WOW24. Provenance and exact exclusions are in shared/DICTIONARY-SOURCE.json. An authorized recent tournament file can be validated and installed with `scripts/import-dictionary.mjs`, using `--source`, `--edition NWL2023|NSWL2023|WOW24` and `--notice`; validation is the default and `--install` is explicit. See the README dictionary section for source references and commands. The public client downloads the complete list for offline checks, so a permission limited to server-side use would require a different integration.
 
 After installation, run `npm run build`, publish the client through the GitHub Pages workflow, and deploy the two dictionary-dependent Functions:
 

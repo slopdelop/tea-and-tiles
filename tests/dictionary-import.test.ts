@@ -176,9 +176,57 @@ describe("current prototype correction", () => {
         dictionary,
       );
     };
-    expect(dictionary.has("TR")).toBe(false);
-    expect(() => preview("TR")).toThrow(/Not in our dictionary: TR/);
-    for (const word of ["AT", "CAT", "TEA", "DOG"])
+    for (const word of [
+      "TR",
+      "DR",
+      "KG",
+      "JR",
+      "CD",
+      "HTTP",
+      "ASAP",
+      "ATTN",
+      "BLVD",
+      "XIV",
+      "XVII",
+    ])
+      expect(() => preview(word)).toThrow(
+        new RegExp(`Not in our dictionary: ${word}`),
+      );
+    for (const word of [
+      "AT",
+      "CAT",
+      "TEA",
+      "DOG",
+      "QI",
+      "JO",
+      "AA",
+      "EMOJI",
+      "TWERK",
+      "ZEN",
+    ])
       expect(preview(word).words).toEqual([word]);
+  });
+  it("ships matching notices and reproducible source metadata with all curated exclusions absent", () => {
+    const words = readFileSync(resolve("shared/words.txt"), "utf8").replace(
+      /\r\n/g,
+      "\n",
+    );
+    const entries = words.trim().split(/\r?\n/);
+    const metadata = JSON.parse(
+      readFileSync(resolve("shared/DICTIONARY-SOURCE.json"), "utf8"),
+    );
+    expect(entries).toEqual([...new Set(entries)].sort());
+    expect(entries.length).toBe(metadata.wordCount);
+    expect(createHash("sha256").update(words).digest("hex")).toBe(
+      metadata.normalizedSha256,
+    );
+    for (const excluded of metadata.removedEntries)
+      expect(entries).not.toContain(excluded);
+    expect(readFileSync(resolve("public/DICTIONARY-SOURCE.json"), "utf8")).toBe(
+      readFileSync(resolve("shared/DICTIONARY-SOURCE.json"), "utf8"),
+    );
+    expect(readFileSync(resolve("public/DICTIONARY-LICENSE.txt"), "utf8")).toBe(
+      readFileSync(resolve("shared/DICTIONARY-LICENSE.txt"), "utf8"),
+    );
   });
 });
