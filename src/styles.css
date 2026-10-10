@@ -4357,33 +4357,104 @@ button {
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  background: #fffdf0;
-  box-shadow: inset 0 0 0 2px #b4933660;
-  opacity: 0.09;
+  background: transparent;
+  box-shadow:
+    inset 0 0 0 2px #ae781c,
+    0 0 8px 3px #e5b743a6;
+  opacity: 0.7;
   pointer-events: none;
   z-index: 0;
-  animation: draft-word-breathe 2.6s ease-in-out infinite;
+  animation: draft-word-breathe 2.4s ease-in-out infinite;
+}
+.draft-word-pulse::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border: 1px solid #ffdf7b88;
+  background: none;
+}
+/* Unsupported mask compositing falls back to the plain edge above: no face wash. */
+@supports (mask-composite: exclude) or (-webkit-mask-composite: xor) {
+  .draft-word-pulse::after {
+    border: 0;
+    padding: 2px;
+    background: linear-gradient(
+      115deg,
+      transparent 40%,
+      #ffe499 46%,
+      #fffef0 50%,
+      #ffdf8d 54%,
+      transparent 60%
+    );
+    background-size: 250% 100%;
+    background-repeat: no-repeat;
+    background-position: 200% 0;
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    mask-composite: exclude;
+    animation: draft-word-sheen 7.2s ease-in-out infinite;
+  }
+}
+.draft-word-tile {
+  scale: 1;
+  animation: draft-word-scale 2.4s ease-in-out infinite;
+}
+.square[data-draft-word="true"]:not(.selected-square):not(.fresh-play-square) {
+  z-index: 2;
 }
 .draft-word-tile > .tile-letter,
 .draft-word-tile > small,
 .draft-word-tile > .blank-mark {
   z-index: 1;
 }
-.board[data-draft-pulse-paused="true"] .draft-word-pulse {
+.board[data-draft-pulse-paused="true"] :is(.draft-word-pulse, .draft-word-tile),
+.board[data-draft-pulse-paused="true"] .draft-word-pulse::after {
   animation-play-state: paused;
 }
 @keyframes draft-word-breathe {
   0%,
   100% {
-    opacity: 0.05;
+    opacity: 0.7;
   }
   50% {
-    opacity: 0.2;
+    opacity: 1;
+  }
+}
+@keyframes draft-word-sheen {
+  0% {
+    background-position: 200% 0;
+  }
+  25%,
+  100% {
+    background-position: -100% 0;
+  }
+}
+@keyframes draft-word-scale {
+  0%,
+  100% {
+    scale: 1;
+  }
+  50% {
+    scale: 1.045;
   }
 }
 @media (prefers-reduced-motion: reduce) {
+  .draft-word-tile {
+    animation: none;
+    scale: 1;
+  }
   .draft-word-pulse {
     animation: none;
-    opacity: 0.09;
+    opacity: 0.7;
+  }
+  .draft-word-pulse::after {
+    animation: none;
+    opacity: 0;
   }
 }

@@ -6234,7 +6234,7 @@ test("an available update sits beside New game, is keyboard reachable and stays 
   expect(await authoritativeState()).toEqual(before);
 });
 
-test("a brighter private draft breathes across complete words and crossings without moving or covering tiles", async ({
+test("a brighter private draft breathes across complete words and crossings without moving board squares", async ({
   page,
   context,
 }, info) => {
@@ -6345,14 +6345,48 @@ test("a brighter private draft breathes across complete words and crossings with
     await expect(pulse).toHaveCSS("z-index", "0");
     await expect(tile.locator(".tile-letter")).toHaveCSS("z-index", "1");
     await expect(pulse).toHaveCSS("transform", "none");
+    await expect(pulse).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+    const edge = await pulse.evaluate((element) => {
+      const style = getComputedStyle(element, "::after");
+      return {
+        mask: style.maskImage,
+        composite: style.maskComposite,
+        padding: parseFloat(style.paddingTop),
+        background: style.backgroundImage,
+        pointerEvents: style.pointerEvents,
+        direction: style.animationDirection,
+        repeat: style.backgroundRepeat,
+        delay: style.animationDelay,
+      };
+    });
+    expect(edge.mask).toContain("gradient");
+    expect(edge.composite).toContain("exclude");
+    expect(edge.padding).toBe(2);
+    expect(edge.background).toContain("gradient");
+    expect(edge.pointerEvents).toBe("none");
+    expect(edge.direction).toBe("normal");
+    expect(edge.repeat).toBe("no-repeat");
+    expect(edge.delay).toBe("0s");
   }
   const readings = await page.evaluate(async () => {
     const members = [
       ...document.querySelectorAll('[data-draft-word="true"] .board-tile'),
     ];
-    const samples: { opacity: number; rects: number[][] }[] = [];
+    const samples: {
+      opacity: number;
+      rects: number[][];
+      squares: number[][];
+      scales: number[];
+      clocks: number[][];
+      transforms: string[];
+      widths: number[];
+    }[] = [];
     const start = performance.now();
     return await new Promise<typeof samples>((resolve) => {
+      const rect = (element: Element) => {
+        const r = element.getBoundingClientRect();
+        return [r.x, r.y, r.width, r.height];
+      };
       const frame = () => {
         samples.push({
           opacity: Number(
@@ -6360,25 +6394,160 @@ test("a brighter private draft breathes across complete words and crossings with
               document.querySelector('[data-testid="draft-word-pulse"]')!,
             ).opacity,
           ),
-          rects: members.map((element) => {
-            const r = element.getBoundingClientRect();
-            return [r.x, r.y, r.width, r.height];
-          }),
+          rects: members.map(rect),
+          squares: members.map((element) => rect(element.parentElement!)),
+          scales: members.map((element) =>
+            Number(getComputedStyle(element).scale),
+          ),
+          clocks: members.map((element) =>
+            element
+              .getAnimations()
+              .map((animation) => Number(animation.currentTime)),
+          ),
+          transforms: members.map(
+            (element) => getComputedStyle(element).transform,
+          ),
+          widths: members.map((element) =>
+            parseFloat(getComputedStyle(element).width),
+          ),
         });
-        if (performance.now() - start >= 1400) resolve(samples);
+        if (performance.now() - start >= 2800) resolve(samples);
         else requestAnimationFrame(frame);
       };
       requestAnimationFrame(frame);
     });
   });
+  await info.attach("pulse-geometry-clocks", {
+    body: JSON.stringify(readings),
+    contentType: "application/json",
+  });
   const opacities = readings.map((frame) => frame.opacity);
   expect(Math.max(...opacities) - Math.min(...opacities)).toBeGreaterThan(0.05);
-  for (const frame of readings)
-    for (let index = 0; index < frame.rects.length; index++)
+  const minima = readings[0].rects.map((_, index) =>
+    Math.min(...readings.map((frame) => frame.rects[index][2])),
+  );
+  for (let index = 0; index < minima.length; index++) {
+    const maximum = Math.max(...readings.map((frame) => frame.rects[index][2]));
+    expect(maximum / minima[index]).toBeGreaterThanOrEqual(1.03);
+    expect(maximum / minima[index]).toBeLessThanOrEqual(1.061);
+  }
+  for (const frame of readings) {
+    expect(Math.max(...frame.scales) - Math.min(...frame.scales)).toBeLessThan(
+      0.0001,
+    );
+    const scales = frame.rects.map(
+      (rect, index) => rect[2] / frame.widths[index],
+    );
+    expect(Math.max(...scales) - Math.min(...scales)).toBeLessThan(0.003);
+    for (let index = 0; index < frame.rects.length; index++) {
+      for (const axis of [0, 1])
+        expect(
+          Math.abs(
+            frame.rects[index][axis] +
+              frame.rects[index][axis + 2] / 2 -
+              (readings[0].rects[index][axis] +
+                readings[0].rects[index][axis + 2] / 2),
+          ),
+        ).toBeLessThan(0.3);
       for (let axis = 0; axis < 4; axis++)
         expect(
-          Math.abs(frame.rects[index][axis] - readings[0].rects[index][axis]),
+          Math.abs(
+            frame.squares[index][axis] - readings[0].squares[index][axis],
+          ),
         ).toBeLessThan(0.3);
+    }
+  }
+  const freeze = async (milliseconds: number) =>
+    page.evaluate(async (milliseconds) => {
+      const animations = [
+        ...document.querySelectorAll('[data-draft-word="true"] .board-tile'),
+      ]
+        .flatMap((element) => element.getAnimations({ subtree: true }))
+        .filter(
+          (animation) =>
+            animation instanceof CSSAnimation &&
+            animation.animationName.startsWith("draft-"),
+        );
+      if (!animations.length)
+        throw new Error("No actual draft animations found");
+      for (const animation of animations) {
+        animation.pause();
+        animation.currentTime = milliseconds;
+      }
+      await new Promise(requestAnimationFrame);
+      return document
+        .querySelector('[data-draft-word="true"] .board-tile')!
+        .getBoundingClientRect().width;
+    }, milliseconds);
+  const sweep = await page.evaluate(async () => {
+    const pulse = document.querySelector('[data-testid="draft-word-pulse"]')!;
+    const sheen = pulse
+      .getAnimations({ subtree: true })
+      .find(
+        (animation) =>
+          animation instanceof CSSAnimation &&
+          animation.animationName === "draft-word-sheen",
+      )!;
+    const timing = sheen.effect!.getTiming();
+    sheen.pause();
+    const sample = async (time: number) => {
+      sheen.currentTime = time;
+      await new Promise(requestAnimationFrame);
+      return parseFloat(getComputedStyle(pulse, "::after").backgroundPositionX);
+    };
+    const duration = Number(timing.duration);
+    const start = await sample(0);
+    const middle = await sample(duration * 0.125);
+    const end = await sample(duration * 0.25);
+    const quietMiddle = await sample(duration * 0.5);
+    const quietEnd = await sample(duration - 1);
+    return { start, middle, end, quietMiddle, quietEnd, duration };
+  });
+  expect(sweep.start).toBeGreaterThanOrEqual(200);
+  expect(sweep.middle).toBeGreaterThan(45);
+  expect(sweep.middle).toBeLessThan(55);
+  expect(sweep.end).toBeLessThanOrEqual(-100);
+  expect(sweep.quietMiddle).toBe(sweep.end);
+  expect(sweep.quietEnd).toBe(sweep.end);
+  expect(sweep.duration * 0.75).toBeGreaterThanOrEqual(4000);
+  const troughWidth = await freeze(0);
+  await page.screenshot({
+    path: info.outputPath("whole-draft-pulse-trough.png"),
+    fullPage: false,
+  });
+  const seamStart = await cell(page, 7, 7).screenshot();
+  await freeze(sweep.duration);
+  const seamEnd = await cell(page, 7, 7).screenshot();
+  await info.attach("sheen-loop-start", {
+    body: seamStart,
+    contentType: "image/png",
+  });
+  await info.attach("sheen-loop-end", {
+    body: seamEnd,
+    contentType: "image/png",
+  });
+  expect(seamEnd.equals(seamStart)).toBe(true);
+  const peakWidth = await freeze(1200);
+  expect(peakWidth / troughWidth).toBeGreaterThanOrEqual(1.03);
+  expect(peakWidth / troughWidth).toBeLessThanOrEqual(1.061);
+  await page.screenshot({
+    path: info.outputPath("whole-draft-pulse-peak.png"),
+    fullPage: false,
+  });
+  // WAAPI playback overrides CSS play-state. Restore native animations via the
+  // persisted private draft before verifying drag/settle pause behavior.
+  await page.reload();
+  await expect
+    .poll(membership)
+    .toEqual([
+      "board-cell-6-8",
+      "board-cell-7-6",
+      "board-cell-7-7",
+      "board-cell-7-8",
+    ]);
+  await expect(page.getByTestId("draft-word-pulse")).toHaveCount(4);
+  for (const tile of await page.locator(".draft-word-tile").all())
+    await expect(tile).toHaveCSS("transform", "none");
   await checkTextContrast(
     page,
     ".draft-word-tile > .tile-letter, .draft-word-tile > small",
@@ -6401,8 +6570,50 @@ test("a brighter private draft breathes across complete words and crossings with
   );
   for (const pulse of await page.getByTestId("draft-word-pulse").all())
     await expect(pulse).toHaveCSS("animation-play-state", "paused");
+  const readScales = () =>
+    page.locator(".draft-word-tile").evaluateAll((elements) =>
+      elements.map((element) => {
+        const value = getComputedStyle(element).scale;
+        return value === "none" ? 1 : Number(value);
+      }),
+    );
+  const dragScales = await readScales();
+  await page.waitForTimeout(250);
+  expect(await readScales()).toEqual(dragScales);
+  await page.evaluate(() => {
+    const frames: Record<string, number[]> = {};
+    (
+      window as unknown as { settlingPulseScales: Record<string, number[]> }
+    ).settlingPulseScales = frames;
+    const sample = () => {
+      if (document.querySelector('[data-testid="settling-ghost"]')) {
+        for (const element of document.querySelectorAll(".draft-word-tile")) {
+          const id = element.parentElement!.getAttribute("data-testid")!;
+          const value = getComputedStyle(element).scale;
+          (frames[id] ??= []).push(value === "none" ? 1 : Number(value));
+        }
+      }
+      if (
+        Object.keys(frames).length === 0 ||
+        document.querySelector('[data-testid="settling-ghost"]')
+      )
+        requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  });
   await touch(session, "touchEnd");
   await expect(page.getByTestId("settling-ghost")).toHaveCount(0);
+  const settlingScales = await page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          settlingPulseScales: Record<string, number[]>;
+        }
+      ).settlingPulseScales,
+  );
+  expect(Object.keys(settlingScales).length).toBeGreaterThan(0);
+  for (const scales of Object.values(settlingScales))
+    expect(Math.max(...scales) - Math.min(...scales)).toBeLessThan(0.0001);
   await expect
     .poll(membership)
     .toEqual(["board-cell-7-6", "board-cell-7-7", "board-cell-9-10"]);
@@ -6432,8 +6643,16 @@ test("a brighter private draft breathes across complete words and crossings with
   await cell(page, 7, 8).tap();
   await expect(page.getByTestId("play-word")).toBeEnabled();
   await page.emulateMedia({ reducedMotion: "reduce" });
+  await expect(page.getByTestId("draft-word-pulse")).toHaveCount(4);
   for (const pulse of await page.getByTestId("draft-word-pulse").all())
     await expect(pulse).toHaveCSS("animation-name", "none");
+  for (const tile of await page.locator(".draft-word-tile").all()) {
+    await expect(tile).toHaveCSS("animation-name", "none");
+    const scale = await tile.evaluate(
+      (element) => getComputedStyle(element).scale,
+    );
+    expect(scale === "none" ? 1 : Number(scale)).toBe(1);
+  }
   await page.getByTestId("recall-tiles").tap();
   await expect(page.getByTestId("draft-word-pulse")).toHaveCount(0);
   await expect(page.locator('[data-draft-word="true"]')).toHaveCount(0);

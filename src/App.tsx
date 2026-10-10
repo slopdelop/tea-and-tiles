@@ -1,6 +1,7 @@
 import {
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -796,7 +797,7 @@ export default function App() {
     () => draftWordCells(game?.board ?? {}, placements),
     [game?.board, placements],
   );
-  const draftPulseKey = `${game?.revision}:${placements.map((p) => `${p.tileId}:${p.row}:${p.col}`).join("|")}`;
+  const draftPulseKey = `${game?.id}:${game?.revision}:${placements.map((p) => `${p.tileId}:${p.row}:${p.col}`).join("|")}`;
   const openingBoard =
     !!game && game.status === "active" && Object.keys(game.board).length === 0;
   const centreCovered = placements.some((p) => p.row === 7 && p.col === 7);
@@ -884,6 +885,56 @@ export default function App() {
       } else place(tileId, target.row, target.col, previous?.letter);
     },
   });
+
+  const draftPulsePaused = !!drag || !!settling || recallAnimation.active;
+  const syncedDraftPulseKey = useRef("");
+  useLayoutEffect(() => {
+    if (reduced || draftPulsePaused) return;
+    const animations = Array.from(
+      document.querySelectorAll(".draft-word-tile, .draft-word-pulse"),
+    ).flatMap((element) =>
+      element
+        .getAnimations()
+        .filter(
+          (animation) =>
+            "animationName" in animation &&
+            String(animation.animationName).startsWith("draft-word-"),
+        ),
+    );
+    if (!animations.length) return;
+    let cancelled = false;
+    // New CSS animations can still have a pending start. Wait for every member
+    // before assigning one timeline epoch; independent currentTime resets can
+    // otherwise put newly connected letters a frame behind existing letters.
+    void Promise.all(animations.map((animation) => animation.ready))
+      .then(() => {
+        if (cancelled || animations.some((a) => a.playState !== "running"))
+          return;
+        const now = document.timeline.currentTime;
+        if (typeof now !== "number") return;
+        const scale = animations.find(
+          (animation) =>
+            "animationName" in animation &&
+            animation.animationName === "draft-word-scale",
+        );
+        const elapsed =
+          syncedDraftPulseKey.current === draftPulseKey &&
+          typeof scale?.currentTime === "number"
+            ? scale.currentTime
+            : 0;
+        const epoch = now - elapsed;
+        animations.forEach((animation) => {
+          animation.startTime = epoch;
+        });
+        syncedDraftPulseKey.current = draftPulseKey;
+      })
+      .catch(() => {
+        // Removing/replacing a draft cancels its pending CSS animations.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [draftPulseKey, draftPulsePaused, reduced]);
 
   useEffect(() => {
     if (!game || !slot) setZoomed(false);
