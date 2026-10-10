@@ -4030,27 +4030,54 @@ button {
   text-transform: none;
   letter-spacing: normal;
 }
-.app-header:has(.update-banner) {
-  flex-wrap: wrap;
-}
-.update-banner {
+.header-update {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  flex-basis: 100%;
-  width: 100%;
-  margin-top: 10px;
-  padding: 7px 10px;
-  border: 1px solid var(--choice-line);
-  border-radius: 7px;
-  background: var(--soft);
-  color: var(--ink);
-  font-size: 12px;
+  min-width: 0;
 }
-.update-banner .secondary-button {
-  min-height: 38px;
-  padding: 5px 10px;
+.header-update .secondary-button {
+  min-height: 44px;
+  padding: 10px 15px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.header-actions:has(.header-update) .header-new-game {
+  margin-right: 0;
+}
+.table-toolbar .header-actions:has(.header-update) {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) 44px 44px;
+  gap: 6px;
+}
+.table-toolbar .header-update {
+  grid-column: 2;
+}
+.table-toolbar .header-actions:has(.header-update) .header-new-game,
+.table-toolbar .header-update .secondary-button {
+  min-width: 0;
+  width: 100%;
+  padding: 8px 4px;
+  font-size: 11px;
+}
+.table-toolbar .header-actions:has(.header-update) .sound-control {
+  grid-column: 3;
+}
+.table-toolbar .header-actions:has(.header-update) .help-control {
+  grid-column: 4;
+}
+.table-toolbar .header-actions:not(:has(.header-new-game)) .header-update {
+  grid-column: 1 / 3;
+}
+@media (max-width: 600px) {
+  .app-header:has(.header-update) {
+    flex-wrap: wrap;
+  }
+  .app-header:has(.header-update) .header-actions {
+    width: 100%;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .header-update .secondary-button {
+    padding-inline: 10px;
+  }
 }
 .device-settings {
   padding-top: 12px;
@@ -4213,6 +4240,9 @@ button {
 :root[data-theme] .tile.board-tile.latest-play-tile > .tile-letter,
 :root[data-theme] .tile.board-tile.latest-play-tile > small {
   color: color-mix(in srgb, var(--tile-ink, #51472e) 82%, #245c39);
+}
+:root[data-theme] .tile.board-tile.latest-play-tile {
+  border-color: #558260;
 }
 :root[data-theme] .tile.board-tile.held-play-tile > .tile-letter,
 :root[data-theme] .tile.board-tile.held-play-tile > small {

@@ -377,7 +377,14 @@ async function beginMouseDrag(
     (await destination.getAttribute("data-drop-row")) !== null
   ) {
     await expect(destination).toHaveClass(/drag-over-square/);
-    await expect(destination.getByTestId("landing-preview")).toBeVisible();
+    expect(
+      await destination.evaluate((element) =>
+        parseFloat(getComputedStyle(element).outlineWidth),
+      ),
+    ).toBeGreaterThanOrEqual(2);
+    await expect(destination).toHaveCSS("outline-style", "solid");
+    await expect(page.getByTestId("landing-preview")).toHaveCount(0);
+    await expect(destination.locator(".board-tile")).toHaveCount(0);
   }
 }
 async function finishDrag(
@@ -580,6 +587,9 @@ test("tablet landscape expands the board to the top and exposes the build versio
   page,
 }, info) => {
   await enroll(page);
+  await expect(
+    page.locator(".player-details small:not(.player-presence)"),
+  ).toHaveCount(0);
   await expect(page.getByTestId("turn-announcement")).toBeVisible();
   await expect(page.getByTestId("turn-announcement")).toBeHidden();
   for (const [width, height] of [
@@ -611,9 +621,7 @@ test("tablet landscape expands the board to the top and exposes the build versio
   }
   await page.getByTestId("help-settings").click();
   await expect(page.getByTestId("app-version")).toHaveText(
-    new RegExp(
-      `^Version ${packageInfo.version.replaceAll(".", "\\.")} · (?:[a-f0-9]{7}|local)$`,
-    ),
+    `Version ${packageInfo.version} · local`,
   );
   await page.getByRole("button", { name: "Close dialog" }).click();
   await page.setViewportSize({ width: 820, height: 1180 });
@@ -1090,12 +1098,26 @@ test("latest plays stay strong until the actual turn announcement exits, fade fo
   const played = cell(page, 0, 1).locator(".board-tile");
   await expect(played).toHaveClass(/latest-play-tile/);
   await expect(played).toHaveClass(/held-play-tile/);
+  await expect(
+    page.getByText("The latest tiles have a green edge.", { exact: true }),
+  ).toHaveCount(0);
   const glow = () =>
     played.evaluate((element) =>
       Number(getComputedStyle(element, "::before").opacity),
     );
   await expect.poll(glow, { intervals: [30, 50, 100] }).toBeGreaterThan(0.2);
   const fresh = await glow();
+  const border = await played.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      color: style.borderColor,
+      width: parseFloat(style.borderWidth),
+      type: style.borderStyle,
+    };
+  });
+  expect(border.width).toBeGreaterThanOrEqual(1);
+  expect(border.type).toBe("solid");
+  expect(border.color).toBe("rgb(85, 130, 96)");
   const letterInk = () =>
     played
       .locator(".tile-letter")
@@ -1740,14 +1762,22 @@ test("touch drag follows finger, cancels safely, returns to rack and keeps tap p
   expect(Math.abs(ghost.x + ghost.width / 2 - target.x)).toBeLessThan(2);
   expect(Math.abs(ghost.y + ghost.height / 2 - target.y)).toBeLessThan(2);
   await expect(page.getByTestId("drag-anchor")).toHaveCount(0);
-  await expect(cell(page, 7, 7).getByTestId("landing-preview")).toBeVisible();
+  await expect(cell(page, 7, 7)).toHaveClass(/drag-over-square/);
+  expect(
+    await cell(page, 7, 7).evaluate((element) =>
+      parseFloat(getComputedStyle(element).outlineWidth),
+    ),
+  ).toBeGreaterThanOrEqual(2);
+  await expect(cell(page, 7, 7)).toHaveCSS("outline-style", "solid");
+  await expect(page.getByTestId("landing-preview")).toHaveCount(0);
+  await expect(cell(page, 7, 7).locator(".board-tile")).toHaveCount(0);
   await expect(cell(page, 7, 7)).not.toHaveClass(/has-tentative/);
   await expect(page.getByTestId("drag-ghost")).toHaveCSS(
     "animation-name",
     "none",
   );
   await page.screenshot({
-    path: info.outputPath("touch-ghost-and-landing-preview.png"),
+    path: info.outputPath("touch-single-ghost-clear-target.png"),
     fullPage: false,
   });
   await touch(session, "touchCancel");
@@ -1873,7 +1903,9 @@ test("explicit zoom keeps actions accessible, drag targets accurate and scroll s
   const session = await context.newCDPSession(page);
   await touch(session, "touchStart", await point(rack(page, "W")));
   await touch(session, "touchMove", target);
-  await expect(cell(page, 7, 7).getByTestId("landing-preview")).toBeVisible();
+  await expect(cell(page, 7, 7)).toHaveClass(/drag-over-square/);
+  await expect(page.getByTestId("landing-preview")).toHaveCount(0);
+  await expect(cell(page, 7, 7).locator(".board-tile")).toHaveCount(0);
   await expect(cell(page, 7, 7)).not.toHaveClass(/has-tentative/);
   const ghost = (await page.getByTestId("drag-ghost").boundingBox())!;
   expect(
@@ -1935,7 +1967,9 @@ test("explicit zoom keeps actions accessible, drag targets accurate and scroll s
   }));
   await touch(session, "touchStart", sourcePoint);
   await touch(session, "touchMove", portraitTarget);
-  await expect(cell(page, 7, 8).getByTestId("landing-preview")).toBeVisible();
+  await expect(cell(page, 7, 8)).toHaveClass(/drag-over-square/);
+  await expect(page.getByTestId("landing-preview")).toHaveCount(0);
+  await expect(cell(page, 7, 8).locator(".board-tile")).toHaveCount(0);
   expect(
     await viewport.evaluate((element) => ({
       x: element.scrollLeft,
@@ -2567,7 +2601,9 @@ test("waiting player can prepare and reload a draft; opponent update preserves s
   const session = await context.newCDPSession(page);
   await touch(session, "touchStart", await point(rack(page, "T")));
   await touch(session, "touchMove", await point(cell(page, 0, 2)));
-  await expect(cell(page, 0, 2).getByTestId("landing-preview")).toBeVisible();
+  await expect(cell(page, 0, 2)).toHaveClass(/drag-over-square/);
+  await expect(page.getByTestId("landing-preview")).toHaveCount(0);
+  await expect(cell(page, 0, 2).locator(".board-tile")).toHaveCount(0);
   await touch(session, "touchEnd");
   await expect(cell(page, 0, 2)).toHaveClass(/has-tentative/);
   await rack(page, "?").tap();
@@ -6125,4 +6161,75 @@ test("opponent presence follows foreground heartbeats, expiry, extra devices and
     await page.context().setOffline(false);
     await auntContext.close();
   }
+});
+
+test("an available update sits beside New game, is keyboard reachable and stays guarded during dragging", async ({
+  page,
+  context,
+}, info) => {
+  // Supply only update availability/apply acknowledgement. Parent PWA tests
+  // exercise the real waiting worker; this case measures the actual App toolbar.
+  await page.route("**/src/hooks/useAppUpdate.ts*", (route) =>
+    route.fulfill({
+      contentType: "application/javascript",
+      body: `export function useAppUpdate() { return { available:true,checking:false,status:"An update is ready.",error:null,check:async()=>{},apply:async()=>{window.updateApplyCount=(window.updateApplyCount||0)+1;} }; }`,
+    }),
+  );
+  await enroll(page);
+  const before = await authoritativeState();
+  for (const [width, height] of [
+    [1024, 768],
+    [820, 1180],
+  ]) {
+    await page.setViewportSize({ width, height });
+    const update = page.getByTestId("apply-update");
+    const newGame = page.getByTestId("new-game");
+    await expect(update).toBeVisible();
+    await expect(update).toBeEnabled();
+    const geometry = await update.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      const action = document.querySelector('[data-testid="new-game"]')!;
+      const next = action.getBoundingClientRect();
+      return {
+        left: rect.left,
+        right: rect.right,
+        top: rect.top,
+        bottom: rect.bottom,
+        height: rect.height,
+        newRight: next.right,
+        newTop: next.top,
+        nextSibling: action.nextElementSibling?.getAttribute("data-testid"),
+      };
+    });
+    expect(geometry.nextSibling).toBe("app-update-banner");
+    expect(geometry.left).toBeGreaterThanOrEqual(geometry.newRight);
+    expect(Math.abs(geometry.top - geometry.newTop)).toBeLessThan(2);
+    expect(geometry.height).toBeGreaterThanOrEqual(44);
+    expect(geometry.right).toBeLessThanOrEqual(width);
+    expect(geometry.bottom).toBeLessThanOrEqual(height);
+    await update.focus();
+    await expect(update).toBeFocused();
+    await page.keyboard.press("Enter");
+    await page.screenshot({
+      path: info.outputPath(`inline-update-${width}x${height}.png`),
+      fullPage: false,
+    });
+    await expect(newGame).toBeEnabled();
+  }
+  expect(
+    await page.evaluate(
+      () =>
+        (window as unknown as { updateApplyCount: number }).updateApplyCount,
+    ),
+  ).toBe(2);
+  const session = await context.newCDPSession(page);
+  await touch(session, "touchStart", await point(rack(page, "Q")));
+  await touch(session, "touchMove", await point(cell(page, 7, 7)));
+  await expect(page.getByTestId("drag-ghost")).toBeVisible();
+  await expect(page.getByTestId("apply-update")).toBeDisabled();
+  await touch(session, "touchCancel");
+  await expect(page.getByTestId("drag-ghost")).toHaveCount(0);
+  await expect(page.getByTestId("settling-ghost")).toHaveCount(0);
+  await expect(page.getByTestId("apply-update")).toBeEnabled();
+  expect(await authoritativeState()).toEqual(before);
 });

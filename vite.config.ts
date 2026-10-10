@@ -1,11 +1,9 @@
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
-import { readFileSync } from "node:fs";
+import packageInfo from "./package.json";
 import { execFileSync } from "node:child_process";
-const { version } = JSON.parse(
-  readFileSync(new URL("./package.json", import.meta.url), "utf8"),
-);
+const { version } = packageInfo;
 let revision = "local";
 try {
   revision = execFileSync("git", ["rev-parse", "--short=7", "HEAD"], {
@@ -24,7 +22,7 @@ export default defineConfig(({ mode }) => {
     base,
     define: {
       "import.meta.env.VITE_APP_VERSION": JSON.stringify(
-        `${version} · ${revision}`,
+        `${version} · ${mode === "development" ? "local" : revision}`,
       ),
     },
     server: {

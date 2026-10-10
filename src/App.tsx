@@ -2170,6 +2170,32 @@ export default function App() {
             New game
           </button>
         )}
+        {appUpdate.available && (
+          <div
+            className="header-update"
+            data-testid="app-update-banner"
+            role="status"
+          >
+            <button
+              className="secondary-button"
+              data-testid="apply-update"
+              disabled={
+                !!pending ||
+                busy ||
+                enrolling ||
+                !!drag ||
+                !!settling ||
+                recallAnimation.active ||
+                !!wordBusy ||
+                newGameBusy ||
+                hasIncomingDecision
+              }
+              onClick={() => void appUpdate.apply()}
+            >
+              Update app
+            </button>
+          </div>
+        )}
         <button
           className="icon-button sound-control"
           onClick={() => {
@@ -2192,33 +2218,6 @@ export default function App() {
           <Icon name="help" />
         </button>
       </div>
-      {appUpdate.available && (
-        <div
-          className="update-banner"
-          data-testid="app-update-banner"
-          role="status"
-        >
-          <span>An update is ready.</span>
-          <button
-            className="secondary-button"
-            data-testid="apply-update"
-            disabled={
-              !!pending ||
-              busy ||
-              enrolling ||
-              !!drag ||
-              !!settling ||
-              recallAnimation.active ||
-              !!wordBusy ||
-              newGameBusy ||
-              hasIncomingDecision
-            }
-            onClick={() => void appUpdate.apply()}
-          >
-            Update app
-          </button>
-        </div>
-      )}
     </header>
   );
 
@@ -2579,16 +2578,6 @@ export default function App() {
                             ) : premium ? (
                               <span className="premium-label">{premium}</span>
                             ) : null}
-                            {landing && drag && (
-                              <span
-                                className="tile board-tile landing-preview"
-                                data-testid="landing-preview"
-                                aria-hidden="true"
-                              >
-                                <TileLetter letter={drag.tile.letter} />
-                                <small>{drag.tile.value}</small>
-                              </span>
-                            )}
                           </button>
                         );
                       })}
@@ -2909,7 +2898,6 @@ export default function App() {
                       <div className="player-details">
                         <span>
                           {names[player]}
-                          {player === slot && <small>you</small>}
                           {player !== slot &&
                             session.presenceStatus[player] !== "unknown" && (
                               <small
@@ -3253,10 +3241,6 @@ export default function App() {
                     </p>
                     {latest.kind === "play" && (
                       <>
-                        <small>
-                          <i />
-                          The latest tiles have a green edge.
-                        </small>
                         <button
                           className="secondary-button score-details-button"
                           data-testid="score-details"

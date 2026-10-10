@@ -1,6 +1,6 @@
 {
   "name": "tea-and-tiles",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -10,7 +10,7 @@
     "dev": "vite --host 127.0.0.1",
     "build": "tsc -p tsconfig.json && vite build && npm run build:functions",
     "build:functions": "tsc -p tsconfig.functions.json && node scripts/copy-dictionary.mjs",
-    "test": "vitest run tests/engine.test.ts tests/placement-guide.test.ts tests/timer-display.test.ts tests/rack-target.test.ts tests/callable-policy.test.ts tests/shared-availability.test.ts tests/firestore-transport.test.ts tests/score-timeline.test.ts tests/sign-in-link.test.ts tests/presence.test.ts",
+    "test": "vitest run tests/engine.test.ts tests/placement-guide.test.ts tests/timer-display.test.ts tests/rack-target.test.ts tests/callable-policy.test.ts tests/shared-availability.test.ts tests/firestore-transport.test.ts tests/score-timeline.test.ts tests/sign-in-link.test.ts tests/presence.test.ts tests/dictionary-import.test.ts",
     "test:backend": "vitest run tests/backend.test.ts",
     "test:e2e": "playwright test",
     "emulators": "npm run build:functions && node scripts/emulators.mjs",

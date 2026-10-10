@@ -110,6 +110,18 @@ Confirm correct names, private racks and the same match. Play alternating turns,
 
 Presence sends a small direct Firestore heartbeat about every 60 seconds while each signed-in device is visible. Another player appears recently online while any of her device timestamps is no more than 120 seconds old. Hidden/closed devices expire naturally; this is approximate activity rather than immediate disconnect detection. Each heartbeat consumes one Firestore write plus listener/rule reads, and no Function invocation. Two continuously foreground devices add roughly 120 writes/hour; additional devices increase usage. The deployed rules must include the own-device presence exception, server-timestamp requirement and 55-second update minimum. Client deletes and all authoritative game writes remain denied. Deploying these rules does not require changing Functions or resetting any game/session.
 
+## Updating the dictionary
+
+The bundled ESDB spelling list remains a prototype. Removing `TR` is a temporary validity correction; it does not make the full list NWL2023 or WOW24. An authorized recent tournament file can be validated and installed with `scripts/import-dictionary.mjs`, using `--source`, `--edition NWL2023|NSWL2023|WOW24` and `--notice`; validation is the default and `--install` is explicit. See the README dictionary section for source references and commands. The public client downloads the complete list for offline checks, so a permission limited to server-side use would require a different integration.
+
+After installation, run `npm run build`, publish the client through the GitHub Pages workflow, and deploy the two dictionary-dependent Functions:
+
+```powershell
+firebase deploy --project YOUR_PROJECT_ID --only functions:tea-and-tiles:submitCommand,functions:tea-and-tiles:requestWord
+```
+
+The Functions build includes the same normalized words, supplied notice and source/hash metadata. Other callable functions do not perform base dictionary checks. This update does not change bindings, racks, games, prior accepted moves or mutually approved house words. Installed clients receive the new static dictionary with the app update; until updated, a client's old preview may differ from authoritative validation.
+
 ## Local testing remains independent
 
 Keep `.env` based on `.env.example` with `VITE_USE_EMULATORS=true` and project `demo-tea-and-tiles`. No Google login, cloud credentials or App Check key is needed. The standard emulator launcher supplies Firebase's emulator flag; cloud deployment has no browser-controlled enforcement bypass.
