@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type ReactNode,
+  type CSSProperties,
 } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -662,6 +663,11 @@ export default function App() {
     placements: [],
   });
   const [animatedMove, setAnimatedMove] = useState<string | null>(null);
+  const [freshMove, setFreshMove] = useState<string | null>(null);
+  const observedHighlight = useRef<{ gameId: string; moveId?: string } | null>(
+    null,
+  );
+  const centeredRackCount = useRef(0);
   const observedResult = useRef<{
     gameId: string;
     status: string;
@@ -1125,6 +1131,24 @@ export default function App() {
       return () => clearTimeout(timer);
     }
   }, [game?.id, game?.revision]);
+
+  useEffect(() => {
+    const previous = observedHighlight.current;
+    observedHighlight.current = game
+      ? { gameId: game.id, moveId: game.lastMove?.id }
+      : null;
+    setFreshMove(null);
+    if (
+      !reduced &&
+      previous?.gameId === game?.id &&
+      previous?.moveId !== game?.lastMove?.id &&
+      game?.lastMove?.kind === "play"
+    ) {
+      setFreshMove(game.lastMove.id);
+      const timer = setTimeout(() => setFreshMove(null), 3600);
+      return () => clearTimeout(timer);
+    }
+  }, [game?.id, game?.lastMove?.id, reduced]);
 
   useEffect(() => {
     if (!game || !slot || game.status !== "active") {
@@ -1609,6 +1633,7 @@ export default function App() {
   // rack then keeps the tray and its logical drop positions stationary.
   const reserveRackReturn =
     !!drag && !visibleRack.some((tile) => tile.id === drag.tile.id);
+  if (!drag) centeredRackCount.current = visibleRack.length;
   const latest = game?.lastMove;
   const emptiedRack =
     game?.bagCount === 0
@@ -1925,7 +1950,9 @@ export default function App() {
       }
     : {};
   const lastCells = new Set(
-    latest?.placements.map((p) => `${p.row},${p.col}`) || [],
+    latest?.kind === "play"
+      ? latest.placements.map((p) => `${p.row},${p.col}`)
+      : [],
   );
   const notice = sharedActionsPaused ? "" : message || session.error;
   const status =
@@ -2200,7 +2227,7 @@ export default function App() {
                             : null);
                         const premium = premiumAt(row, col),
                           isLatest = lastCells.has(key),
-                          isAnimated = isLatest && animatedMove === latest?.id;
+                          isFresh = isLatest && freshMove === latest?.id;
                         const landing =
                           drag?.target?.kind === "board" &&
                           drag.target.row === row &&
@@ -2218,7 +2245,14 @@ export default function App() {
                             data-testid={`board-cell-${row}-${col}`}
                             data-drop-row={row}
                             data-drop-col={col}
-                            className={`square ${premium?.toLowerCase() || ""} ${openingBoard && !tile && row === 7 && col === 7 ? "opening-centre" : ""} ${tentative ? "has-tentative" : ""} ${committed ? "has-committed" : ""} ${selected === tentative?.tileId && tentative ? "selected-square" : ""} ${isLatest && committed ? "latest-square" : ""} ${isAnimated ? "scoring-square" : ""} ${landing ? "drag-over-square" : ""}`}
+                            className={`square ${premium?.toLowerCase() || ""} ${openingBoard && !tile && row === 7 && col === 7 ? "opening-centre" : ""} ${tentative ? "has-tentative" : ""} ${committed ? "has-committed" : ""} ${selected === tentative?.tileId && tentative ? "selected-square" : ""} ${isLatest && committed ? "latest-square" : ""} ${isFresh && committed ? "fresh-play-square" : ""} ${landing ? "drag-over-square" : ""}`}
+                            data-latest-play={
+                              isLatest && committed
+                                ? isFresh
+                                  ? "fresh"
+                                  : "settled"
+                                : undefined
+                            }
                             aria-label={`Row ${row + 1}, column ${col + 1}: ${label}`}
                             aria-invalid={
                               tentative && draftErrorCode ? true : undefined
@@ -2238,7 +2272,7 @@ export default function App() {
                           >
                             {tile ? (
                               <motion.span
-                                className={`tile board-tile ${tentative ? "tentative" : ""} ${tentative && draftErrorCode ? "invalid-arrangement" : ""} ${tentative && canEdit ? "draggable-tile" : ""} ${drag?.tile.id === tile.id ? "drag-source" : ""} ${settling?.tile.id === tile.id ? "settling-target" : ""} ${isLatest && committed && latest?.player !== slot ? "opponent-tile" : ""}`}
+                                className={`tile board-tile ${tentative ? "tentative" : ""} ${tentative && draftErrorCode ? "invalid-arrangement" : ""} ${tentative && canEdit ? "draggable-tile" : ""} ${drag?.tile.id === tile.id ? "drag-source" : ""} ${settling?.tile.id === tile.id ? "settling-target" : ""} ${isLatest && committed ? "latest-play-tile" : ""} ${isFresh && committed ? "fresh-play-tile" : ""}`}
                                 key={tile.id}
                                 onPointerDown={
                                   tentative
@@ -2364,145 +2398,169 @@ export default function App() {
                     data-drop-rack="true"
                     data-rack-insertion-index={rackPreview?.insertionIndex}
                   >
-                    {visibleRack.map((tile, originalIndex) => {
-                      const remainingIndex =
-                        rackPreview?.tileIds.indexOf(tile.id) ?? -1;
-                      const previewIndex =
-                        remainingIndex < 0
-                          ? originalIndex
-                          : remainingIndex +
-                            (remainingIndex >= rackPreview!.insertionIndex
-                              ? 1
-                              : 0);
-                      const rackOffset = rackPreview
-                        ? (previewIndex - originalIndex) * rackPreview.slotPitch
-                        : 0;
-                      return (
-                        <div
-                          className="rack-slot"
-                          data-rack-tile-id={tile.id}
-                          key={tile.id}
-                        >
-                          {rackPreview?.insertionIndex === originalIndex && (
-                            <span
-                              className="rack-insertion-preview"
-                              data-testid="rack-insertion-preview"
-                              aria-hidden="true"
-                            />
-                          )}
-                          <motion.div
-                            className="rack-visual"
-                            layout={
-                              !reduced && !drag && !settling
-                                ? "position"
-                                : false
-                            }
-                            initial={false}
-                            animate={{
-                              x: rackOffset,
-                              opacity:
-                                rackPreview && drag?.tile.id === tile.id
-                                  ? 0
-                                  : 1,
-                            }}
-                            transition={{
-                              x: {
-                                duration: reduced || settling ? 0 : 0.16,
-                                ease: [0.2, 0.8, 0.2, 1],
-                              },
-                              opacity: { duration: 0 },
-                              layout: { duration: reduced ? 0 : 0.24 },
-                            }}
-                          >
-                            <motion.button
-                              data-testid={`rack-tile-${tile.id}`}
-                              className={`tile rack-tile ${canEdit ? "draggable-tile" : ""} ${drag?.tile.id === tile.id ? "drag-source" : ""} ${settling?.tile.id === tile.id ? "settling-target" : ""} ${selected === tile.id ? "selected-tile" : ""}`}
-                              aria-label={`${tile.letter === "?" ? "Blank" : tile.letter}, ${tile.value} points`}
-                              aria-pressed={selected === tile.id}
-                              disabled={!canEdit}
-                              onPointerDown={(event) => startDrag(event, tile)}
-                              onDragStart={(event) => event.preventDefault()}
-                              onKeyDown={(event) => {
-                                if (
-                                  !canEdit ||
-                                  !!drag ||
-                                  !!settling ||
-                                  !event.altKey ||
-                                  !["ArrowLeft", "ArrowRight"].includes(
-                                    event.key,
-                                  )
-                                )
-                                  return;
-                                event.preventDefault();
-                                const index = visibleRack.findIndex(
-                                  (t) => t.id === tile.id,
-                                );
-                                const destination =
-                                  index + (event.key === "ArrowLeft" ? -1 : 1);
-                                if (
-                                  destination < 0 ||
-                                  destination >= visibleRack.length
-                                )
-                                  return;
-                                reorderRack(
-                                  tile.id,
-                                  visibleRack[
-                                    destination +
-                                      (event.key === "ArrowRight" ? 1 : 0)
-                                  ]?.id,
-                                );
-                                tick();
-                              }}
-                              onClick={() => {
-                                setSelected(
-                                  selected === tile.id ? null : tile.id,
-                                );
-                                setMessage("");
-                                tick();
-                              }}
-                              initial={
-                                settling?.tile.id === tile.id
-                                  ? false
-                                  : { opacity: 0, y: 10 }
-                              }
-                              animate={{
-                                opacity: 1,
-                                y: selected === tile.id ? -7 : 0,
-                                rotate: selected === tile.id ? -2 : 0,
-                              }}
-                              whileHover={
-                                canEdit && finePointer && !drag
-                                  ? {
-                                      boxShadow:
-                                        "inset 0 0 0 2px var(--tile-hover, #7a8b63), 0 5px 8px #514d3529",
-                                    }
-                                  : undefined
-                              }
-                              exit={{ opacity: 0 }}
-                              transition={{
-                                type: "spring",
-                                stiffness: 430,
-                                damping: 24,
-                              }}
-                            >
-                              <TileLetter letter={tile.letter} />
-                              <small>{tile.value}</small>
-                            </motion.button>
-                          </motion.div>
-                        </div>
-                      );
-                    })}
-                    {reserveRackReturn && (
+                    {(visibleRack.length > 0 || reserveRackReturn) && (
                       <div
-                        className="rack-slot rack-preview-spacer"
-                        data-testid="rack-preview-gap"
-                        aria-hidden="true"
+                        className="rack-tiles"
+                        data-testid="rack-tiles"
+                        data-centering-count={centeredRackCount.current}
+                        style={
+                          {
+                            "--rack-centered-count": Math.max(
+                              1,
+                              centeredRackCount.current,
+                            ),
+                          } as CSSProperties
+                        }
                       >
-                        {rackPreview?.insertionIndex === visibleRack.length && (
-                          <span
-                            className="rack-insertion-preview"
-                            data-testid="rack-insertion-preview"
-                          />
+                        {visibleRack.map((tile, originalIndex) => {
+                          const remainingIndex =
+                            rackPreview?.tileIds.indexOf(tile.id) ?? -1;
+                          const previewIndex =
+                            remainingIndex < 0
+                              ? originalIndex
+                              : remainingIndex +
+                                (remainingIndex >= rackPreview!.insertionIndex
+                                  ? 1
+                                  : 0);
+                          const rackOffset = rackPreview
+                            ? (previewIndex - originalIndex) *
+                              rackPreview.slotPitch
+                            : 0;
+                          return (
+                            <div
+                              className="rack-slot"
+                              data-rack-tile-id={tile.id}
+                              key={tile.id}
+                            >
+                              {rackPreview?.insertionIndex ===
+                                originalIndex && (
+                                <span
+                                  className="rack-insertion-preview"
+                                  data-testid="rack-insertion-preview"
+                                  aria-hidden="true"
+                                />
+                              )}
+                              <motion.div
+                                className="rack-visual"
+                                layout={
+                                  !reduced && settling?.tile.id !== tile.id
+                                    ? "position"
+                                    : false
+                                }
+                                initial={false}
+                                animate={{
+                                  x: rackOffset,
+                                  opacity:
+                                    rackPreview && drag?.tile.id === tile.id
+                                      ? 0
+                                      : 1,
+                                }}
+                                transition={{
+                                  x: {
+                                    duration: reduced || settling ? 0 : 0.16,
+                                    ease: [0.2, 0.8, 0.2, 1],
+                                  },
+                                  opacity: { duration: 0 },
+                                  layout: { duration: reduced ? 0 : 0.24 },
+                                }}
+                              >
+                                <motion.button
+                                  data-testid={`rack-tile-${tile.id}`}
+                                  className={`tile rack-tile ${canEdit ? "draggable-tile" : ""} ${drag?.tile.id === tile.id ? "drag-source" : ""} ${settling?.tile.id === tile.id ? "settling-target" : ""} ${selected === tile.id ? "selected-tile" : ""}`}
+                                  aria-label={`${tile.letter === "?" ? "Blank" : tile.letter}, ${tile.value} points`}
+                                  aria-pressed={selected === tile.id}
+                                  disabled={!canEdit}
+                                  onPointerDown={(event) =>
+                                    startDrag(event, tile)
+                                  }
+                                  onDragStart={(event) =>
+                                    event.preventDefault()
+                                  }
+                                  onKeyDown={(event) => {
+                                    if (
+                                      !canEdit ||
+                                      !!drag ||
+                                      !!settling ||
+                                      !event.altKey ||
+                                      !["ArrowLeft", "ArrowRight"].includes(
+                                        event.key,
+                                      )
+                                    )
+                                      return;
+                                    event.preventDefault();
+                                    const index = visibleRack.findIndex(
+                                      (t) => t.id === tile.id,
+                                    );
+                                    const destination =
+                                      index +
+                                      (event.key === "ArrowLeft" ? -1 : 1);
+                                    if (
+                                      destination < 0 ||
+                                      destination >= visibleRack.length
+                                    )
+                                      return;
+                                    reorderRack(
+                                      tile.id,
+                                      visibleRack[
+                                        destination +
+                                          (event.key === "ArrowRight" ? 1 : 0)
+                                      ]?.id,
+                                    );
+                                    tick();
+                                  }}
+                                  onClick={() => {
+                                    setSelected(
+                                      selected === tile.id ? null : tile.id,
+                                    );
+                                    setMessage("");
+                                    tick();
+                                  }}
+                                  initial={
+                                    settling?.tile.id === tile.id
+                                      ? false
+                                      : { opacity: 0, y: 10 }
+                                  }
+                                  animate={{
+                                    opacity: 1,
+                                    y: selected === tile.id ? -7 : 0,
+                                    rotate: selected === tile.id ? -2 : 0,
+                                  }}
+                                  whileHover={
+                                    canEdit && finePointer && !drag
+                                      ? {
+                                          boxShadow:
+                                            "inset 0 0 0 2px var(--tile-hover, #7a8b63), 0 5px 8px #514d3529",
+                                        }
+                                      : undefined
+                                  }
+                                  exit={{ opacity: 0 }}
+                                  transition={{
+                                    type: "spring",
+                                    stiffness: 430,
+                                    damping: 24,
+                                  }}
+                                >
+                                  <TileLetter letter={tile.letter} />
+                                  <small>{tile.value}</small>
+                                </motion.button>
+                              </motion.div>
+                            </div>
+                          );
+                        })}
+                        {reserveRackReturn && (
+                          <div
+                            className="rack-slot rack-preview-spacer"
+                            data-testid="rack-preview-gap"
+                            aria-hidden="true"
+                          >
+                            {rackPreview?.insertionIndex ===
+                              visibleRack.length && (
+                              <span
+                                className="rack-insertion-preview"
+                                data-testid="rack-insertion-preview"
+                              />
+                            )}
+                          </div>
                         )}
                       </div>
                     )}
@@ -2886,10 +2944,10 @@ export default function App() {
                         "A new game together."
                       )}
                     </p>
-                    {latest.player !== slot && latest.kind === "play" && (
+                    {latest.kind === "play" && (
                       <small>
                         <i />
-                        Their latest tiles have a coloured edge.
+                        The latest tiles have a green edge.
                       </small>
                     )}
                   </section>

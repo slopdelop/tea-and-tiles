@@ -511,7 +511,7 @@ test("tablet landscape expands the board to the top and exposes the build versio
   }
   await page.getByTestId("help-settings").click();
   await expect(page.getByTestId("app-version")).toHaveText(
-    /^Version 0\.1\.2 · (?:[a-f0-9]{7}|local)$/,
+    /^Version 0\.1\.3 · (?:[a-f0-9]{7}|local)$/,
   );
   await page.getByRole("button", { name: "Close dialog" }).click();
   await page.setViewportSize({ width: 820, height: 1180 });
@@ -616,6 +616,260 @@ test("wooden rack stays the same size as tiles leave and return and bonus legend
   ]) {
     await expect(help.getByText(label, { exact: false })).toBeVisible();
   }
+});
+
+test("partial hands center gently after release while drag targets stay steady", async ({
+  page,
+  context,
+}, info) => {
+  await enroll(page);
+  await expect(page.getByTestId("turn-announcement")).toBeHidden();
+  const holder = page.getByTestId("tile-rack");
+  const slots = holder.locator("[data-rack-tile-id]");
+  const centeredError = () =>
+    holder.evaluate((element) => {
+      const tiles = [
+        ...element.querySelectorAll("[data-rack-tile-id] .rack-visual"),
+      ];
+      if (!tiles.length) return 0;
+      const rack = element.getBoundingClientRect();
+      const first = tiles[0].getBoundingClientRect();
+      const last = tiles.at(-1)!.getBoundingClientRect();
+      return Math.abs(
+        (first.left + last.right) / 2 - (rack.left + rack.right) / 2,
+      );
+    });
+  const positions = () =>
+    slots.evaluateAll((nodes) =>
+      nodes.map((node) => ({
+        id: node.getAttribute("data-rack-tile-id"),
+        x: node.getBoundingClientRect().left,
+      })),
+    );
+  const holderBefore = (await holder.boundingBox())!;
+  await rack(page, "M").tap();
+  await cell(page, 7, 6).tap();
+  await rack(page, "W").tap();
+  await cell(page, 7, 7).tap();
+  await expect(slots).toHaveCount(5);
+  await expect.poll(centeredError).toBeLessThan(1);
+  const before = await positions();
+  const session = await context.newCDPSession(page);
+  // Returning a board tile reserves a vacancy without shifting the hand beneath the finger.
+  const source = await point(cell(page, 7, 6));
+  await touch(session, "touchStart", source);
+  await touch(session, "touchMove", { x: source.x + 15, y: source.y });
+  await expect(page.getByTestId("drag-ghost")).toBeVisible();
+  await expect(page.getByTestId("rack-preview-gap")).toBeVisible();
+  expect(await positions()).toEqual(before);
+  await touch(session, "touchMove", await point(cell(page, 8, 6)));
+  expect(await positions()).toEqual(before);
+  await touch(session, "touchCancel");
+  await expect(page.getByTestId("drag-ghost")).toBeHidden();
+  await expect.poll(centeredError).toBeLessThan(1);
+
+  // Capture actual intermediate geometry as a rack tile leaves, not just its final alignment.
+  const destination = await point(cell(page, 7, 8));
+  await touch(session, "touchStart", await point(rack(page, "Q")));
+  await touch(session, "touchMove", destination);
+  await expect(page.getByTestId("drag-ghost")).toBeVisible();
+  expect(await positions()).toEqual(before);
+  await page.evaluate(() => {
+    const samples: number[] = [];
+    (window as unknown as { centerSamples: number[] }).centerSamples = samples;
+    const until = performance.now() + 900;
+    function sample() {
+      const tile = document.querySelectorAll(
+        "[data-rack-tile-id] .rack-visual",
+      )[1];
+      if (tile) samples.push(tile.getBoundingClientRect().left);
+      if (performance.now() < until) requestAnimationFrame(sample);
+    }
+    requestAnimationFrame(sample);
+  });
+  await touch(session, "touchEnd");
+  await expect(slots).toHaveCount(4);
+  await expect.poll(centeredError).toBeLessThan(1);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as unknown as { centerSamples: number[] }).centerSamples
+            .length,
+      ),
+    )
+    .toBeGreaterThan(15);
+  const samples = await page.evaluate(
+    () => (window as unknown as { centerSamples: number[] }).centerSamples,
+  );
+  expect(new Set(samples.map((x) => Math.round(x * 10))).size).toBeGreaterThan(
+    4,
+  );
+  const holderAfter = (await holder.boundingBox())!;
+  expect(holderAfter.width).toBeCloseTo(holderBefore.width, 0);
+  expect(holderAfter.height).toBeCloseTo(holderBefore.height, 0);
+  await page.screenshot({
+    path: info.outputPath("centered-four-letter-hand.png"),
+    fullPage: false,
+  });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  // Motion snapshots the OS preference at mount; test the reduced-motion launch path.
+  await page.reload();
+  await expect(slots).toHaveCount(4);
+  await page.getByTestId("recall-tiles").tap();
+  await expect(slots).toHaveCount(7);
+  await rack(page, "M").tap();
+  await cell(page, 7, 6).tap();
+  await expect(slots).toHaveCount(6);
+  expect(await centeredError()).toBeLessThan(1);
+  const sixBefore = await positions();
+  const returnSource = await point(cell(page, 7, 6));
+  await touch(session, "touchStart", returnSource);
+  await touch(session, "touchMove", {
+    x: returnSource.x + 15,
+    y: returnSource.y,
+  });
+  await expect(page.getByTestId("rack-preview-gap")).toBeVisible();
+  expect(await positions()).toEqual(sixBefore);
+  await touch(
+    session,
+    "touchMove",
+    await point(page.getByTestId("rack-preview-gap")),
+  );
+  await expect(holder).toHaveAttribute("data-rack-insertion-index", "6");
+  expect(await positions()).toEqual(sixBefore);
+  const gapBounds = (await page
+    .getByTestId("rack-insertion-preview")
+    .boundingBox())!;
+  const woodBounds = (await holder.boundingBox())!;
+  expect(gapBounds.x + gapBounds.width).toBeLessThanOrEqual(
+    woodBounds.x + woodBounds.width,
+  );
+  await page.screenshot({
+    path: info.outputPath("six-letter-hand-return-end-preview.png"),
+    fullPage: false,
+  });
+  await touch(session, "touchEnd");
+  await expect(slots).toHaveCount(7);
+  await expect(cell(page, 7, 6)).not.toHaveClass(/has-tentative/);
+  expect(await centeredError()).toBeLessThan(1);
+});
+
+test("latest plays bloom green, settle faintly, and clear on the next turn without replaying on reload", async ({
+  page,
+}, info) => {
+  await enroll(page);
+  await expect(page.getByTestId("turn-announcement")).toBeHidden();
+  const a = fixtureGame.racks.mom.find((tile) => tile.letter === "A")!;
+  const next = applyCommand(
+    fixtureGame,
+    "mom",
+    {
+      id: "fixture-green-own-play",
+      gameId: fixtureGame.id,
+      expectedRevision: fixtureGame.revision,
+      kind: "play",
+      placements: [{ tileId: a.id, row: 0, col: 1 }],
+    },
+    new Set(["RA"]),
+    () => 0.42,
+  );
+  await writeFixture(next);
+  const played = cell(page, 0, 1).locator(".board-tile");
+  await expect(played).toHaveClass(/latest-play-tile/);
+  await expect(played).toHaveClass(/fresh-play-tile/);
+  const glow = () =>
+    played.evaluate((element) =>
+      Number(getComputedStyle(element, "::before").opacity),
+    );
+  await expect.poll(glow, { intervals: [30, 50, 100] }).toBeGreaterThan(0.2);
+  const fresh = await glow();
+  const scaleAnimation = await cell(page, 0, 1).evaluate((element) => {
+    const animations = element.getAnimations();
+    return animations.some((animation) => {
+      const frames = (animation.effect as KeyframeEffect).getKeyframes();
+      return (
+        frames.some((frame) => String(frame.transform).includes("1.08")) &&
+        frames.some((frame) => String(frame.transform).includes("scale(1)"))
+      );
+    });
+  });
+  expect(scaleAnimation).toBe(true);
+  await page.screenshot({
+    path: info.outputPath("latest-play-fresh-green.png"),
+    fullPage: false,
+  });
+  await expect.poll(glow).toBeLessThan(fresh / 2);
+  const faint = await glow();
+  expect(faint).toBeGreaterThan(0);
+  await expect(played).toHaveClass(/latest-play-tile/);
+  await expect(cell(page, 0, 0).locator(".board-tile")).not.toHaveClass(
+    /latest-play-tile/,
+  );
+  await page.screenshot({
+    path: info.outputPath("latest-play-faint-green.png"),
+    fullPage: false,
+  });
+  await page.reload();
+  await expect(played).toHaveClass(/latest-play-tile/);
+  await expect(played).not.toHaveClass(/fresh-play-tile/);
+  expect(
+    await cell(page, 0, 1).evaluate(
+      (element) => element.getAnimations().length,
+    ),
+  ).toBe(0);
+
+  // The other player's turn gets the same treatment; reduced motion keeps a static marker.
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const s = fixtureGame.racks.aunt.find((tile) => tile.letter === "S")!;
+  await writeFixture(
+    applyCommand(
+      fixtureGame,
+      "aunt",
+      {
+        id: "fixture-green-opponent-play",
+        gameId: fixtureGame.id,
+        expectedRevision: fixtureGame.revision,
+        kind: "play",
+        placements: [{ tileId: s.id, row: 0, col: 2 }],
+      },
+      new Set(["RAS"]),
+      () => 0.42,
+    ),
+  );
+  const opponent = cell(page, 0, 2).locator(".board-tile");
+  await expect(opponent).toHaveClass(/latest-play-tile/);
+  await expect(played).not.toHaveClass(/latest-play-tile/);
+  expect(
+    await cell(page, 0, 2).evaluate(
+      (element) => element.getAnimations().length,
+    ),
+  ).toBe(0);
+  for (const theme of themes) {
+    await page.evaluate(
+      (theme) => (document.documentElement.dataset.theme = theme),
+      theme,
+    );
+    await page.screenshot({
+      path: info.outputPath(`latest-play-${theme}.png`),
+      fullPage: false,
+    });
+  }
+  await writeFixture(
+    applyCommand(
+      fixtureGame,
+      "mom",
+      {
+        id: "fixture-green-next-pass",
+        gameId: fixtureGame.id,
+        expectedRevision: fixtureGame.revision,
+        kind: "pass",
+      },
+      new Set(),
+      () => 0.42,
+    ),
+  );
+  await expect(page.locator(".latest-play-tile")).toHaveCount(0);
 });
 
 test("premium labels and tile letters/values fit compact landscape and portrait", async ({
