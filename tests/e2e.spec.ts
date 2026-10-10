@@ -174,15 +174,27 @@ test("two enrolled tablets play, reload, recover an interrupted reply, finish an
       "aria-label",
       /T, 1 points, tentative/,
     );
-    await mom.getByTestId("play-word").click();
-    await expect(mom.getByTestId("game-notice")).toContainText(
-      "Not in our dictionary: CTA",
+    await expect(mom.getByTestId("word-check")).toHaveAttribute(
+      "data-state",
+      "unrecognized",
     );
+    await mom.getByTestId("play-word").click();
+    const dictionaryPopup = mom.getByTestId("dictionary-popup");
+    await expect(dictionaryPopup).toBeVisible();
+    await expect(dictionaryPopup.locator("li")).toHaveText(["CTA"]);
     await expectRevision(0);
+    expect(
+      (await db.collection(`games/${fixture.id}/commands`).get()).size,
+    ).toBe(0);
+    expect((await db.collection("pairs/family/wordRequests").get()).size).toBe(
+      0,
+    );
     await expect(mom.getByTestId("turn-status")).toHaveText("Your turn");
     await expect(mom.getByTestId("board-cell-7-7")).toHaveClass(
       /has-tentative/,
     );
+    await dictionaryPopup.getByRole("button", { name: "Keep editing" }).click();
+    await expect(dictionaryPopup).toHaveCount(0);
     await mom.getByTestId("recall-tiles").click();
     await place(mom, "mom", "C", 7, 6);
     await place(mom, "mom", "A", 7, 7);
@@ -293,6 +305,14 @@ test("two enrolled tablets play, reload, recover an interrupted reply, finish an
         ),
       )
       .toBe(false);
+    // A lost reply can pause shared actions before the receipt listener confirms
+    // success. Resume only clears that local pause; it must not submit a move.
+    if (await mom.getByTestId("resume-shared-actions").isVisible())
+      await mom.getByTestId("resume-shared-actions").click();
+    await expectRevision(3);
+    expect(
+      (await db.collection(`games/${fixture.id}/commands`).get()).size,
+    ).toBe(3);
     await expect(aunt.getByTestId("turn-status")).toContainText(/your turn/i);
 
     for (let revision = 4; revision <= 8; revision++) {
