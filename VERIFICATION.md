@@ -141,3 +141,11 @@ The first GitHub verification run38064707715 passed unit/build/backend checks bu
 - Verified: 68 unit tests passed, including browser-selection and emulator-compatibility coverage; TypeScript, Vite/PWA and Functions builds passed.
 - Real iPad latency remains to be verified after deployment. No shared game, player binding, invitation or zoom behavior was changed.
 
+## Tablet landscape and version display — 2026-10-10
+
+Touch tablets in landscape (901–1440 CSS pixels) use a compact sidebar toolbar with connection status, bag count, New Game, sound and Help. The brand and board caption no longer consume board height; the board starts 12 pixels from the top and expands while keeping the rack visible. Portrait and fine-pointer desktop retain their normal header. Finished games keep the same compact layout.
+
+Help and the invitation screen show version 0.1.1 plus the build's seven-character Git revision. This release also contains the preceding Apple-browser Firestore connection workaround; the visible version allows real iPad testing to confirm that cached code has been replaced.
+
+Validation: 68 unit tests and the production TypeScript/Vite/PWA/Functions build passed. Three focused tablet browser regressions passed in 21.8 seconds, including geometry at 1024×768, 1180×820 and 1366×1024, visible controls/rack, Help version, portrait restoration, tile typography and opening-word guidance. Tests used the isolated demo project; the real shared match and invitations were unchanged.
+

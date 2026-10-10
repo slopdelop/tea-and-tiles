@@ -162,7 +162,7 @@ async function openTableAction(
       page.getByRole("dialog", { name: "Help & settings" }),
     ).toBeVisible();
   } else if (id === "new-game") {
-    await expect(page.locator(".game-sidebar").getByTestId(id)).toHaveCount(0);
+    await expect(page.locator(".turn-card").getByTestId(id)).toHaveCount(0);
     await expect(page.locator(".app-header").getByTestId(id)).toBeVisible();
   } else if (id === "rematch") {
     if (!(await page.getByTestId("end-game-popup").isVisible()))
@@ -478,6 +478,48 @@ async function checkTextContrast(page: Page, selector: string) {
   ).toEqual([]);
   return readings;
 }
+
+test("tablet landscape expands the board to the top and exposes the build version", async ({
+  page,
+}, info) => {
+  await enroll(page);
+  await expect(page.getByTestId("turn-announcement")).toBeVisible();
+  await expect(page.getByTestId("turn-announcement")).toBeHidden();
+  for (const [width, height] of [
+    [1024, 768],
+    [1180, 820],
+    [1366, 1024],
+  ]) {
+    await page.setViewportSize({ width, height });
+    await expect(page.locator(".brand")).toBeHidden();
+    const board = await page.locator(".board-frame").boundingBox();
+    const hand = await page.locator(".hand-row").boundingBox();
+    expect(board!.y).toBeLessThanOrEqual(24);
+    expect(board!.width).toBeGreaterThan(height - 190);
+    expect(hand!.y + hand!.height).toBeLessThanOrEqual(height);
+    await expect(page.getByTestId("help-settings")).toBeVisible();
+    await expect(page.getByTestId("new-game")).toBeVisible();
+    await expect(page.getByTestId("sidebar-bag-count")).toContainText(
+      "tiles in the bag",
+    );
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    await page.screenshot({
+      path: info.outputPath(`expanded-board-${width}x${height}.png`),
+      fullPage: false,
+    });
+  }
+  await page.getByTestId("help-settings").click();
+  await expect(page.getByTestId("app-version")).toHaveText(
+    /^Version 0\.1\.1 · (?:[a-f0-9]{7}|local)$/,
+  );
+  await page.getByRole("button", { name: "Close dialog" }).click();
+  await page.setViewportSize({ width: 820, height: 1180 });
+  await expect(page.locator(".brand")).toBeVisible();
+});
 
 test("premium labels and tile letters/values fit compact landscape and portrait", async ({
   page,

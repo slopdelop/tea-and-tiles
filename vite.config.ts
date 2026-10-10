@@ -1,6 +1,20 @@
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
+import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+const { version } = JSON.parse(
+  readFileSync(new URL("./package.json", import.meta.url), "utf8"),
+);
+let revision = "local";
+try {
+  revision = execFileSync("git", ["rev-parse", "--short=7", "HEAD"], {
+    encoding: "utf8",
+    windowsHide: true,
+  }).trim();
+} catch {
+  // Source archives can still be built without a Git checkout.
+}
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const base = process.env.VITE_BASE_PATH || env.VITE_BASE_PATH || "/";
@@ -8,6 +22,11 @@ export default defineConfig(({ mode }) => {
     throw new Error("VITE_BASE_PATH must start and end with /");
   return {
     base,
+    define: {
+      "import.meta.env.VITE_APP_VERSION": JSON.stringify(
+        `${version} · ${revision}`,
+      ),
+    },
     server: {
       watch: {
         // Writing browser-test reports must not reload an active local match.

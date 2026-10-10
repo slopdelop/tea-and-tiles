@@ -747,6 +747,10 @@ button {
   gap: 9px;
   align-items: center;
 }
+.table-utility-meta {
+  display: flex;
+  align-items: center;
+}
 .header-actions .header-new-game {
   min-height: 44px;
   min-width: 96px;
@@ -3501,4 +3505,76 @@ button {
 :root:is([data-theme="ink"], [data-theme="midnight"]) ::selection {
   color: var(--paper);
   background: var(--green);
+}
+
+/* Touch tablets use their landscape height for the board, with utilities
+   kept together beside it. Portrait and pointer-driven desktop layouts stay
+   in the standard header arrangement. */
+.app-shell.compact-table:not(.board-focus) {
+  max-width: none;
+  padding: 12px 16px 10px;
+}
+.compact-table:not(.board-focus) .game-layout {
+  grid-template-columns: minmax(0, 1fr) clamp(260px, 24vw, 310px);
+  gap: 24px;
+}
+.compact-table:not(.board-focus) .play-area {
+  max-width: none;
+}
+.compact-table:not(.board-focus) .board-caption {
+  display: none;
+}
+.compact-table:not(.board-focus) .board-frame {
+  width: min(100%, calc(100dvh - 140px));
+  min-width: 0;
+  padding: 12px;
+}
+.compact-table:not(.board-focus) .game-sidebar {
+  padding-top: 0;
+  gap: 14px;
+}
+.compact-table:not(.board-focus) .rack-heading {
+  margin: 8px auto 5px;
+}
+.compact-table:not(.board-focus) .rack-hint {
+  margin-top: 6px;
+}
+.table-toolbar {
+  display: block;
+  margin: 0;
+}
+.table-toolbar .header-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 44px 44px;
+  gap: 8px;
+  width: 100%;
+}
+.table-toolbar .table-utility-meta {
+  grid-column: 1 / -1;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 20px;
+  margin-bottom: 2px;
+}
+.table-toolbar .connection {
+  margin-right: 0;
+  font-size: 11px;
+}
+.sidebar-bag-count {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.table-toolbar .header-actions .header-new-game {
+  grid-column: 1;
+  margin: 0;
+}
+.table-toolbar .sound-control {
+  grid-column: 2;
+}
+.table-toolbar .help-control {
+  grid-column: 3;
+}
+.board-focus .table-toolbar {
+  display: none;
 }

@@ -27,6 +27,7 @@ import { useTileDrag } from "./components/useTileDrag";
 import { useWordDictionary } from "./hooks/useWordDictionary";
 import { canPlaceDraftTile } from "./placementGuide";
 import { formatTimeRemaining } from "./timerDisplay";
+import AppVersion from "./components/AppVersion";
 import {
   HANDOFF_MS,
   NEXT_TURN_DELAY_MS,
@@ -764,6 +765,21 @@ export default function App() {
   const reduced = useReducedMotion();
   const [finePointer, setFinePointer] = useState(false);
   const [zoomed, setZoomed] = useState(false);
+  const [tabletLandscape, setTabletLandscape] = useState(
+    () =>
+      matchMedia(
+        "(orientation: landscape) and (min-width: 901px) and (max-width: 1440px) and (any-pointer: coarse)",
+      ).matches,
+  );
+  useEffect(() => {
+    const media = matchMedia(
+      "(orientation: landscape) and (min-width: 901px) and (max-width: 1440px) and (any-pointer: coarse)",
+    );
+    const update = () => setTabletLandscape(media.matches);
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+  const compactTable = tabletLandscape && !!game && !!slot;
   const boardViewport = useRef<HTMLDivElement>(null);
   const lockedBoardScroll = useRef<{ left: number; top: number } | null>(null);
   const {
@@ -1925,68 +1941,86 @@ export default function App() {
             ? "Your turn"
             : `Waiting for ${names[game?.turn || "mom"]}`;
 
+  const appHeader = (
+    <header
+      className={`app-header ${compactTable ? "table-toolbar" : ""}`}
+      inert={zoomed}
+    >
+      {!compactTable && (
+        <a className="brand" href="./" aria-label="Tea and Tiles home">
+          <TeaMark />
+          <span>
+            Tea <i>&</i> Tiles
+            <small>A LITTLE CLOSER, ONE WORD AT A TIME</small>
+          </span>
+        </a>
+      )}
+      <div className="header-actions">
+        <div className="table-utility-meta">
+          <span className={`connection ${connected ? "" : "offline"}`}>
+            <span />
+            {connected ? "Connected" : "Reconnecting"}
+          </span>
+          {compactTable && (
+            <span className="sidebar-bag-count" data-testid="sidebar-bag-count">
+              {game?.bagCount} tiles in the bag
+            </span>
+          )}
+        </div>
+        {game?.status === "active" && slot && (
+          <button
+            className="secondary-button header-new-game"
+            data-testid="new-game"
+            disabled={
+              !canUseNewGame || !!currentGameRequest || waitingForNewGame
+            }
+            title={
+              waitingForNewGame
+                ? `Waiting for ${partnerName} to agree.`
+                : currentGameRequest
+                  ? "A new game request is waiting for a decision."
+                  : newGameUnavailable ||
+                    "Ask your partner to start a new game."
+            }
+            onClick={() => {
+              setNewGameError("");
+              setDialog("new-game");
+            }}
+          >
+            New game
+          </button>
+        )}
+        <button
+          className="icon-button sound-control"
+          onClick={() => {
+            const next = !sound;
+            setSound(next);
+            localStorage.setItem("tea-tiles-sound", String(next));
+          }}
+          aria-label={sound ? "Turn sound off" : "Turn sound on"}
+          aria-pressed={sound}
+          title={sound ? "Sound on" : "Sound off"}
+        >
+          <Icon name={sound ? "sound" : "mute"} />
+        </button>
+        <button
+          className="icon-button help-control"
+          onClick={() => setDialog("help")}
+          aria-label="Help & settings"
+          data-testid="help-settings"
+        >
+          <Icon name="help" />
+        </button>
+      </div>
+    </header>
+  );
+
   return (
     <MotionConfig reducedMotion="user">
-      <div className={`app-shell ${zoomed ? "board-focus" : ""}`}>
-        <header className="app-header" inert={zoomed}>
-          <a className="brand" href="./" aria-label="Tea and Tiles home">
-            <TeaMark />
-            <span>
-              Tea <i>&</i> Tiles
-              <small>A LITTLE CLOSER, ONE WORD AT A TIME</small>
-            </span>
-          </a>
-          <div className="header-actions">
-            <span className={`connection ${connected ? "" : "offline"}`}>
-              <span />
-              {connected ? "Connected" : "Reconnecting"}
-            </span>
-            {game?.status === "active" && slot && (
-              <button
-                className="secondary-button header-new-game"
-                data-testid="new-game"
-                disabled={
-                  !canUseNewGame || !!currentGameRequest || waitingForNewGame
-                }
-                title={
-                  waitingForNewGame
-                    ? `Waiting for ${partnerName} to agree.`
-                    : currentGameRequest
-                      ? "A new game request is waiting for a decision."
-                      : newGameUnavailable ||
-                        "Ask your partner to start a new game."
-                }
-                onClick={() => {
-                  setNewGameError("");
-                  setDialog("new-game");
-                }}
-              >
-                New game
-              </button>
-            )}
-            <button
-              className="icon-button"
-              onClick={() => {
-                const next = !sound;
-                setSound(next);
-                localStorage.setItem("tea-tiles-sound", String(next));
-              }}
-              aria-label={sound ? "Turn sound off" : "Turn sound on"}
-              aria-pressed={sound}
-              title={sound ? "Sound on" : "Sound off"}
-            >
-              <Icon name={sound ? "sound" : "mute"} />
-            </button>
-            <button
-              className="icon-button"
-              onClick={() => setDialog("help")}
-              aria-label="Help & settings"
-              data-testid="help-settings"
-            >
-              <Icon name="help" />
-            </button>
-          </div>
-        </header>
+      <div
+        className={`app-shell ${game && slot ? "active-game" : ""} ${compactTable ? "compact-table" : ""} ${zoomed ? "board-focus" : ""}`}
+      >
+        {!compactTable && appHeader}
 
         {session.loading && !game ? (
           <main className="welcome loading-state">
@@ -2082,6 +2116,7 @@ export default function App() {
                 </p>
               )}
             </form>
+            <AppVersion />
           </main>
         ) : !game ? (
           <main className="welcome">
@@ -2539,6 +2574,7 @@ export default function App() {
               </section>
 
               <aside className="game-sidebar">
+                {compactTable && appHeader}
                 <section className="scoreboard" aria-label="Scores">
                   {(["mom", "aunt"] as Slot[]).map((player) => (
                     <div
@@ -3716,6 +3752,7 @@ export default function App() {
                 Lovely, let’s play
                 <Icon name="check" />
               </button>
+              <AppVersion />
             </Modal>
           )}
           {dialog === "pass" && (
