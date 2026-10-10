@@ -295,6 +295,12 @@ export function useTileDrag(options: DragOptions) {
       active.dragging = true;
       if (event.cancelable) event.preventDefault();
       latestPoint.current = { x: event.clientX, y: event.clientY };
+      // Follow input immediately; only hit testing and React updates wait for
+      // our animation frame. Motion can render these values in its own frame.
+      dragX.set(event.clientX - active.offsetX);
+      dragY.set(event.clientY - active.offsetY);
+      pointerX.set(event.clientX);
+      pointerY.set(event.clientY);
       if (!moveFrame.current)
         moveFrame.current = requestAnimationFrame(() => {
           moveFrame.current = 0;
@@ -511,8 +517,10 @@ export function useTileDrag(options: DragOptions) {
     const boardCell = document.querySelector<HTMLElement>(
       "[data-drop-row][data-drop-col]",
     );
-    const size = (boardCell?.getBoundingClientRect().width || rect.width) * 1.1;
     const touch = event.pointerType === "touch";
+    const size =
+      (boardCell?.getBoundingClientRect().width || rect.width) *
+      (touch ? 1.35 : 1.1);
     source.setPointerCapture(event.pointerId);
     session.current = {
       pointerId: event.pointerId,
@@ -538,7 +546,7 @@ export function useTileDrag(options: DragOptions) {
         ? size / 2
         : ((event.clientX - rect.left) / rect.width) * size,
       offsetY: touch
-        ? size + 22
+        ? size / 2
         : ((event.clientY - rect.top) / rect.height) * size,
       width: size,
       height: size,

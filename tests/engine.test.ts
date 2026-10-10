@@ -171,6 +171,218 @@ describe("rules and scoring", () => {
       dict,
     );
     expect(p.score).toBe(68);
+    expect(p.breakdown).toMatchObject({ bingoBonus: 50, total: 68 });
+    expect(p.breakdown.words.reduce((sum, word) => sum + word.score, 0)).toBe(
+      18,
+    );
+  });
+  it("explains each cross word using only new premiums and keeps assigned blanks worth zero", () => {
+    const board = {
+      "6,6": placed("A", 6, 6),
+      "6,7": placed("A", 6, 7),
+      "8,6": placed("T", 8, 6),
+      "8,7": placed("T", 8, 7),
+    };
+    const result = previewMove(
+      { board },
+      [tile("C", "cross-c"), tile("?", "cross-blank")],
+      [
+        { tileId: "cross-c", row: 7, col: 6 },
+        { tileId: "cross-blank", row: 7, col: 7, letter: "A" },
+      ],
+    );
+    expect(
+      result.breakdown.words.map((word) => [
+        word.word,
+        word.wordMultiplier,
+        word.score,
+      ]),
+    ).toEqual([
+      ["CA", 2, 6],
+      ["ACT", 1, 5],
+      ["AAT", 2, 4],
+    ]);
+    const blank = result.breakdown.words[0].tiles[1];
+    expect(blank).toMatchObject({
+      letter: "A",
+      faceValue: 0,
+      effectivePoints: 0,
+      isNew: true,
+      premium: "DW",
+      letterMultiplier: 1,
+    });
+    expect(result.breakdown.words[1].tiles[0]).toMatchObject({
+      isNew: false,
+      premium: null,
+    });
+    expect(result.breakdown.total).toBe(result.score);
+    const triple = previewMove(
+      { board: { "1,4": placed("A", 1, 4) } },
+      [tile("C"), tile("T")],
+      [
+        { tileId: "C", row: 1, col: 5 },
+        { tileId: "T", row: 1, col: 6 },
+      ],
+    );
+    expect(triple.breakdown.words[0]).toMatchObject({
+      word: "ACT",
+      wordMultiplier: 1,
+      score: 11,
+    });
+    expect(triple.breakdown.words[0].tiles[1]).toMatchObject({
+      faceValue: 3,
+      letterMultiplier: 3,
+      effectivePoints: 9,
+      premium: "TL",
+    });
+  });
+  it("records accepted turns exactly once in order and marks missing legacy or truncated history partial", () => {
+    let g = createGame("one");
+    const pass = command(g);
+    g = applyCommand(g, "mom", pass, dict);
+    g = applyCommand(
+      g,
+      "aunt",
+      { ...command(g, "exchange"), tileIds: [g.racks.aunt[0].id] },
+      dict,
+    );
+    expect(g.history?.map((move) => move.kind)).toEqual(["pass", "exchange"]);
+    expect(g.historyComplete).toBe(true);
+    delete g.history;
+    delete g.historyComplete;
+    g = applyCommand(g, "mom", command(g), dict);
+    expect(g.history).toHaveLength(1);
+    expect(g.historyComplete).toBe(false);
+    g.history = Array.from({ length: 600 }, (_, index) => ({
+      ...g.lastMove!,
+      id: `prior-${index}`,
+    }));
+    g.historyComplete = true;
+    g = applyCommand(g, "aunt", command(g), dict);
+    expect(g.history).toHaveLength(600);
+    expect(g.history?.[0].id).toBe("prior-1");
+    expect(g.history?.at(-1)).toMatchObject({
+      id: g.lastMove!.id,
+      kind: g.lastMove!.kind,
+      score: g.lastMove!.score,
+    });
+    expect(g.history?.at(-1)).not.toHaveProperty("placements");
+    expect(g.historyComplete).toBe(false);
+  });
+  it("preserves earned totals separately from final rack deductions and transfers", () => {
+    const g = createGame("one");
+    g.bag = [];
+    g.racks = { mom: [tile("A"), tile("T")], aunt: [tile("Q")] };
+    g.scores = { mom: 20, aunt: 25 };
+    const ended = applyCommand(
+      g,
+      "mom",
+      {
+        ...command(g, "play"),
+        placements: [
+          { tileId: "A", row: 7, col: 7 },
+          { tileId: "T", row: 7, col: 8 },
+        ],
+      },
+      dict,
+    );
+    expect(ended.finalScoreAdjustments).toEqual({
+      reason: "rack-out",
+      players: {
+        mom: {
+          earned: 24,
+          rackValue: 0,
+          deducted: 0,
+          transferred: 10,
+          final: 34,
+        },
+        aunt: {
+          earned: 25,
+          rackValue: 10,
+          deducted: 10,
+          transferred: 0,
+          final: 15,
+        },
+      },
+    });
+    expect(ended.history?.[0].wordScores).toEqual([{ word: "AT", score: 4 }]);
+    let stalled = createGame("two");
+    stalled.racks = { mom: [tile("Q")], aunt: [tile("A")] };
+    stalled.scores = { mom: 30, aunt: 20 };
+    for (let turn = 0; turn < 6; turn++)
+      stalled = applyCommand(stalled, stalled.turn, command(stalled), dict);
+    expect(stalled.finalScoreAdjustments?.players).toEqual({
+      mom: {
+        earned: 30,
+        rackValue: 10,
+        deducted: 10,
+        transferred: 0,
+        final: 20,
+      },
+      aunt: {
+        earned: 20,
+        rackValue: 1,
+        deducted: 1,
+        transferred: 0,
+        final: 19,
+      },
+    });
+    expect(stalled.history).toHaveLength(6);
+    const rematch = applyCommand(
+      stalled,
+      "aunt",
+      command(stalled, "rematch"),
+      dict,
+    );
+    expect(rematch.history).toEqual([]);
+    expect(rematch.historyComplete).toBe(true);
+    expect(rematch.finalScoreAdjustments).toBeUndefined();
+  });
+  it("keeps600 worst-shaped compact history records below Firestore's document limit", () => {
+    const g = createGame("one");
+    const words = Array.from({ length: 14 }, () => "Q".repeat(15));
+    const breakdown = {
+      total: 999999,
+      bingoBonus: 50,
+      words: words.map((word) => ({
+        word,
+        score: 999999,
+        wordMultiplier: 27,
+        tiles: Array.from({ length: 15 }, (_, col) => ({
+          tileId: "Q-0",
+          letter: "Q",
+          faceValue: 10,
+          letterMultiplier: 3,
+          effectivePoints: 30,
+          row: 0,
+          col,
+          isNew: true,
+          premium: "TL" as const,
+        })),
+      })),
+    };
+    const oldMove = {
+      id: "x".repeat(100),
+      player: "mom" as const,
+      kind: "play" as const,
+      words,
+      score: 999999,
+      at: 9999999999999,
+      placements: [placed("Q", 0, 0)],
+      breakdown,
+    };
+    g.history = Array.from({ length: 600 }, () => oldMove);
+    expect(new TextEncoder().encode(JSON.stringify(g)).length).toBeGreaterThan(
+      1048576,
+    );
+    const next = applyCommand(g, "mom", command(g), dict);
+    expect(next.history).toHaveLength(600);
+    expect(next.history?.[0].wordScores).toHaveLength(14);
+    expect(next.history?.[0]).not.toHaveProperty("breakdown");
+    expect(next.history?.[0]).not.toHaveProperty("placements");
+    expect(new TextEncoder().encode(JSON.stringify(next)).length).toBeLessThan(
+      900000,
+    );
   });
   it("rejects disconnected moves and allows filling committed gaps", () => {
     const board = { "7,7": placed("A", 7, 7) };

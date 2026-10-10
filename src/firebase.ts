@@ -425,6 +425,19 @@ export function useGameSession() {
     },
     [callShared],
   );
+  const signInPlayer = useCallback(
+    async (playerId: "mom" | "aunt", passphrase: string) => {
+      setError(null);
+      try {
+        if (!auth.currentUser) await signInAnonymously(auth);
+        await callShared("loginPlayer", { playerId, passphrase });
+      } catch (e) {
+        setError(message(e));
+        throw e;
+      }
+    },
+    [callShared],
+  );
   const send = useCallback(
     async (command: Command): Promise<CommandResult> => {
       if (busy.current) throw new Error("A move is already being sent.");
@@ -660,6 +673,7 @@ export function useGameSession() {
     resumeSharedActions,
     error,
     enroll,
+    signInPlayer,
     submit,
     pending,
     retryPending,

@@ -22,6 +22,7 @@ import {
   type Placement,
   type Slot,
   type WinCondition,
+  type MoveRecord,
 } from "../shared/engine";
 import { useGameSession } from "./firebase";
 import { useTileDrag } from "./components/useTileDrag";
@@ -30,9 +31,12 @@ import {
   type RecallSource,
 } from "./components/useRecallAnimation";
 import { useWordDictionary } from "./hooks/useWordDictionary";
+import { useAppUpdate } from "./hooks/useAppUpdate";
+import { useScreenAwake } from "./hooks/useScreenAwake";
 import { canPlaceDraftTile } from "./placementGuide";
 import { formatTimeRemaining } from "./timerDisplay";
 import AppVersion from "./components/AppVersion";
+import { GameSummary, ScoreExplanation } from "./components/ScoreExplanation";
 import {
   HANDOFF_MS,
   NEXT_TURN_DELAY_MS,
@@ -50,6 +54,7 @@ type Dialog =
   | "new-game"
   | "incoming-game"
   | "result"
+  | "score-details"
   | null;
 type Draft = { key: string; revision: number; placements: Placement[] };
 const themeChoices = [
@@ -58,6 +63,7 @@ const themeChoices = [
   ["rose", "Rose & plum"],
   ["forest", "Forest & wood"],
   ["sunshine", "Blue & sunshine"],
+  ["blue-ink", "Blue & ink"],
   ["terracotta", "Terracotta & cream"],
   ["ink", "Ink & gold"],
   ["midnight", "Midnight teal"],
@@ -71,13 +77,22 @@ type TurnNotice = {
   afterPlay: boolean;
   debug?: boolean;
 };
-function TurnAnnouncement({ name, debug }: { name: string; debug?: boolean }) {
+function TurnAnnouncement({
+  name,
+  debug,
+  onComplete,
+}: {
+  name: string;
+  debug?: boolean;
+  onComplete: () => void;
+}) {
   const reduced = useReducedMotion();
   return (
     <motion.div
       className="turn-announcement"
       initial={{ opacity: 0, y: reduced ? 0 : 12, scale: reduced ? 1 : 0.97 }}
       animate={{ opacity: [0, 1, 1, 0], y: 0, scale: 1 }}
+      onAnimationComplete={onComplete}
       transition={{
         opacity: { duration: 2.2, times: [0, 0.12, 0.8, 1] },
         y: { duration: 0.3, ease: [0.2, 0.8, 0.2, 1] },
@@ -120,11 +135,13 @@ function Celebration({
   bingo = false,
   variant = 0,
   debug = false,
+  move,
 }: {
   score: number;
   bingo?: boolean;
   variant?: number;
   debug?: boolean;
+  move?: MoveRecord;
 }) {
   const reduced = useReducedMotion();
   const band: CelebrationBand = bingo
@@ -136,7 +153,7 @@ function Celebration({
         : "low";
   return (
     <motion.div
-      className={`celebration-card celebration-${band}`}
+      className={`celebration-card celebration-${band} ${move ? "with-score-detail" : ""}`}
       data-testid={debug ? "celebration-preview" : "move-celebration"}
       data-band={band}
       data-debug={debug || undefined}
@@ -187,6 +204,7 @@ function Celebration({
         {celebrationCopy[band][variant % celebrationCopy[band].length]}
       </span>
       {bingo && <small>Seven tiles · includes 50 bonus points</small>}
+      {move && <ScoreExplanation move={move} animated />}
     </motion.div>
   );
 }
@@ -553,6 +571,8 @@ export default function App() {
   const session = useGameSession();
   const wordDictionary = useWordDictionary();
   const { game, rack, slot, names, connected, pending } = session;
+  const appUpdate = useAppUpdate();
+  const screenAwake = useScreenAwake(game?.status === "active" && !!slot);
   const sharedActionsPaused = session.sharedActionsPaused;
   const sharedActionMessage =
     session.sharedActionMessage ||
@@ -563,6 +583,11 @@ export default function App() {
   const latestGameContext = useRef(gameContext);
   latestGameContext.current = gameContext;
   const [code, setCode] = useState((invitationFromLink || "").slice(0, 64));
+  const [welcomeMode, setWelcomeMode] = useState<"join" | "signin">(
+    invitationFromLink ? "join" : "signin",
+  );
+  const [loginPlayer, setLoginPlayer] = useState<Slot>("mom");
+  const [passphrase, setPassphrase] = useState("");
   const [enrolling, setEnrolling] = useState(false);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -668,6 +693,11 @@ export default function App() {
   });
   const [animatedMove, setAnimatedMove] = useState<string | null>(null);
   const [freshMove, setFreshMove] = useState<string | null>(null);
+  const [fadingMove, setFadingMove] = useState<string | null>(null);
+  const visibleTurnHighlight = useRef<{
+    gameId: string;
+    moveId?: string;
+  } | null>(null);
   const observedHighlight = useRef<{ gameId: string; moveId?: string } | null>(
     null,
   );
@@ -802,8 +832,6 @@ export default function App() {
     drag,
     dragX,
     dragY,
-    pointerX,
-    pointerY,
     settling,
     finishSettling,
     rackPreview,
@@ -1150,15 +1178,13 @@ export default function App() {
       ? { gameId: game.id, moveId: game.lastMove?.id }
       : null;
     setFreshMove(null);
+    setFadingMove(null);
     if (
-      !reduced &&
       previous?.gameId === game?.id &&
       previous?.moveId !== game?.lastMove?.id &&
       game?.lastMove?.kind === "play"
     ) {
       setFreshMove(game.lastMove.id);
-      const timer = setTimeout(() => setFreshMove(null), 3600);
-      return () => clearTimeout(timer);
     }
   }, [game?.id, game?.lastMove?.id, reduced]);
 
@@ -1194,8 +1220,13 @@ export default function App() {
     newGameBusy;
   useEffect(() => {
     if (turnAnnouncementBlocked) {
-      // An announcement already in progress yields immediately to interaction.
-      // A not-yet-shown turn stays queued until the table is available.
+      // Resume the actual notice after interaction, keeping its play highlighted.
+      if (turnAnnouncement && !turnAnnouncement.debug)
+        setQueuedTurn({
+          ...turnAnnouncement,
+          readyAt: Date.now(),
+          afterPlay: false,
+        });
       setTurnAnnouncement(null);
       return;
     }
@@ -1233,10 +1264,55 @@ export default function App() {
     };
   }, [queuedTurn, turnAnnouncementBlocked, game?.id, game?.turn, game?.status]);
   useEffect(() => {
-    if (!turnAnnouncement) return;
-    const timer = setTimeout(() => setTurnAnnouncement(null), 2200);
+    const visible =
+      turnAnnouncement &&
+      !turnAnnouncementBlocked &&
+      !turnAnnouncement.debug &&
+      game?.status === "active" &&
+      turnAnnouncement.gameId === game.id &&
+      turnAnnouncement.turn === game.turn;
+    const previous = visibleTurnHighlight.current;
+    visibleTurnHighlight.current = visible
+      ? { gameId: game.id, moveId: game.lastMove?.id }
+      : null;
+    if (
+      !visible &&
+      !turnAnnouncementBlocked &&
+      previous?.gameId === game?.id &&
+      previous?.moveId === freshMove
+    )
+      setFadingMove(freshMove);
+  }, [
+    turnAnnouncement,
+    turnAnnouncementBlocked,
+    game?.id,
+    game?.turn,
+    game?.status,
+    freshMove,
+  ]);
+  useEffect(() => {
+    // Finished games have no next-turn notice. An exiting score card starts
+    // this fade in onExitComplete; a timer ending without a card starts here.
+    if (
+      game?.status === "finished" &&
+      freshMove === game.lastMove?.id &&
+      freshMove &&
+      animatedMove !== freshMove &&
+      !document.querySelector('[data-testid="move-celebration"]')
+    )
+      setFadingMove(freshMove);
+  }, [game?.status, game?.lastMove?.id, freshMove, animatedMove]);
+  useEffect(() => {
+    if (!fadingMove) return;
+    const timer = setTimeout(
+      () => {
+        setFreshMove((current) => (current === fadingMove ? null : current));
+        setFadingMove(null);
+      },
+      reduced ? 0 : 5000,
+    );
     return () => clearTimeout(timer);
-  }, [turnAnnouncement]);
+  }, [fadingMove, reduced]);
 
   useEffect(() => {
     const previous = observedResult.current;
@@ -1983,8 +2059,9 @@ export default function App() {
   );
   const pointPosition = latest?.placements.length
     ? {
-        left: `clamp(140px, ${(latest.placements.reduce((sum, p) => sum + p.col, 0) / latest.placements.length / 15) * 100}%, calc(100% - 140px))`,
-        top: `clamp(55px, ${(latest.placements.reduce((sum, p) => sum + p.row, 0) / latest.placements.length / 15) * 100 - 7}%, calc(100% - 140px))`,
+        // Allow for half the 280px card, the frame's 12px padding, and a 2px inset.
+        left: `clamp(min(154px, 50%), ${(latest.placements.reduce((sum, p) => sum + p.col, 0) / latest.placements.length / 15) * 100}%, calc(100% - min(154px, 50%)))`,
+        top: `clamp(42px, ${(latest.placements.reduce((sum, p) => sum + p.row, 0) / latest.placements.length / 15) * 100 - 12}%, calc(100% - 280px))`,
       }
     : {};
   const lastCells = new Set(
@@ -2077,6 +2154,33 @@ export default function App() {
           <Icon name="help" />
         </button>
       </div>
+      {appUpdate.available && (
+        <div
+          className="update-banner"
+          data-testid="app-update-banner"
+          role="status"
+        >
+          <span>An update is ready.</span>
+          <button
+            className="secondary-button"
+            data-testid="apply-update"
+            disabled={
+              !!pending ||
+              busy ||
+              enrolling ||
+              !!drag ||
+              !!settling ||
+              recallAnimation.active ||
+              !!wordBusy ||
+              newGameBusy ||
+              hasIncomingDecision
+            }
+            onClick={() => void appUpdate.apply()}
+          >
+            Update app
+          </button>
+        </div>
+      )}
     </header>
   );
 
@@ -2128,6 +2232,33 @@ export default function App() {
               A quiet little place to play together,
               <br className="desktop-break" /> whenever you have a moment.
             </p>
+            <div className="welcome-modes" aria-label="Open your table">
+              <button
+                type="button"
+                className={welcomeMode === "signin" ? "chosen" : ""}
+                aria-pressed={welcomeMode === "signin"}
+                data-testid="welcome-signin"
+                onClick={() => {
+                  setWelcomeMode("signin");
+                  setMessage("");
+                }}
+              >
+                Sign in
+              </button>
+              <button
+                type="button"
+                className={welcomeMode === "join" ? "chosen" : ""}
+                aria-pressed={welcomeMode === "join"}
+                data-testid="welcome-join"
+                onClick={() => {
+                  setWelcomeMode("join");
+                  setPassphrase("");
+                  setMessage("");
+                }}
+              >
+                Join with invitation
+              </button>
+            </div>
             <form
               className="enroll-form"
               onSubmit={async (event) => {
@@ -2136,43 +2267,84 @@ export default function App() {
                 setEnrolling(true);
                 setMessage("");
                 try {
-                  await session.enroll(code.trim());
+                  if (welcomeMode === "join") await session.enroll(code.trim());
+                  else await session.signInPlayer(loginPlayer, passphrase);
+                  setPassphrase("");
                 } catch (error) {
                   setMessage(
                     error instanceof Error
                       ? error.message
-                      : "That code did not work. Please check it and try again.",
+                      : "We couldn’t open your table. Please check your details and try again.",
                   );
                 } finally {
                   setEnrolling(false);
                 }
               }}
             >
-              <label htmlFor="setup-code">Your invitation word</label>
-              <input
-                id="setup-code"
-                data-testid="setup-code"
-                value={code}
-                onChange={(event) => setCode(event.target.value)}
-                autoComplete="off"
-                autoCapitalize="none"
-                spellCheck={false}
-                placeholder="e.g. maple"
-                maxLength={64}
-                required
-              />
+              {welcomeMode === "join" ? (
+                <>
+                  <label htmlFor="setup-code">Your invitation word</label>
+                  <input
+                    id="setup-code"
+                    data-testid="setup-code"
+                    value={code}
+                    onChange={(event) => setCode(event.target.value)}
+                    autoComplete="off"
+                    autoCapitalize="none"
+                    spellCheck={false}
+                    placeholder="e.g. maple"
+                    maxLength={64}
+                    required
+                  />
+                </>
+              ) : (
+                <>
+                  <label htmlFor="login-player">Your name</label>
+                  <select
+                    id="login-player"
+                    data-testid="login-player"
+                    value={loginPlayer}
+                    onChange={(event) =>
+                      setLoginPlayer(event.target.value as Slot)
+                    }
+                    autoComplete="username"
+                  >
+                    <option value="mom">{names.mom}</option>
+                    <option value="aunt">{names.aunt}</option>
+                  </select>
+                  <label htmlFor="login-password">Password</label>
+                  <input
+                    id="login-password"
+                    data-testid="login-password"
+                    type="password"
+                    value={passphrase}
+                    onChange={(event) => setPassphrase(event.target.value)}
+                    autoComplete="current-password"
+                    maxLength={128}
+                    required
+                  />
+                </>
+              )}
               <button
                 className="primary-button"
                 data-testid="enroll-submit"
-                disabled={enrolling || !code.trim() || sharedActionsPaused}
+                disabled={
+                  enrolling ||
+                  !(welcomeMode === "join" ? code.trim() : passphrase) ||
+                  sharedActionsPaused
+                }
               >
-                {enrolling ? "Finding your seat…" : "Join your table"}
+                {enrolling
+                  ? "Finding your seat…"
+                  : welcomeMode === "join"
+                    ? "Join your table"
+                    : "Sign in to your table"}
                 <Icon name="arrow" />
               </button>
               <p className="setup-note">
-                You only need to do this once on this device.
+                This device remembers your place at the table.
                 <br />
-                On iPad, open the Home Screen app before entering your code.
+                On iPad, open the Home Screen app before signing in.
               </p>
               {pauseNotice()}
               {notice && (
@@ -2265,7 +2437,8 @@ export default function App() {
                             : null);
                         const premium = premiumAt(row, col),
                           isLatest = lastCells.has(key),
-                          isFresh = isLatest && freshMove === latest?.id;
+                          isFresh = isLatest && freshMove === latest?.id,
+                          isFading = isFresh && fadingMove === latest?.id;
                         const landing =
                           drag?.target?.kind === "board" &&
                           drag.target.row === row &&
@@ -2283,12 +2456,21 @@ export default function App() {
                             data-testid={`board-cell-${row}-${col}`}
                             data-drop-row={row}
                             data-drop-col={col}
-                            className={`square ${premium?.toLowerCase() || ""} ${openingBoard && !tile && row === 7 && col === 7 ? "opening-centre" : ""} ${tentative ? "has-tentative" : ""} ${committed ? "has-committed" : ""} ${selected === tentative?.tileId && tentative ? "selected-square" : ""} ${isLatest && committed ? "latest-square" : ""} ${isFresh && committed ? "fresh-play-square" : ""} ${landing ? "drag-over-square" : ""}`}
+                            className={`square ${premium?.toLowerCase() || ""} ${openingBoard && !tile && row === 7 && col === 7 ? "opening-centre" : ""} ${tentative ? "has-tentative" : ""} ${committed ? "has-committed" : ""} ${selected === tentative?.tileId && tentative ? "selected-square" : ""} ${isLatest && committed ? "latest-square" : ""} ${isFading && committed ? "fresh-play-square" : ""} ${landing ? "drag-over-square" : ""}`}
                             data-latest-play={
                               isLatest && committed
                                 ? isFresh
                                   ? "fresh"
                                   : "settled"
+                                : undefined
+                            }
+                            data-highlight-phase={
+                              isLatest && committed
+                                ? isFading
+                                  ? "fading"
+                                  : isFresh
+                                    ? "held"
+                                    : "settled"
                                 : undefined
                             }
                             aria-label={`Row ${row + 1}, column ${col + 1}: ${label}`}
@@ -2310,7 +2492,7 @@ export default function App() {
                           >
                             {tile ? (
                               <motion.span
-                                className={`tile board-tile ${tentative ? "tentative" : ""} ${tentative && draftErrorCode ? "invalid-arrangement" : ""} ${tentative && canEdit ? "draggable-tile" : ""} ${drag?.tile.id === tile.id ? "drag-source" : ""} ${settling?.tile.id === tile.id ? "settling-target" : ""} ${isLatest && committed ? "latest-play-tile" : ""} ${isFresh && committed ? "fresh-play-tile" : ""}`}
+                                className={`tile board-tile ${tentative ? "tentative" : ""} ${tentative && draftErrorCode ? "invalid-arrangement" : ""} ${tentative && canEdit ? "draggable-tile" : ""} ${drag?.tile.id === tile.id ? "drag-source" : ""} ${settling?.tile.id === tile.id ? "settling-target" : ""} ${isLatest && committed ? "latest-play-tile" : ""} ${isFresh && committed ? "held-play-tile" : ""} ${isFading && committed ? "fresh-play-tile" : ""}`}
                                 key={tile.id}
                                 onPointerDown={
                                   tentative
@@ -2373,7 +2555,15 @@ export default function App() {
                       })}
                     </div>
                   </div>
-                  <AnimatePresence>
+                  <AnimatePresence
+                    onExitComplete={() => {
+                      if (
+                        game?.status === "finished" &&
+                        freshMove === game.lastMove?.id
+                      )
+                        setFadingMove(freshMove);
+                    }}
+                  >
                     {animatedMove && latest?.kind === "play" && (
                       <motion.div
                         key={animatedMove}
@@ -2401,6 +2591,7 @@ export default function App() {
                           score={latest.score}
                           bingo={latest.placements.length === 7}
                           variant={game.revision}
+                          move={latest}
                         />
                       </motion.div>
                     )}
@@ -2424,6 +2615,13 @@ export default function App() {
                           key={turnAnnouncement.id}
                           name={names[turnAnnouncement.turn]}
                           debug={turnAnnouncement.debug}
+                          onComplete={() =>
+                            setTurnAnnouncement((current) =>
+                              current?.id === turnAnnouncement.id
+                                ? null
+                                : current,
+                            )
+                          }
                         />
                       </div>
                     )}
@@ -2897,9 +3095,21 @@ export default function App() {
                           }
                           onClick={() => setDialog("pass")}
                         >
-                          Pass turn
+                          {game.scorelessTurns === 5 || passReachesTurnLimit
+                            ? "Pass & end game"
+                            : "Pass turn"}
                         </button>
                       </div>
+                      {game.scorelessTurns >= 4 && !passReachesTurnLimit && (
+                        <p
+                          className="scoreless-notice"
+                          data-testid="scoreless-notice"
+                        >
+                          {game.scorelessTurns === 5
+                            ? "One more scoreless turn ends this game."
+                            : "Two more turns without points end this game. A scoring play resets the count."}
+                        </p>
+                      )}
                       {exchangeReason && (
                         <p
                           className="exchange-note"
@@ -2984,10 +3194,19 @@ export default function App() {
                       )}
                     </p>
                     {latest.kind === "play" && (
-                      <small>
-                        <i />
-                        The latest tiles have a green edge.
-                      </small>
+                      <>
+                        <small>
+                          <i />
+                          The latest tiles have a green edge.
+                        </small>
+                        <button
+                          className="secondary-button score-details-button"
+                          data-testid="score-details"
+                          onClick={() => setDialog("score-details")}
+                        >
+                          Score details
+                        </button>
+                      </>
                     )}
                   </section>
                 )}
@@ -3019,21 +3238,6 @@ export default function App() {
             <TileLetter letter={drag.tile.letter} />
             <small>{drag.tile.value}</small>
           </motion.div>
-        )}
-        {drag?.touch && (
-          <motion.span
-            className={`drag-anchor ${drag.target ? "valid-drop" : ""}`}
-            data-testid="drag-anchor"
-            aria-hidden="true"
-            style={{
-              left: 0,
-              top: 0,
-              x: pointerX,
-              y: pointerY,
-              marginLeft: -4.5,
-              marginTop: -4.5,
-            }}
-          />
         )}
         {settling && (
           <motion.div
@@ -3221,6 +3425,7 @@ export default function App() {
                     {endingDescription}
                   </p>
                 </div>
+                <GameSummary game={game} names={names} />
                 {(waitingForNewGame || currentGameRequest) && (
                   <p className="dictionary-reassurance">
                     Waiting for {partnerName} to agree to a new game.
@@ -3623,6 +3828,15 @@ export default function App() {
               {wordRequests("review-", true)}
             </Modal>
           )}
+          {dialog === "score-details" && latest?.kind === "play" && (
+            <Modal
+              title={`${names[latest.player]}’s word score`}
+              close={() => setDialog(null)}
+              testId="score-details-popup"
+            >
+              <ScoreExplanation move={latest} />
+            </Modal>
+          )}
           {dialog === "help" && (
             <Modal title="Help & settings" close={() => setDialog(null)}>
               {game && (
@@ -3646,6 +3860,64 @@ export default function App() {
                 </section>
               )}
 
+              <section className="device-settings" aria-label="This device">
+                <h3 className="help-section-title">This device</h3>
+                <label className="debug-toggle">
+                  <input
+                    type="checkbox"
+                    data-testid="keep-screen-awake"
+                    checked={screenAwake.enabled}
+                    disabled={!screenAwake.supported}
+                    onChange={(event) =>
+                      void screenAwake.setEnabled(event.target.checked)
+                    }
+                  />{" "}
+                  Keep screen awake
+                </label>
+                <p className="setup-note" data-testid="screen-awake-status">
+                  {!screenAwake.supported
+                    ? "This browser does not support keeping the screen awake."
+                    : !screenAwake.enabled
+                      ? "Off. Your device uses its usual screen timer."
+                      : game?.status !== "active"
+                        ? "This setting applies while an active game is visible."
+                        : screenAwake.status ||
+                          "Your device may ask for permission to keep the screen awake."}
+                </p>
+                <div className="dialog-actions">
+                  <button
+                    className="secondary-button"
+                    data-testid="check-for-updates"
+                    disabled={appUpdate.checking}
+                    onClick={() => void appUpdate.check()}
+                  >
+                    {appUpdate.checking ? "Checking…" : "Check for updates"}
+                  </button>
+                  {appUpdate.available && (
+                    <button
+                      className="secondary-button"
+                      data-testid="help-apply-update"
+                      disabled={
+                        !!pending ||
+                        busy ||
+                        enrolling ||
+                        !!drag ||
+                        !!settling ||
+                        recallAnimation.active ||
+                        !!wordBusy ||
+                        newGameBusy ||
+                        hasIncomingDecision
+                      }
+                      onClick={() => void appUpdate.apply()}
+                    >
+                      Update app
+                    </button>
+                  )}
+                </div>
+                <p className="setup-note" data-testid="app-update-status">
+                  {appUpdate.error || appUpdate.status}
+                </p>
+              </section>
               <fieldset className="theme-options">
                 <legend>Your table colours</legend>
                 <p>

@@ -1,6 +1,6 @@
 {
   "name": "tea-and-tiles",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -40,7 +40,8 @@
     "typescript": "^5.9.0",
     "vite": "^7.0.0",
     "vite-plugin-pwa": "^1.0.0",
-    "vitest": "^5.0.3"
+    "vitest": "^5.0.3",
+    "workbox-window": "^7.4.1"
   },
   "overrides": {
     "@grpc/grpc-js": "^1.14.0",

@@ -10,7 +10,17 @@ service cloud.firestore {
     }
     function member() {
       return bound() && slot() in ['mom', 'aunt']
-        && get(/databases/$(database)/documents/players/$(slot())).data.uid == request.auth.uid;
+        && validSession(
+          get(/databases/$(database)/documents/bindings/$(request.auth.uid)).data,
+          get(/databases/$(database)/documents/players/$(slot())).data
+        );
+    }
+    function validSession(binding, player) {
+      return player.get('sessionVersion', 0) is int
+        && player.get('sessionVersion', 0) >= 0
+        && (binding.keys().hasAny(['sessionVersion'])
+          ? binding.sessionVersion == player.get('sessionVersion', 0)
+          : player.get('sessionVersion', 0) == 0 && player.uid == request.auth.uid);
     }
     match /bindings/{uid} {
       allow get: if request.auth != null && request.auth.uid == uid;

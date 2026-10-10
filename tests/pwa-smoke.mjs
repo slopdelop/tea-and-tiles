@@ -1,7 +1,7 @@
 import { chromium, expect } from "@playwright/test";
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 const base = "/tea-and-tiles/";
 const env = {
   ...process.env,
@@ -40,6 +40,8 @@ const preview = spawn(
   { stdio: "inherit", env },
 );
 let browser;
+let originalWorker;
+const workerPath = resolve("dist/sw.js");
 try {
   const origin = "http://127.0.0.1:4173";
   let ready = false;
@@ -96,6 +98,43 @@ try {
       async () => (await navigator.serviceWorker.getRegistration())?.scope,
     ),
   ).toBe(origin + base);
+  // A changed worker must wait for a player's explicit update action. The
+  // harmless marker simulates a newly published build without cloud access.
+  originalWorker = readFileSync(workerPath, "utf8");
+  writeFileSync(
+    workerPath,
+    originalWorker + "\n// update-regression-" + Date.now() + "\n",
+  );
+  await page.evaluate(async () => {
+    const registration = await navigator.serviceWorker.getRegistration();
+    await registration.update();
+  });
+  await expect(page.getByTestId("app-update-banner")).toBeVisible({
+    timeout: 20000,
+  });
+  expect(
+    await page.evaluate(
+      async () => !!(await navigator.serviceWorker.getRegistration())?.waiting,
+    ),
+  ).toBe(true);
+  // Update availability itself must not interrupt the open page.
+  await page.waitForTimeout(500);
+  await expect(page.getByTestId("app-update-banner")).toBeVisible();
+  await Promise.all([
+    page.waitForEvent("framenavigated", {
+      predicate: (frame) => frame === page.mainFrame(),
+    }),
+    page.getByRole("button", { name: "Update app", exact: true }).click(),
+  ]);
+  await expect(page.getByTestId("app-update-banner")).toHaveCount(0);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        async () =>
+          !!(await navigator.serviceWorker.getRegistration())?.waiting,
+      ),
+    )
+    .toBe(false);
   await page.evaluate(async () => {
     await document.fonts.ready;
   });
@@ -144,10 +183,11 @@ try {
     fullPage: true,
   });
   console.log(
-    "PASS: repository subpath, manifest/icons, scoped service worker, local fonts and base word list, static-only cache and offline app shell.",
+    "PASS: repository subpath, manifest/icons, scoped service worker, explicit update notice/reload, local fonts and base word list, static-only cache and offline app shell.",
   );
   await context.close();
 } finally {
+  if (originalWorker) writeFileSync(workerPath, originalWorker);
   if (browser) await browser.close();
   preview.kill();
 }

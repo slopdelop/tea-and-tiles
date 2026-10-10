@@ -9,6 +9,8 @@ import {
 import { initializeApp, deleteApp } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 import { createHash, randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { createCredential } from "../functions/player-login";
 import {
   applyCommand,
   createGame,
@@ -29,6 +31,9 @@ if (
   );
 const admin = initializeApp({ projectId }, "isolated-ui-tests");
 const db = getFirestore(admin);
+const packageInfo = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+) as { version: string };
 let code = "";
 let tiles: Tile[] = [];
 let expectedBoardKeys = ["0,0"];
@@ -44,6 +49,7 @@ const themes = [
   "ink",
   "midnight",
   "terracotta",
+  "blue-ink",
 ] as const;
 const darkThemes = new Set<string>(["ink", "midnight"]);
 
@@ -58,6 +64,8 @@ test.beforeEach(async () => {
     "bindings",
     "setupCodes",
     "enrollmentAttempts",
+    "playerCredentials",
+    "loginAttempts",
   ])
     await db.recursiveDelete(db.collection(collection));
   const game = createGame("ui-table", () => 0.42);
@@ -111,8 +119,14 @@ test.afterAll(async () => {
   await deleteApp(admin);
 });
 
+async function openInvitationForm(page: Page) {
+  if (!(await page.getByTestId("setup-code").isVisible()))
+    await page.getByTestId("welcome-join").click();
+  await expect(page.getByTestId("setup-code")).toBeVisible();
+}
 async function enroll(page: Page, expectedRackCount = 7) {
   await page.goto("/");
+  await openInvitationForm(page);
   await page.getByTestId("setup-code").fill(code.toLowerCase());
   await page.getByTestId("enroll-submit").click();
   await expect(page.getByTestId("game-board")).toBeVisible({ timeout: 45_000 });
@@ -137,6 +151,7 @@ async function joinRita(browser: Browser, expectedRackCount = 7) {
   try {
     const aunt = await auntContext.newPage();
     await aunt.goto("/");
+    await openInvitationForm(aunt);
     await aunt.getByTestId("setup-code").fill("peach");
     await aunt.getByTestId("enroll-submit").click();
     await expect(aunt.getByTestId("game-board")).toBeVisible({
@@ -525,7 +540,9 @@ test("tablet landscape expands the board to the top and exposes the build versio
   }
   await page.getByTestId("help-settings").click();
   await expect(page.getByTestId("app-version")).toHaveText(
-    /^Version 0\.1\.4 · (?:[a-f0-9]{7}|local)$/,
+    new RegExp(
+      `^Version ${packageInfo.version.replaceAll(".", "\\.")} · (?:[a-f0-9]{7}|local)$`,
+    ),
   );
   await page.getByRole("button", { name: "Close dialog" }).click();
   await page.setViewportSize({ width: 820, height: 1180 });
@@ -979,7 +996,7 @@ test("Recall handles a full empty hand, interruptions, and reduced motion withou
   await expect(page.getByTestId("shuffle-rack")).toBeEnabled();
 });
 
-test("latest plays bloom green, settle faintly, and clear on the next turn without replaying on reload", async ({
+test("latest plays stay strong until the actual turn announcement exits, fade for five seconds and do not replay on reload", async ({
   page,
 }, info) => {
   await enroll(page);
@@ -1001,19 +1018,45 @@ test("latest plays bloom green, settle faintly, and clear on the next turn witho
   await writeFixture(next);
   const played = cell(page, 0, 1).locator(".board-tile");
   await expect(played).toHaveClass(/latest-play-tile/);
-  await expect(played).toHaveClass(/fresh-play-tile/);
+  await expect(played).toHaveClass(/held-play-tile/);
   const glow = () =>
     played.evaluate((element) =>
       Number(getComputedStyle(element, "::before").opacity),
     );
   await expect.poll(glow, { intervals: [30, 50, 100] }).toBeGreaterThan(0.2);
   const fresh = await glow();
+  expect(
+    await cell(page, 0, 1).evaluate(
+      (element) => element.getAnimations().length,
+    ),
+  ).toBe(0);
+  // A deferred announcement must keep the last word vivid, not start a timer
+  // merely because a turn was accepted.
+  await page.getByTestId("help-settings").click();
+  await page.waitForTimeout(5200);
+  expect(await glow()).toBeGreaterThan(0.9);
+  await page.getByRole("button", { name: "Close dialog" }).click();
+  await expect(page.getByTestId("turn-announcement")).toBeVisible();
+  expect(await glow()).toBeGreaterThan(0.9);
+  await page.getByTestId("help-settings").click();
+  await expect(page.getByTestId("turn-announcement")).toHaveCount(0);
+  await page.waitForTimeout(700);
+  expect(await glow()).toBeGreaterThan(0.9);
+  expect(
+    await cell(page, 0, 1).evaluate(
+      (element) => element.getAnimations().length,
+    ),
+  ).toBe(0);
+  await page.getByRole("button", { name: "Close dialog" }).click();
+  await expect(page.getByTestId("turn-announcement")).toBeVisible();
+  await expect(page.getByTestId("turn-announcement")).toHaveCount(0);
+  const fadeStarted = Date.now();
   const scaleAnimation = await cell(page, 0, 1).evaluate((element) => {
     const animations = element.getAnimations();
     return animations.some((animation) => {
       const frames = (animation.effect as KeyframeEffect).getKeyframes();
       return (
-        frames.some((frame) => String(frame.transform).includes("1.08")) &&
+        frames.some((frame) => String(frame.transform).includes("1.16")) &&
         frames.some((frame) => String(frame.transform).includes("scale(1)"))
       );
     });
@@ -1023,7 +1066,9 @@ test("latest plays bloom green, settle faintly, and clear on the next turn witho
     path: info.outputPath("latest-play-fresh-green.png"),
     fullPage: false,
   });
-  await expect.poll(glow).toBeLessThan(fresh / 2);
+  await expect.poll(glow, { timeout: 6500 }).toBeLessThan(fresh / 2);
+  await expect(played).not.toHaveClass(/fresh-play-tile/, { timeout: 6500 });
+  expect(Date.now() - fadeStarted).toBeGreaterThanOrEqual(4700);
   const faint = await glow();
   expect(faint).toBeGreaterThan(0);
   await expect(played).toHaveClass(/latest-play-tile/);
@@ -1368,7 +1413,7 @@ test("themes stay readable in tablet layouts, persist per device and leave a pri
       ).toBe(true);
       await page.screenshot({
         path: info.outputPath(`theme-${theme}-${width}x${height}.png`),
-        fullPage: true,
+        fullPage: false,
       });
       const reservedSpace = page.locator(".facetime-space");
       const reservedBefore = await reservedSpace.boundingBox();
@@ -1415,6 +1460,7 @@ test("themes stay readable in tablet layouts, persist per device and leave a pri
   try {
     const aunt = await auntContext.newPage();
     await aunt.goto("/");
+    await openInvitationForm(aunt);
     await aunt.getByTestId("setup-code").fill("peach");
     await aunt.getByTestId("enroll-submit").click();
     await expect(aunt.getByTestId("game-board")).toBeVisible({
@@ -1602,13 +1648,11 @@ test("touch drag follows finger, cancels safely, returns to rack and keeps tap p
   await expect(page.getByTestId("drag-ghost")).toBeVisible();
   const ghost = (await page.getByTestId("drag-ghost").boundingBox())!;
   const square = (await cell(page, 7, 7).boundingBox())!;
-  expect(Math.abs(ghost.width - square.width * 1.1)).toBeLessThan(1);
-  expect(ghost.width).toBeLessThan(box.width);
+  expect(Math.abs(ghost.width - square.width * 1.35)).toBeLessThan(1);
+  expect(Math.abs(ghost.height - square.width * 1.35)).toBeLessThan(1);
   expect(Math.abs(ghost.x + ghost.width / 2 - target.x)).toBeLessThan(2);
-  expect(Math.abs(ghost.y + ghost.height - (target.y - 22))).toBeLessThan(2);
-  const anchor = (await page.getByTestId("drag-anchor").boundingBox())!;
-  expect(Math.abs(anchor.x + anchor.width / 2 - target.x)).toBeLessThan(2);
-  expect(Math.abs(anchor.y + anchor.height / 2 - target.y)).toBeLessThan(2);
+  expect(Math.abs(ghost.y + ghost.height / 2 - target.y)).toBeLessThan(2);
+  await expect(page.getByTestId("drag-anchor")).toHaveCount(0);
   await expect(cell(page, 7, 7).getByTestId("landing-preview")).toBeVisible();
   await expect(cell(page, 7, 7)).not.toHaveClass(/has-tentative/);
   await expect(page.getByTestId("drag-ghost")).toHaveCSS(
@@ -1746,7 +1790,9 @@ test("explicit zoom keeps actions accessible, drag targets accurate and scroll s
   await expect(cell(page, 7, 7)).not.toHaveClass(/has-tentative/);
   const ghost = (await page.getByTestId("drag-ghost").boundingBox())!;
   expect(
-    Math.abs(ghost.width - (await cell(page, 7, 7).boundingBox())!.width * 1.1),
+    Math.abs(
+      ghost.width - (await cell(page, 7, 7).boundingBox())!.width * 1.35,
+    ),
   ).toBeLessThan(1);
   await page.mouse.move(target.x, target.y);
   await page.mouse.wheel(0, 140);
@@ -2941,6 +2987,7 @@ test("private word consent survives reload and decline, requires the other playe
   try {
     const aunt = await auntContext.newPage();
     await aunt.goto("/");
+    await openInvitationForm(aunt);
     await aunt.getByTestId("setup-code").fill("peach");
     await aunt.getByTestId("enroll-submit").click();
     await expect(aunt.getByTestId("game-board")).toBeVisible({
@@ -3518,6 +3565,21 @@ test("six actual scoreless turns finish on both devices only after the final war
         expect(current.endedReason).toBeUndefined();
         for (const target of [page, aunt])
           await expect(target.getByTestId("game-result")).toHaveCount(0);
+        if (turn === 4 || turn === 5) {
+          for (const target of [page, aunt]) {
+            await expect(target.getByTestId("scoreless-notice")).toHaveText(
+              turn === 4
+                ? "Two more turns without points end this game. A scoring play resets the count."
+                : "One more scoreless turn ends this game.",
+            );
+            await expect(target.getByTestId("pass-turn")).toHaveAccessibleName(
+              turn === 5 ? "Pass & end game" : "Pass turn",
+            );
+          }
+          await expect(
+            (turn === 4 ? page : aunt).getByTestId("pass-turn"),
+          ).toBeEnabled();
+        }
       }
     }
     const ended = (await db.doc("games/ui-table").get()).data()!;
@@ -3651,6 +3713,26 @@ test("actual last tile with an empty bag ends both devices, transfers leftover p
       await expect(target.getByTestId("score-aunt")).toHaveText("15");
       await expect(target.getByTestId("result-score-mom")).toHaveText("32");
       await expect(target.getByTestId("result-score-aunt")).toHaveText("15");
+      const summary = target.getByTestId("game-summary");
+      await expect(summary).toBeVisible();
+      await expect(
+        summary.getByTestId("history-mom").locator("li"),
+      ).toHaveCount(1);
+      await expect(
+        summary.getByTestId("history-mom").locator("li .history-word-scores"),
+      ).toHaveText("AT 2 points");
+      await expect(
+        summary.getByTestId("history-mom").getByLabel("Turn total 2"),
+      ).toHaveText("+2");
+      await expect(summary.getByTestId("history-aunt")).toContainText(
+        "No recorded turns",
+      );
+      await expect(
+        summary.getByTestId("adjustments-mom").locator("dd"),
+      ).toHaveText(["22", "0", "0", "+10", "32"]);
+      await expect(
+        summary.getByTestId("adjustments-aunt").locator("dd"),
+      ).toHaveText(["25", "10", "−10", "15"]);
       await expect(target.getByTestId("move-celebration")).toHaveCount(0);
       await expect(target.locator(".has-tentative")).toHaveCount(0);
       await expect(target.getByTestId("turn-announcement")).toHaveCount(0);
@@ -3677,7 +3759,12 @@ test("actual last tile with an empty bag ends both devices, transfers leftover p
     expect(ended.endedAt).toBe(ended.lastMove.at);
     await page.screenshot({
       path: info.outputPath("rack-out-ending-landscape.png"),
-      fullPage: true,
+      fullPage: false,
+    });
+    await page.getByTestId("game-summary").scrollIntoViewIfNeeded();
+    await page.screenshot({
+      path: info.outputPath("rack-out-summary-landscape.png"),
+      fullPage: false,
     });
     for (const target of [page, aunt]) {
       await target.reload();
@@ -3868,6 +3955,7 @@ test("timer switches from minutes to seconds and local debug celebrations never 
 
 test("a real high-scoring right-edge move keeps its celebration and stars inside the board", async ({
   page,
+  browser,
 }, info) => {
   const pool = [
     ...fixtureGame.bag,
@@ -3890,73 +3978,121 @@ test("a real high-scoring right-edge move keeps its celebration and stars inside
     bag: pool,
   });
   await enroll(page);
-  for (const [index, letter] of [..."UARTZ"].entries()) {
-    await rack(page, letter).tap();
-    await cell(page, 14, 10 + index).tap();
+  const { aunt: recipient, auntContext: recipientContext } =
+    await joinRita(browser);
+  try {
+    for (const [index, letter] of [..."UARTZ"].entries()) {
+      await rack(page, letter).tap();
+      await cell(page, 14, 10 + index).tap();
+    }
+    await expect(page.getByTestId("word-check")).toHaveAttribute(
+      "data-state",
+      "recognized",
+    );
+    await expect(page.getByTestId("play-word")).toBeEnabled();
+    expectedRevision = 1;
+    expectedCommandCount = 1;
+    expectedBoardKeys = [9, 10, 11, 12, 13, 14].map((col) => `14,${col}`);
+    await page.getByTestId("play-word").click();
+    const actual = page.getByTestId("move-celebration");
+    await expect(actual).toBeVisible();
+    await expect(actual).toHaveAttribute("data-band", "high");
+    await expect(actual.getByTestId("celebration-starburst")).toBeVisible();
+    await expect
+      .poll(async () =>
+        Number(
+          await actual
+            .locator("..")
+            .evaluate((element) => getComputedStyle(element).opacity),
+        ),
+      )
+      .toBeGreaterThan(0.8);
+    await expect(actual).toHaveCSS("transform", "none");
+    await expect(actual.locator(".score-total")).toHaveCSS("opacity", "1");
+    const bounds = await actual.evaluate((element) => {
+      const card = element.getBoundingClientRect();
+      const stars = element.querySelector("svg")!.getBoundingClientRect();
+      const board = document
+        .querySelector('[data-testid="game-board"]')!
+        .getBoundingClientRect();
+      return {
+        card: {
+          left: card.left,
+          right: card.right,
+          top: card.top,
+          bottom: card.bottom,
+        },
+        stars: {
+          left: stars.left,
+          right: stars.right,
+          top: stars.top,
+          bottom: stars.bottom,
+        },
+        board: {
+          left: board.left,
+          right: board.right,
+          top: board.top,
+          bottom: board.bottom,
+        },
+      };
+    });
+    for (const rect of [bounds.card, bounds.stars]) {
+      expect(rect.left).toBeGreaterThanOrEqual(bounds.board.left);
+      expect(rect.right).toBeLessThanOrEqual(bounds.board.right);
+      expect(rect.top).toBeGreaterThanOrEqual(bounds.board.top);
+      expect(rect.bottom).toBeLessThanOrEqual(bounds.board.bottom);
+    }
+    const game = (await db.doc("games/ui-table").get()).data()!;
+    expect(game.lastMove.words).toEqual(["QUARTZ"]);
+    expect(game.lastMove.score).toBe(75);
+    expect(game.scores.mom).toBe(game.lastMove.score);
+    for (const view of [page, recipient]) {
+      const score = view
+        .getByTestId("move-celebration")
+        .getByTestId("score-breakdown");
+      await expect(score.locator(".scored-word-tiles")).toHaveAccessibleName(
+        "QUARTZ",
+      );
+      await expect(score.locator(".tile-letter")).toHaveText([..."QUARTZ"]);
+      await expect(score.locator(".score-equation")).toHaveText(
+        /\(10 \+ 1 \+ 1×2 \+ 1 \+ 1 \+ 10\)\s*× 3 \(TW\)\s*= 75/,
+      );
+      await expect(score.locator(".score-total")).toHaveText("Total 75");
+      await expect(
+        score.locator('[aria-label="A, 1 points, DL: 2 points"]'),
+      ).toHaveCount(1);
+    }
+    await expect(actual.locator(".score-total")).toHaveCSS("opacity", "1");
+    await page.screenshot({
+      path: info.outputPath("actual-high-score-right-edge.png"),
+      fullPage: false,
+    });
+    await expect(page.getByTestId("move-celebration")).toHaveCount(0);
+    await expect(recipient.getByTestId("move-celebration")).toHaveCount(0);
+    for (const view of [page, recipient]) {
+      await view.getByTestId("score-details").click();
+      const popup = view.getByTestId("score-details-popup");
+      await expect(popup).toBeVisible();
+      await expect(popup).toHaveCSS("opacity", "1");
+      await expect(popup).toHaveCSS("transform", "none");
+      await expect(
+        popup.getByTestId("score-breakdown").locator(".score-total"),
+      ).toHaveText("Total 75");
+      await expect(popup.locator(".tile-letter")).toHaveText([..."QUARTZ"]);
+      if (view === page)
+        await view.screenshot({
+          path: info.outputPath("authoritative-score-details.png"),
+          fullPage: false,
+        });
+      await popup.getByRole("button", { name: "Close dialog" }).click();
+    }
+    expect((await db.collection("games/ui-table/commands").get()).size).toBe(1);
+    expect((await db.doc("games/ui-table").get()).data()?.history).toHaveLength(
+      1,
+    );
+  } finally {
+    await recipientContext.close();
   }
-  await expect(page.getByTestId("word-check")).toHaveAttribute(
-    "data-state",
-    "recognized",
-  );
-  await expect(page.getByTestId("play-word")).toBeEnabled();
-  expectedRevision = 1;
-  expectedCommandCount = 1;
-  expectedBoardKeys = [9, 10, 11, 12, 13, 14].map((col) => `14,${col}`);
-  await page.getByTestId("play-word").click();
-  const actual = page.getByTestId("move-celebration");
-  await expect(actual).toBeVisible();
-  await expect(actual).toHaveAttribute("data-band", "high");
-  await expect(actual.getByTestId("celebration-starburst")).toBeVisible();
-  await expect
-    .poll(async () =>
-      Number(
-        await actual
-          .locator("..")
-          .evaluate((element) => getComputedStyle(element).opacity),
-      ),
-    )
-    .toBeGreaterThan(0.8);
-  const bounds = await actual.evaluate((element) => {
-    const card = element.getBoundingClientRect();
-    const stars = element.querySelector("svg")!.getBoundingClientRect();
-    const board = document
-      .querySelector('[data-testid="game-board"]')!
-      .getBoundingClientRect();
-    return {
-      card: {
-        left: card.left,
-        right: card.right,
-        top: card.top,
-        bottom: card.bottom,
-      },
-      stars: {
-        left: stars.left,
-        right: stars.right,
-        top: stars.top,
-        bottom: stars.bottom,
-      },
-      board: {
-        left: board.left,
-        right: board.right,
-        top: board.top,
-        bottom: board.bottom,
-      },
-    };
-  });
-  for (const rect of [bounds.card, bounds.stars]) {
-    expect(rect.left).toBeGreaterThanOrEqual(bounds.board.left);
-    expect(rect.right).toBeLessThanOrEqual(bounds.board.right);
-    expect(rect.top).toBeGreaterThanOrEqual(bounds.board.top);
-    expect(rect.bottom).toBeLessThanOrEqual(bounds.board.bottom);
-  }
-  const game = (await db.doc("games/ui-table").get()).data()!;
-  expect(game.lastMove.words).toEqual(["QUARTZ"]);
-  expect(game.lastMove.score).toBeGreaterThanOrEqual(40);
-  expect(game.scores.mom).toBe(game.lastMove.score);
-  await page.screenshot({
-    path: info.outputPath("actual-high-score-right-edge.png"),
-    fullPage: true,
-  });
 });
 
 test("timed game duration validates and its request dialog stays centered with reachable controls in every theme", async ({
@@ -4099,6 +4235,7 @@ test("agreed timed game counts down on both devices, expires once and prevents l
   try {
     const aunt = await context.newPage();
     await aunt.goto("/");
+    await openInvitationForm(aunt);
     await aunt.getByTestId("setup-code").fill("peach");
     await aunt.getByTestId("enroll-submit").click();
     await expect(aunt.getByTestId("game-board")).toBeVisible();
@@ -4260,6 +4397,7 @@ for (const { status, mode, modeName } of [
     try {
       const aunt = await auntContext.newPage();
       await aunt.goto("/");
+      await openInvitationForm(aunt);
       await aunt.getByTestId("setup-code").fill("peach");
       await aunt.getByTestId("enroll-submit").click();
       await expect(aunt.getByTestId("game-board")).toBeVisible({
@@ -4595,6 +4733,7 @@ test("two players get one nonblocking turn announcement per real change, with qu
     const aunt = await auntContext.newPage();
     await observe(aunt, "coastal");
     await aunt.goto("/");
+    await openInvitationForm(aunt);
     await aunt.getByTestId("setup-code").fill("peach");
     await aunt.getByTestId("enroll-submit").click();
     await expect(aunt.getByTestId("game-board")).toBeVisible({
@@ -5189,6 +5328,172 @@ test("a delayed old-turn reply cannot block or overwrite a fresh game's private 
   }
 });
 
+test("private sign-in adds a remembered device without replacing the original player or changing the game", async ({
+  page,
+  browser,
+}, info) => {
+  const password = "maple river sunrise";
+  await db.doc("playerCredentials/mom").set({
+    ...(await createCredential(password)),
+    enabled: true,
+    updatedAt: Date.now(),
+  });
+  await enroll(page);
+  const originalUid = (await db.doc("players/mom").get()).data()!.uid;
+  const gameBefore = (await db.doc("games/ui-table").get()).data();
+  const rackBefore = (await db.doc("games/ui-table/racks/mom").get()).data();
+  const extraContext = await browser.newContext({
+    baseURL: "http://127.0.0.1:5183",
+    viewport: { width: 820, height: 1180 },
+    hasTouch: true,
+  });
+  try {
+    const extra = await extraContext.newPage();
+    await extra.goto("/");
+    await expect(extra.getByTestId("login-player")).toBeVisible();
+    await expect(extra.getByTestId("setup-code")).toHaveCount(0);
+    await extra.getByTestId("login-player").selectOption("mom");
+    await extra.getByTestId("login-password").fill("wrong private phrase");
+    await extra.getByTestId("enroll-submit").click();
+    await expect(extra.getByRole("alert")).toContainText(
+      "player or passphrase is not correct",
+    );
+    expect((await db.collection("bindings").get()).size).toBe(1);
+    await extra.getByTestId("login-password").fill("MAPLE-RIVER-SUNRISE");
+    await extra.getByTestId("enroll-submit").click();
+    await expect(extra.getByTestId("game-board")).toBeVisible();
+    await expect(extra.getByTestId("turn-status")).toHaveText("Your turn");
+    await expect(page.getByTestId("turn-status")).toHaveText("Your turn");
+    expect((await db.doc("players/mom").get()).data()!.uid).toBe(originalUid);
+    const bindings = await db.collection("bindings").get();
+    expect(bindings.size).toBe(2);
+    expect(bindings.docs.every((entry) => entry.data().slot === "mom")).toBe(
+      true,
+    );
+    await extra.reload();
+    await expect(extra.getByTestId("game-board")).toBeVisible();
+    await expect(extra.getByTestId("login-password")).toHaveCount(0);
+    expect((await db.collection("bindings").get()).size).toBe(2);
+    expect((await db.doc("games/ui-table").get()).data()).toEqual(gameBefore);
+    expect((await db.doc("games/ui-table/racks/mom").get()).data()).toEqual(
+      rackBefore,
+    );
+    expect(
+      await extra.evaluate(
+        (password) =>
+          Object.values(localStorage).some((value) => value.includes(password)),
+        password,
+      ),
+    ).toBe(false);
+    await extra.screenshot({
+      path: info.outputPath("reusable-login-second-device.png"),
+      fullPage: true,
+    });
+  } finally {
+    await extraContext.close();
+  }
+});
+
+test("screen awake handles device refusal and reacquires only while visible without changing the game", async ({
+  page,
+}, info) => {
+  await page.addInitScript(() => {
+    const state = { allow: false, hidden: false, requests: 0, releases: 0 };
+    (window as unknown as { awakeTest: typeof state }).awakeTest = state;
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      get: () => state.hidden,
+    });
+    Object.defineProperty(navigator, "wakeLock", {
+      configurable: true,
+      value: {
+        async request(type: string) {
+          if (type !== "screen") throw new Error("Unexpected lock type");
+          state.requests++;
+          if (!state.allow)
+            throw new DOMException("Device refused", "NotAllowedError");
+          const lock = new EventTarget() as EventTarget & {
+            released: boolean;
+            release(): Promise<void>;
+          };
+          lock.released = false;
+          lock.release = async () => {
+            if (!lock.released) {
+              lock.released = true;
+              state.releases++;
+              lock.dispatchEvent(new Event("release"));
+            }
+          };
+          return lock;
+        },
+      },
+    });
+  });
+  await enroll(page);
+  await page.getByTestId("help-settings").click();
+  const toggle = page.getByTestId("keep-screen-awake");
+  await expect(toggle).not.toBeChecked();
+  await toggle.check();
+  await expect(page.getByTestId("screen-awake-status")).toContainText(
+    /couldn’t keep.*awake/i,
+  );
+  const state = () =>
+    page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            awakeTest: { requests: number; releases: number };
+          }
+        ).awakeTest,
+    );
+  const refused = await state();
+  await page.evaluate(() => {
+    (window as unknown as { awakeTest: { allow: boolean } }).awakeTest.allow =
+      true;
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await expect(page.getByTestId("screen-awake-status")).toContainText(
+    "Screen stays awake",
+  );
+  expect((await state()).requests).toBeGreaterThan(refused.requests);
+  await page.evaluate(() => {
+    (window as unknown as { awakeTest: { hidden: boolean } }).awakeTest.hidden =
+      true;
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await expect.poll(async () => (await state()).releases).toBeGreaterThan(0);
+  const hiddenRequests = (await state()).requests;
+  await page.evaluate(() =>
+    document.dispatchEvent(new Event("visibilitychange")),
+  );
+  expect((await state()).requests).toBe(hiddenRequests);
+  await page.evaluate(() => {
+    (window as unknown as { awakeTest: { hidden: boolean } }).awakeTest.hidden =
+      false;
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await expect(page.getByTestId("screen-awake-status")).toContainText(
+    "Screen stays awake",
+  );
+  await page.getByTestId("check-for-updates").click();
+  await expect(page.getByTestId("app-update-status")).toContainText(
+    "Updates are available on the published app",
+  );
+  await page.screenshot({
+    path: info.outputPath("device-awake-settings.png"),
+    fullPage: false,
+  });
+  await toggle.uncheck();
+  expect(
+    await page.evaluate(() => localStorage.getItem("tea-and-tiles:keep-awake")),
+  ).toBe("false");
+  await page.getByRole("button", { name: "Close dialog" }).click();
+  await page.reload();
+  await expect(page.getByTestId("game-board")).toBeVisible();
+  await page.getByTestId("help-settings").click();
+  await expect(page.getByTestId("keep-screen-awake")).not.toBeChecked();
+});
+
 test("private invitation prefills and scrubs its fragment, joins only explicitly, resumes identity and accepts legacy setup", async ({
   page,
   browser,
@@ -5231,6 +5536,7 @@ test("private invitation prefills and scrubs its fragment, joins only explicitly
   try {
     const aunt = await legacyContext.newPage();
     await aunt.goto("/");
+    await openInvitationForm(aunt);
     await aunt.getByTestId("setup-code").fill(legacy);
     await aunt.getByTestId("enroll-submit").click();
     await expect(aunt.getByTestId("game-board")).toBeVisible({

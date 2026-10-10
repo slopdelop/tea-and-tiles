@@ -146,7 +146,80 @@ async function issueCode(slot) {
   joinUrl.hash = `setup=${readable}`;
   console.log(`Join link: ${joinUrl.href}`);
   console.log(
-    `Send ${playerName} the private join link, or enter this invitation word inside the installed Home Screen app. It is a one-time setup ticket, not a password. Tapping Join connects this player and replaces her previous device; issuing the word leaves her current device connected.`,
+    `Send ${playerName} the private join link, or enter this invitation word inside the installed Home Screen app. It is a one-time setup ticket, not a password. Tapping Join connects this player and replaces her previous invitation-linked device; reusable sign-in sessions stay connected. Issuing the word leaves all current devices connected.`,
+  );
+}
+async function resolvePlayer() {
+  const requested = option("player");
+  if (!requested)
+    throw new Error("Provide --player Elizabeth|Rita (or mom|aunt).");
+  const pair = (await db.doc("pairs/family").get()).data();
+  if (!pair) throw new Error("Run prepare first.");
+  const names = pair.names || defaultNames;
+  const matches = slots.filter(
+    (slot) =>
+      requested.toLowerCase() === slot ||
+      requested.trim().toLowerCase() === names[slot]?.toLowerCase(),
+  );
+  if (matches.length !== 1)
+    throw new Error("Choose one configured player by name, or use mom|aunt.");
+  return {
+    slot: matches[0],
+    name: names[matches[0]] || defaultNames[matches[0]],
+  };
+}
+async function issueLogin() {
+  const { slot, name } = await resolvePlayer();
+  const player = await db.doc(`players/${slot}`).get();
+  if (!player.exists) throw new Error("Run prepare first.");
+  const [{ SETUP_WORDS }, { createCredential }] = await Promise.all([
+    import("../functions/lib/functions/setup-words.js"),
+    import("../functions/lib/functions/player-login.js"),
+  ]);
+  const alphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
+  const passphrase = [
+    ...Array.from({ length: 3 }, () =>
+      SETUP_WORDS[randomInt(SETUP_WORDS.length)].toLowerCase(),
+    ),
+    Array.from({ length: 4 }, () => alphabet[randomInt(alphabet.length)]).join(
+      "",
+    ),
+  ].join(" ");
+  const credential = await createCredential(passphrase);
+  const batch = db.batch();
+  batch.set(db.doc(`playerCredentials/${slot}`), {
+    ...credential,
+    enabled: true,
+    updatedAt: Date.now(),
+  });
+  batch.delete(db.doc(`loginAttempts/${slot}`));
+  if (player.data()?.uid)
+    batch.delete(db.doc(`enrollmentAttempts/${hash(player.data().uid)}`));
+  await batch.commit();
+  console.log(`${name} (${slot}) private passphrase: ${passphrase}`);
+  console.log(
+    "Keep this private. It signs in the same player on additional devices and does not expire. Existing signed-in devices stay connected; issuing it again replaces only the passphrase. Use revoke-login to revoke every session for this player.",
+  );
+}
+async function revokeLogin() {
+  const { slot, name } = await resolvePlayer();
+  await db.runTransaction(async (tx) => {
+    const ref = db.doc(`players/${slot}`);
+    const player = await tx.get(ref);
+    const bindings = await tx.get(
+      db.collection("bindings").where("slot", "==", slot),
+    );
+    if (!player.exists) throw new Error("Run prepare first.");
+    tx.update(ref, { sessionVersion: (player.data().sessionVersion ?? 0) + 1 });
+    tx.set(
+      db.doc(`playerCredentials/${slot}`),
+      { enabled: false, revokedAt: Date.now() },
+      { merge: true },
+    );
+    for (const binding of bindings.docs) tx.delete(binding.ref);
+  });
+  console.log(
+    `${name}'s reusable sign-in is revoked and all her sessions are disconnected. Issue a new login or invitation to reconnect her.`,
   );
 }
 async function prepare() {
@@ -223,6 +296,8 @@ export async function run() {
   if (command === "prepare") await prepare();
   else if (command === "reset") await reset();
   else if (command === "issue-code") await issueCode(option("slot"));
+  else if (command === "issue-login") await issueLogin();
+  else if (command === "revoke-login") await revokeLogin();
   else if (command === "fixture") await fixture();
   else if (command === "names") {
     const names = {
@@ -240,7 +315,7 @@ export async function run() {
     await db.doc("pairs/family").update({ names });
   } else
     throw new Error(
-      "Usage: node scripts/admin.mjs prepare|reset|issue-code|fixture|names --project ID [--slot mom|aunt] [--app-url URL] [--cloud]",
+      "Usage: node scripts/admin.mjs prepare|reset|issue-code|issue-login|revoke-login|fixture|names --project ID [--slot mom|aunt] [--player Elizabeth|Rita] [--app-url URL] [--cloud]",
     );
 }
 if (

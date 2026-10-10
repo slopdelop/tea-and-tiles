@@ -82,6 +82,7 @@ async function seedFixture() {
 
 async function enroll(page: Page, slot: Slot) {
   await page.goto("/");
+  await page.getByTestId("welcome-join").click();
   await page.getByTestId("setup-code").fill(codes[slot]);
   await page.getByTestId("enroll-submit").click();
   await expect(page.getByTestId("board-cell-7-7")).toBeVisible({

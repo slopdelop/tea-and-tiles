@@ -22,7 +22,7 @@ Cloud Functions now require valid App Check tokens. Complete this before cloud p
 3. Save the public site key as `VITE_APP_CHECK_SITE_KEY` in GitHub variables below. The client obtains/refreshes tokens automatically; the usual player flow has no puzzle.
 4. After the first browser/iPad test, inspect App Check metrics for valid **Cloud Firestore** requests, then enable Firestore enforcement before the family starts using it. Functions enforcement already comes from the deployed code; database rules always apply.
 
-App Check reduces automated misuse; membership still requires a private invitation. It is not a perfect abuse barrier. See [official Web setup](https://firebase.google.com/docs/app-check/web/recaptcha-enterprise-provider) and [callable enforcement](https://firebase.google.com/docs/app-check/cloud-functions).
+App Check reduces automated misuse; membership still requires a private invitation or reusable player passphrase. It is not a perfect abuse barrier. See [official Web setup](https://firebase.google.com/docs/app-check/web/recaptcha-enterprise-provider) and [callable enforcement](https://firebase.google.com/docs/app-check/cloud-functions).
 
 ## 3. Add spending safeguards
 
@@ -66,7 +66,7 @@ npx firebase deploy --project YOUR_PROJECT_ID --only functions:tea-and-tiles,fir
 
 Replace `YOUR_PROJECT_ID` with the exact dedicated project ID. Review that target before cloud commands. If Google requests an ADC quota project, run `gcloud auth application-default set-quota-project YOUR_PROJECT_ID`. Do not download service-account keys into the repository.
 
-This deploys all seven callables: enrollment, turn submission, word request/response, new-game request/response and timed-game completion. Initial deployment may prompt to enable APIs or grant deployment permissions.
+This deploys all eight callables: reusable sign-in, enrollment, turn submission, word request/response, new-game request/response and timed-game completion. Initial deployment may prompt to enable APIs or grant deployment permissions.
 
 Once the website and backend are available, run the local administrator tool:
 
@@ -74,7 +74,22 @@ Once the website and backend are available, run the local administrator tool:
 node scripts/admin.mjs prepare --project YOUR_PROJECT_ID --cloud --app-url https://OWNER.github.io/REPOSITORY/
 ```
 
-The tool runs on your computer with administrator credentials; it is not bundled into the website. It prints separate private links/short words for **Elizabeth** and **Rita**. Words are single-use and expire after 24 hours. A joined device remains signed in after expiration. Reissuing preserves the game and transfers the seat only when the replacement device joins.
+The tool runs on your computer with administrator credentials; it is not bundled into the website. It prints separate private invitation links/short words for **Elizabeth** and **Rita**. For reusable sign-in across devices, issue each player's private passphrase:
+
+```powershell
+node scripts/admin.mjs issue-login --project YOUR_PROJECT_ID --cloud --player Elizabeth
+node scripts/admin.mjs issue-login --project YOUR_PROJECT_ID --cloud --player Rita
+```
+
+Choose the matching name in the installed app and enter its passphrase. It has three random familiar words plus four random characters; capitalization and spaces/hyphens are interchangeable. The server stores a salted scrypt digest, never the passphrase. It has no automatic expiry, and a player can keep multiple devices signed in. Existing invitation-linked devices remain connected. Reissuing replaces future sign-in credentials but keeps current sessions and the game. The passphrase is printed once by the local administrator tool; keep it private and outside Git.
+
+To revoke every session for one player, including older invitation sessions, run the following and then issue a fresh login. This preserves the active game:
+
+```powershell
+node scripts/admin.mjs revoke-login --project YOUR_PROJECT_ID --cloud --player Elizabeth
+```
+
+One-time invitations remain supported. Their unused words expire after 24 hours; joined devices stay signed in after expiry. A replacement invitation replaces the prior invitation-linked device when joined; reusable-login sessions stay connected.
 
 Replacement invitations, run only the needed seat:
 
@@ -87,7 +102,7 @@ node scripts/admin.mjs issue-code --project YOUR_PROJECT_ID --cloud --slot aunt 
 
 ## 6. Test real iPads
 
-On each iPad, open the website in Safari → Share → Add to Home Screen. **Then open the installed Home Screen app and enter the assigned invitation there.** Do not rely on Safari sharing its identity with the installed app.
+On each iPad, open the website in Safari → Share → Add to Home Screen. **Then open the installed Home Screen app, choose your name and enter your private passphrase there** (or redeem an unused invitation). Do not rely on Safari sharing its identity with the installed app.
 
 Confirm correct names, private racks and the same match. Play alternating turns, close/reopen both apps, sleep/reconnect one device, test touch dragging/reordering and approve word/new-game requests from the other device. Check sound, reduced motion and FaceTime placement. Inspect App Check metrics and enable Firestore enforcement as above. Static assets are cached; shared turns require a connection.
 

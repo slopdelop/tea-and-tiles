@@ -1,3 +1,10 @@
+import {
+  scoreAdjustments,
+  type MoveBreakdown,
+  type FinalScoreAdjustments,
+  type ScoreTile,
+  type HistoryRecord,
+} from "./scoring.js";
 export type Slot = "mom" | "aunt";
 export type WinCondition = "classic" | "turn-limit" | "target-score" | "timed";
 export interface Tile {
@@ -24,6 +31,7 @@ export interface MoveRecord {
   words: string[];
   score: number;
   at: number;
+  breakdown?: MoveBreakdown;
 }
 export interface Game {
   id: string;
@@ -52,6 +60,9 @@ export interface Game {
   replacedByGameId?: string;
   replacedAt?: number;
   endedAt?: number;
+  history?: HistoryRecord[];
+  historyComplete?: boolean;
+  finalScoreAdjustments?: FinalScoreAdjustments;
 }
 export interface Command {
   id: string;
@@ -225,6 +236,8 @@ export function createGame(
     scorelessTurns: 0,
     lastMove: null,
     winner: null,
+    history: [],
+    historyComplete: true,
     winCondition,
     turnsPlayed: 0,
     ...(winCondition === "timed"
@@ -241,7 +254,12 @@ export function previewMove(
   rack: Tile[],
   input: Placement[],
   dictionary?: Set<string>,
-): { score: number; words: string[]; placements: PlacedTile[] } {
+): {
+  score: number;
+  words: string[];
+  placements: PlacedTile[];
+  breakdown: MoveBreakdown;
+} {
   if (!Array.isArray(input) || input.length < 1 || input.length > 7)
     fail("placement", "Choose between one and seven tiles.");
   const board = game.board;
@@ -345,24 +363,52 @@ export function previewMove(
       );
   }
   let score = 0;
+  const scoredWords: MoveBreakdown["words"] = [];
   for (const seq of sequences) {
     let sum = 0,
       mult = 1;
+    const scoredTiles: ScoreTile[] = [];
     for (const t of seq) {
       let value = t.value;
-      if (cells.has(key(t.row, t.col))) {
-        const p = premiumAt(t.row, t.col);
-        if (p === "DL") value *= 2;
-        if (p === "TL") value *= 3;
+      let letterMultiplier = 1;
+      const isNew = cells.has(key(t.row, t.col));
+      const p = isNew ? premiumAt(t.row, t.col) : null;
+      if (isNew) {
+        if (p === "DL") letterMultiplier = 2;
+        if (p === "TL") letterMultiplier = 3;
+        value *= letterMultiplier;
         if (p === "DW") mult *= 2;
         if (p === "TW") mult *= 3;
       }
       sum += value;
+      scoredTiles.push({
+        tileId: t.id,
+        letter: t.letter,
+        faceValue: t.value,
+        letterMultiplier,
+        effectivePoints: value,
+        row: t.row,
+        col: t.col,
+        isNew,
+        premium: p,
+      });
     }
     score += sum * mult;
+    scoredWords.push({
+      word: seq.map((t) => t.letter).join(""),
+      tiles: scoredTiles,
+      wordMultiplier: mult,
+      score: sum * mult,
+    });
   }
-  if (placements.length === 7) score += 50;
-  return { score, words, placements };
+  const bingoBonus = placements.length === 7 ? 50 : 0;
+  score += bingoBonus;
+  return {
+    score,
+    words,
+    placements,
+    breakdown: { words: scoredWords, bingoBonus, total: score },
+  };
 }
 function finish(
   game: Game,
@@ -371,18 +417,18 @@ function finish(
   now: number,
   deductRacks = true,
 ) {
-  if (deductRacks) {
-    for (const slot of ["mom", "aunt"] as const)
-      game.scores[slot] -= game.racks[slot].reduce(
-        (sum, t) => sum + t.value,
-        0,
-      );
-    if (out)
-      game.scores[out] += game.racks[other(out)].reduce(
-        (sum, t) => sum + t.value,
-        0,
-      );
-  }
+  const rackValues = {
+    mom: game.racks.mom.reduce((sum, tile) => sum + tile.value, 0),
+    aunt: game.racks.aunt.reduce((sum, tile) => sum + tile.value, 0),
+  };
+  game.finalScoreAdjustments = scoreAdjustments(
+    game.scores,
+    rackValues,
+    reason,
+    deductRacks ? out : null,
+  );
+  for (const slot of ["mom", "aunt"] as const)
+    game.scores[slot] = game.finalScoreAdjustments.players[slot].final;
   game.status = "finished";
   game.endedReason = reason;
   game.endedAt = now;
@@ -447,6 +493,7 @@ export function applyCommand(
   let score = 0,
     words: string[] = [],
     placements: PlacedTile[] = [];
+  let breakdown: MoveBreakdown | undefined;
   if (command.kind === "play") {
     const result = previewMove(
       game,
@@ -455,6 +502,7 @@ export function applyCommand(
       dictionary,
     );
     ({ score, words, placements } = result);
+    breakdown = result.breakdown;
     for (const tile of placements) game.board[key(tile.row, tile.col)] = tile;
     const used = new Set(placements.map((t) => t.id));
     game.racks[slot] = game.racks[slot].filter((t) => !used.has(t.id));
@@ -495,7 +543,40 @@ export function applyCommand(
     words,
     score,
     at: now,
+    ...(breakdown ? { breakdown } : {}),
   };
+  const compact = (
+    move: HistoryRecord & { breakdown?: MoveBreakdown },
+  ): HistoryRecord => ({
+    id: move.id,
+    player: move.player,
+    kind: move.kind,
+    words: move.words,
+    score: move.score,
+    at: move.at,
+    ...(move.breakdown
+      ? {
+          wordScores: move.breakdown.words.map((word) => ({
+            word: word.word,
+            score: word.score,
+          })),
+          bingoBonus: move.breakdown.bingoBonus,
+        }
+      : {
+          ...(move.wordScores ? { wordScores: move.wordScores } : {}),
+          ...(move.bingoBonus !== undefined
+            ? { bingoBonus: move.bingoBonus }
+            : {}),
+        }),
+  });
+  const history = [
+    ...(original.history ?? []).map(compact),
+    compact(game.lastMove),
+  ];
+  game.history = history.slice(-600);
+  game.historyComplete =
+    (original.historyComplete ?? original.revision === 0) &&
+    history.length <= 600;
   // Rack-out remains the standard finish in every mode, including when this
   // accepted move also reaches a score or turn cutoff.
   if (game.bag.length === 0 && game.racks[slot].length === 0)
