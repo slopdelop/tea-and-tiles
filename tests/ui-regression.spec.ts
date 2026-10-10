@@ -237,6 +237,16 @@ async function authoritativeState() {
       : snapshot.data(),
   );
 }
+
+async function expectControlInsideViewport(page: Page, control: Locator) {
+  await expect(control).toBeVisible();
+  const box = (await control.boundingBox())!;
+  const size = page.viewportSize()!;
+  expect(box.x).toBeGreaterThanOrEqual(-0.5);
+  expect(box.y).toBeGreaterThanOrEqual(-0.5);
+  expect(box.x + box.width).toBeLessThanOrEqual(size.width + 0.5);
+  expect(box.y + box.height).toBeLessThanOrEqual(size.height + 0.5);
+}
 const rack = (page: Page, letter: string, index = 0) =>
   page.getByTestId(
     `rack-tile-${tiles.filter((tile) => tile.letter === letter)[index].id}`,
@@ -683,6 +693,135 @@ test("tablet landscape expands the board to the top and exposes the build versio
   await page.getByRole("button", { name: "Close dialog" }).click();
   await page.setViewportSize({ width: 820, height: 1180 });
   await expect(page.locator(".brand")).toBeVisible();
+});
+
+test("tablet fit survives short browser toolbars and foreground restore while Help scrolls independently", async ({
+  page,
+}, info) => {
+  await enroll(page);
+  await expect(page.getByTestId("turn-announcement")).toBeHidden();
+  await rack(page, "A").tap();
+  await cell(page, 0, 1).tap();
+  await rack(page, "T").tap();
+  await cell(page, 0, 2).tap();
+  await expect(page.getByTestId("word-check")).toHaveAttribute(
+    "data-state",
+    "recognized",
+  );
+  const before = await authoritativeState();
+  const gestures = await page.getByTestId("game-board").evaluate((node) => {
+    const first = new Touch({
+      identifier: 1,
+      target: node,
+      clientX: 100,
+      clientY: 100,
+    });
+    const second = new Touch({
+      identifier: 2,
+      target: node,
+      clientX: 160,
+      clientY: 100,
+    });
+    const pinch = new TouchEvent("touchmove", {
+      bubbles: true,
+      cancelable: true,
+      touches: [first, second],
+    });
+    node.dispatchEvent(pinch);
+    const single = new TouchEvent("touchmove", {
+      bubbles: true,
+      cancelable: true,
+      touches: [first],
+    });
+    node.dispatchEvent(single);
+    return { pinch: pinch.defaultPrevented, single: single.defaultPrevented };
+  });
+  expect(gestures).toEqual({ pinch: true, single: false });
+  for (const [width, height] of [
+    [820, 1180],
+    [1024, 768],
+    [1024, 720],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    await expect(page.locator(".tablet-viewport-fit")).toBeVisible();
+    await expect
+      .poll(() => page.evaluate(() => Math.abs(scrollY)))
+      .toBeLessThan(1);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    for (const control of [
+      page.getByTestId("game-board"),
+      page.getByTestId("tile-rack"),
+      page.getByTestId("play-word"),
+      page.getByTestId("help-settings"),
+    ])
+      await expectControlInsideViewport(page, control);
+    await page.screenshot({
+      path: info.outputPath(`tablet-fit-${width}x${height}.png`),
+      fullPage: false,
+    });
+
+    await page.evaluate(() => {
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        value: "hidden",
+      });
+      Object.defineProperty(document, "hidden", {
+        configurable: true,
+        value: true,
+      });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await page.setViewportSize({ width, height: height - 60 });
+    await page.evaluate(() => {
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        value: "visible",
+      });
+      Object.defineProperty(document, "hidden", {
+        configurable: true,
+        value: false,
+      });
+      document.dispatchEvent(new Event("visibilitychange"));
+      window.dispatchEvent(new Event("pageshow"));
+      window.dispatchEvent(new Event("focus"));
+    });
+    await expectControlInsideViewport(page, page.getByTestId("tile-rack"));
+    await expectControlInsideViewport(page, page.getByTestId("play-word"));
+    await expect(cell(page, 0, 1)).toHaveClass(/has-tentative/);
+    await expect(cell(page, 0, 2)).toHaveClass(/has-tentative/);
+  }
+  await page.setViewportSize({ width: 1024, height: 500 });
+  await page.getByTestId("help-settings").click();
+  const help = page.getByRole("dialog", { name: "Help & settings" });
+  await expect(help).toHaveCSS("opacity", "1");
+  await expectControlInsideViewport(page, help);
+  const content = help.locator(".modal-content");
+  expect(
+    await content.evaluate((node) => node.scrollHeight > node.clientHeight),
+  ).toBe(true);
+  const background = await page.evaluate(() => ({ x: scrollX, y: scrollY }));
+  await page.getByTestId("theme-midnight").scrollIntoViewIfNeeded();
+  await expectControlInsideViewport(page, page.getByTestId("theme-midnight"));
+  expect(await content.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
+  expect(await page.evaluate(() => ({ x: scrollX, y: scrollY }))).toEqual(
+    background,
+  );
+  await expectControlInsideViewport(
+    page,
+    help.getByRole("button", { name: "Close dialog" }),
+  );
+  await page.screenshot({
+    path: info.outputPath("tablet-short-viewport-help.png"),
+    fullPage: false,
+  });
+  await help.getByRole("button", { name: "Close dialog" }).click();
+  await page.setViewportSize({ width: 820, height: 1180 });
+  await expectControlInsideViewport(page, page.getByTestId("play-word"));
+  expect(await authoritativeState()).toEqual(before);
 });
 
 test("wooden rack stays the same size as tiles leave and return and bonus legend lives in Help", async ({
@@ -3108,9 +3247,35 @@ test("live dictionary checks include unknown crosswords while waiting and preser
   );
   await expect(page.getByTestId("word-check")).toContainText("QA");
   await expect(page.getByTestId("word-check")).not.toContainText("AT");
+  await expect(page.getByTestId("move-preview")).toHaveClass(
+    /dictionary-unrecognized/,
+  );
+  const unknownFill = await page.getByTestId("move-preview").evaluate((node) =>
+    getComputedStyle(node)
+      .backgroundColor.match(/[\d.]+/g)!
+      .slice(0, 3)
+      .map(Number),
+  );
+  expect(unknownFill[0]).toBeGreaterThan(unknownFill[1]);
+  await checkTextContrast(
+    page,
+    '[data-testid="move-preview"] strong, [data-testid="move-preview"] .preview-score',
+  );
+  const unknownInk = await page.getByTestId("word-check").evaluate((node) =>
+    getComputedStyle(node)
+      .color.match(/[\d.]+/g)!
+      .slice(0, 3)
+      .map(Number),
+  );
+  expect(unknownInk[0]).toBeGreaterThan(unknownInk[1]);
+  await checkTextContrast(page, '[data-testid="word-check"]');
   await expect(page.locator(".invalid-arrangement")).toHaveCount(0);
   await expect(page.getByTestId("play-word")).toBeDisabled();
   await expect(page.getByTestId("ask-about-word")).toBeEnabled();
+  await page.screenshot({
+    path: info.outputPath("unrecognized-preview-red.png"),
+    fullPage: false,
+  });
   await page.getByTestId("ask-about-word").click();
   await expect(page.getByTestId("dictionary-popup").locator("li")).toHaveText([
     "QA",
@@ -3134,6 +3299,49 @@ test("live dictionary checks include unknown crosswords while waiting and preser
     "unrecognized",
   );
   await expect(page.getByTestId("tentative-score-bubble")).toHaveCount(0);
+  // Repair the committed cross letter without changing the player's draft.
+  // Both AT and TA are now recognized; the same status must switch to green.
+  const t = fixtureGame.bag.find((tile) => tile.letter === "T")!;
+  const repair = db.batch();
+  repair.update(db.doc("games/ui-table"), {
+    board: { "6,7": { ...t, row: 6, col: 7 } },
+  });
+  repair.update(db.doc("games/ui-table/private/state"), {
+    bag: [...fixtureGame.bag.filter((tile) => tile.id !== t.id), q],
+  });
+  await repair.commit();
+  await expect(page.getByTestId("word-check")).toHaveAttribute(
+    "data-state",
+    "recognized",
+  );
+  await expect(page.getByTestId("move-preview")).toHaveClass(
+    /dictionary-recognized/,
+  );
+  const knownFill = await page.getByTestId("move-preview").evaluate((node) =>
+    getComputedStyle(node)
+      .backgroundColor.match(/[\d.]+/g)!
+      .slice(0, 3)
+      .map(Number),
+  );
+  expect(knownFill[1]).toBeGreaterThan(knownFill[0]);
+  await checkTextContrast(
+    page,
+    '[data-testid="move-preview"] strong, [data-testid="move-preview"] .preview-score',
+  );
+  const knownInk = await page.getByTestId("word-check").evaluate((node) =>
+    getComputedStyle(node)
+      .color.match(/[\d.]+/g)!
+      .slice(0, 3)
+      .map(Number),
+  );
+  expect(knownInk[1]).toBeGreaterThan(knownInk[0]);
+  await checkTextContrast(page, '[data-testid="word-check"]');
+  await expect(cell(page, 7, 7)).toHaveClass(/has-tentative/);
+  await expect(cell(page, 7, 8)).toHaveClass(/has-tentative/);
+  await page.screenshot({
+    path: info.outputPath("recognized-preview-green.png"),
+    fullPage: false,
+  });
 });
 
 test("private word consent survives reload and decline, requires the other player, and approval waits for manual play", async ({
@@ -4032,6 +4240,218 @@ test("actual last tile with an empty bag ends both devices, transfers leftover p
       board: {},
     });
     expect((await db.collection("games/ui-table/commands").get()).size).toBe(1);
+  } finally {
+    await auntContext.close();
+  }
+});
+
+test("empty-bag ENDGAME needs both players, preserves a declined game and ranks individual words without debug writes", async ({
+  page,
+  browser,
+}, info) => {
+  test.setTimeout(120_000);
+  const pool = [
+    ...fixtureGame.bag,
+    ...fixtureGame.racks.mom,
+    ...fixtureGame.racks.aunt,
+    ...Object.values(fixtureGame.board),
+  ];
+  const pick = (letter: string) =>
+    pool.splice(
+      pool.findIndex((tile) => tile.letter === letter),
+      1,
+    )[0];
+  const mom = [pick("Q"), pick("?")];
+  const auntRack = [pick("A"), pick("T")];
+  const board: Game["board"] = {};
+  for (const [index, tile] of pool.entries()) {
+    const row = Math.floor(index / 15),
+      col = index % 15;
+    board[`${row},${col}`] = {
+      ...tile,
+      letter: tile.letter === "?" ? "Z" : tile.letter,
+      row,
+      col,
+    };
+  }
+  const history: NonNullable<Game["history"]> = [
+    {
+      id: "mom-cross",
+      player: "mom",
+      kind: "play",
+      words: ["CAT", "AT"],
+      wordScores: [
+        { word: "CAT", score: 8 },
+        { word: "AT", score: 1 },
+      ],
+      score: 9,
+      at: 1,
+    },
+    {
+      id: "aunt-cross",
+      player: "aunt",
+      kind: "play",
+      words: ["CAT", "AT"],
+      wordScores: [
+        { word: "CAT", score: 8 },
+        { word: "AT", score: 1 },
+      ],
+      score: 9,
+      at: 2,
+    },
+    {
+      id: "mom-quartz",
+      player: "mom",
+      kind: "play",
+      words: ["QUARTZ"],
+      wordScores: [{ word: "QUARTZ", score: 75 }],
+      score: 75,
+      at: 3,
+    },
+    {
+      id: "aunt-dog",
+      player: "aunt",
+      kind: "play",
+      words: ["DOG"],
+      wordScores: [{ word: "DOG", score: 12 }],
+      score: 12,
+      at: 4,
+    },
+    {
+      id: "mom-dog",
+      player: "mom",
+      kind: "play",
+      words: ["DOG"],
+      wordScores: [{ word: "DOG", score: 5 }],
+      score: 5,
+      at: 5,
+    },
+    {
+      id: "aunt-tax",
+      player: "aunt",
+      kind: "play",
+      words: ["TAX"],
+      wordScores: [{ word: "TAX", score: 18 }],
+      score: 18,
+      at: 6,
+    },
+  ];
+  await writeFixture({
+    ...fixtureGame,
+    board,
+    bag: [],
+    racks: { mom, aunt: auntRack },
+    scores: { mom: 89, aunt: 39 },
+    history,
+    historyComplete: true,
+  });
+  tiles = mom;
+  await enroll(page, 2);
+  const { aunt, auntContext } = await joinRita(browser, 2);
+  try {
+    await expect(page.getByTestId("turn-announcement")).toBeHidden();
+    const before = await authoritativeState();
+    await page.getByTestId("help-settings").click();
+    await page.getByTestId("debug-enabled").check();
+    await page.getByTestId("debug-end-game").click();
+    const debug = page.getByTestId("debug-end-game-popup");
+    await expect(debug).toBeVisible();
+    await expect(debug).toHaveCSS("opacity", "1");
+    await expect(debug.locator('[data-testid="rematch"]:enabled')).toHaveCount(
+      0,
+    );
+    expect(await authoritativeState()).toEqual(before);
+    await page.screenshot({
+      path: info.outputPath("debug-end-game-local-only.png"),
+      fullPage: false,
+    });
+    await debug.getByRole("button", { name: "Close dialog" }).click();
+    if (await page.getByRole("dialog", { name: "Help & settings" }).isVisible())
+      await page.getByRole("button", { name: "Close dialog" }).click();
+
+    await page.getByTestId("request-end-game").click();
+    await expect(page.getByTestId("end-game-request-popup")).toBeVisible();
+    await page.getByTestId("confirm-end-game-request").click();
+    const incoming = aunt.getByTestId("incoming-end-game-popup");
+    await expectRequiredDecision(aunt, incoming);
+    await expect(page.getByTestId("approve-end-game")).toHaveCount(0);
+    await expect(page.getByTestId("pass-turn")).toBeDisabled();
+    expect(await authoritativeState()).toEqual(before);
+    await aunt.reload();
+    await expect(incoming).toBeVisible();
+    await expect(incoming).toHaveCSS("opacity", "1");
+    await aunt.screenshot({
+      path: info.outputPath("empty-bag-endgame-consent-portrait.png"),
+      fullPage: false,
+    });
+    await incoming.getByTestId("decline-end-game").click();
+    await expect(incoming).toHaveCount(0);
+    expect(await authoritativeState()).toEqual(before);
+    await expect(page.getByTestId("request-end-game")).toBeEnabled();
+    await expect(page.getByTestId("pass-turn")).toBeEnabled();
+
+    // The waiting player may ask too. A fresh request is not a turn or a pass.
+    await aunt.getByTestId("request-end-game").click();
+    await aunt.getByTestId("confirm-end-game-request").click();
+    const elizabethDecision = page.getByTestId("incoming-end-game-popup");
+    await expectRequiredDecision(page, elizabethDecision);
+    const requests = await db.collection("pairs/family/endGameRequests").get();
+    expect(requests.size).toBe(2);
+    expect(requests.docs.map((doc) => doc.data().status).sort()).toEqual([
+      "declined",
+      "pending",
+    ]);
+    expect(await authoritativeState()).toEqual(before);
+    await elizabethDecision.getByTestId("approve-end-game").click();
+    expectedRevision = 1;
+    for (const target of [page, aunt]) {
+      const result = target.getByTestId("end-game-popup");
+      await expect(result).toBeVisible();
+      await expect(result.getByTestId("result-score-mom")).toHaveText("79");
+      await expect(result.getByTestId("result-score-aunt")).toHaveText("37");
+      await expect(result.getByTestId("game-ending-reason")).toContainText(
+        /agreed|agreement/i,
+      );
+      await expect(
+        result.getByTestId("top-word-scores-mom").locator("li"),
+      ).toHaveText([/QUARTZ.*75/, /CAT.*8/, /DOG.*5/]);
+      await expect(
+        result.getByTestId("top-word-scores-aunt").locator("li"),
+      ).toHaveText([/TAX.*18/, /DOG.*12/, /CAT.*8/]);
+      await expect(target.getByTestId("turn-announcement")).toHaveCount(0);
+      await expect(
+        target.locator('button[data-testid="play-word"]:enabled'),
+      ).toHaveCount(0);
+    }
+    const ended = (await db.doc("games/ui-table").get()).data()!;
+    expect(ended).toMatchObject({
+      status: "finished",
+      endedReason: "agreed-end",
+      revision: 1,
+      winner: "mom",
+      scores: { mom: 79, aunt: 37 },
+      finalScoreAdjustments: {
+        players: {
+          mom: { deducted: 10, transferred: 0 },
+          aunt: { deducted: 2, transferred: 0 },
+        },
+      },
+    });
+    expect(ended.history).toEqual(history);
+    expect(ended.board).toEqual(fixtureGame.board);
+    expect((await authoritativeState()).slice(1)).toEqual(before.slice(1));
+    await page.getByTestId("top-word-scores-mom").scrollIntoViewIfNeeded();
+    await page.screenshot({
+      path: info.outputPath("agreed-end-top-three-words.png"),
+      fullPage: false,
+    });
+    await aunt.screenshot({
+      path: info.outputPath("agreed-end-portrait.png"),
+      fullPage: false,
+    });
+    await page.reload();
+    await expect(page.getByTestId("end-game-popup")).toBeVisible();
+    expect((await db.doc("games/ui-table").get()).data()).toEqual(ended);
   } finally {
     await auntContext.close();
   }

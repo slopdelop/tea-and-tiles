@@ -23,6 +23,8 @@ import type {
   NewGameRequest,
   NewGameResponse,
   TimedGameResult,
+  EndGameRequest,
+  EndGameResponse,
 } from "../shared/game-request.js";
 
 initializeApp();
@@ -791,6 +793,259 @@ export async function respondGameRestart(
   });
 }
 
+/** Empty-bag consent pauses accepted turns at exactly the proposed revision. */
+export async function requestGameEnd(
+  uidInput: string | undefined,
+  data: unknown,
+): Promise<{ id: string }> {
+  const uid = uidRequired(uidInput);
+  const d = object(data);
+  onlyKeys(d, ["id", "gameId", "expectedRevision"]);
+  if (
+    !validId(d.id) ||
+    d.id.length < 8 ||
+    !validId(d.gameId) ||
+    !Number.isSafeInteger(d.expectedRevision) ||
+    (d.expectedRevision as number) < 0
+  )
+    throw new HttpsError(
+      "invalid-argument",
+      "Choose the current board and a valid end-game request.",
+    );
+  const { id, gameId } = d;
+  const expectedRevision = d.expectedRevision as number;
+  return db.runTransaction(async (tx) => {
+    const slot = await requireMember(tx, uid);
+    const pairRef = db.doc("pairs/family");
+    const ref = db.doc(`pairs/family/endGameRequests/${id}`);
+    const retryRef = db.doc(`endGameRequestReceipts/${id}`);
+    const [pair, saved, current, secret, retry] = await tx.getAll(
+      pairRef,
+      ref,
+      db.doc(`games/${gameId}`),
+      db.doc(`games/${gameId}/private/state`),
+      retryRef,
+    );
+    // A simultaneous proposal can be coalesced into someone else's pending
+    // UUID. Preserve that result even if its response was lost until after
+    // the opponent declined, played another turn, or replaced the table.
+    if (retry.exists) {
+      const previous = retry.data()!;
+      if (
+        previous.requestedBy !== slot ||
+        previous.gameId !== gameId ||
+        previous.expectedRevision !== expectedRevision
+      )
+        throw new HttpsError(
+          "already-exists",
+          "This request ID was already used for a different action.",
+        );
+      if (!validId(previous.resolvedRequestId))
+        throw new HttpsError(
+          "internal",
+          "The saved end-game request receipt is incomplete.",
+        );
+      return { id: previous.resolvedRequestId };
+    }
+    if (saved.exists) {
+      const previous = saved.data() as EndGameRequest;
+      if (
+        previous.requestedBy !== slot ||
+        previous.gameId !== gameId ||
+        previous.expectedRevision !== expectedRevision
+      )
+        throw new HttpsError(
+          "already-exists",
+          "This request ID was already used for a different action.",
+        );
+      return { id };
+    }
+    if (
+      pair.data()?.activeGameId !== gameId ||
+      !current.exists ||
+      current.data()?.status !== "active" ||
+      current.data()?.revision !== expectedRevision
+    )
+      throw new HttpsError(
+        "failed-precondition",
+        "The board changed. Please review the current game before asking to end it.",
+      );
+    if (!secret.exists || !Array.isArray(secret.data()?.bag))
+      throw new HttpsError("internal", "The saved game is incomplete.");
+    if (current.data()?.bagCount !== 0 || secret.data()!.bag.length !== 0)
+      throw new HttpsError(
+        "failed-precondition",
+        "You can ask to end the game once the bag is empty.",
+      );
+    if (timerExpired(current.data()!, Date.now()))
+      throw new HttpsError(
+        "failed-precondition",
+        "Time is up. Reconnect to confirm the final score.",
+      );
+    const pendingId = pair.data()?.pendingEndGameRequestId;
+    if (typeof pendingId === "string") {
+      const pending = (
+        await tx.get(db.doc(`pairs/family/endGameRequests/${pendingId}`))
+      ).data() as EndGameRequest | undefined;
+      if (
+        pending?.status === "pending" &&
+        pending.gameId === gameId &&
+        pending.expectedRevision === expectedRevision
+      ) {
+        tx.create(retryRef, {
+          requestedBy: slot,
+          gameId,
+          expectedRevision,
+          resolvedRequestId: pending.id,
+        });
+        return { id: pending.id };
+      }
+    }
+    const request: EndGameRequest = {
+      id,
+      gameId,
+      expectedRevision,
+      requestedBy: slot,
+      status: "pending",
+      requestedAt: Date.now(),
+    };
+    tx.create(ref, request);
+    tx.update(pairRef, { pendingEndGameRequestId: id });
+    return { id };
+  });
+}
+
+export async function respondGameEnd(
+  uidInput: string | undefined,
+  data: unknown,
+): Promise<EndGameResponse> {
+  const uid = uidRequired(uidInput);
+  const d = object(data);
+  onlyKeys(d, ["requestId", "approve"]);
+  if (
+    !validId(d.requestId) ||
+    d.requestId.length < 8 ||
+    typeof d.approve !== "boolean"
+  )
+    throw new HttpsError(
+      "invalid-argument",
+      "Choose whether to end the requested game.",
+    );
+  const { requestId, approve } = d;
+  return db.runTransaction(async (tx) => {
+    const slot = await requireMember(tx, uid);
+    const ref = db.doc(`pairs/family/endGameRequests/${requestId}`);
+    const pairRef = db.doc("pairs/family");
+    const [pair, saved] = await tx.getAll(pairRef, ref);
+    if (!saved.exists)
+      throw new HttpsError(
+        "not-found",
+        "This end-game request no longer exists.",
+      );
+    const request = saved.data() as EndGameRequest;
+    if (
+      request.id !== requestId ||
+      !slots.includes(request.requestedBy) ||
+      !validId(request.gameId) ||
+      !Number.isSafeInteger(request.expectedRevision)
+    )
+      throw new HttpsError(
+        "internal",
+        "The saved end-game request is incomplete.",
+      );
+    if (request.requestedBy === slot)
+      throw new HttpsError(
+        "permission-denied",
+        "Your opponent must decide whether to end the game.",
+      );
+    const status = approve ? ("accepted" as const) : ("declined" as const);
+    if (request.status !== "pending") {
+      if (request.status !== status)
+        throw new HttpsError(
+          "failed-precondition",
+          "This request has already received a different answer.",
+        );
+      return {
+        status,
+        gameId: request.gameId,
+        revision: request.finishedRevision ?? request.expectedRevision,
+      };
+    }
+    const gameRef = db.doc(`games/${request.gameId}`);
+    const game = await tx.get(gameRef);
+    if (
+      pair.data()?.activeGameId !== request.gameId ||
+      pair.data()?.pendingEndGameRequestId !== requestId ||
+      !game.exists ||
+      game.data()?.status !== "active" ||
+      game.data()?.revision !== request.expectedRevision
+    )
+      throw new HttpsError(
+        "failed-precondition",
+        "This request belongs to an older board. Please review the current game.",
+      );
+    let at = Date.now();
+    let fields: FirebaseFirestore.DocumentData | null = null;
+    if (approve) {
+      const secret = await tx.get(gameRef.collection("private").doc("state"));
+      if (!secret.exists || !Array.isArray(secret.data()?.bag))
+        throw new HttpsError("internal", "The saved game is incomplete.");
+      if (game.data()?.bagCount !== 0 || secret.data()!.bag.length !== 0)
+        throw new HttpsError(
+          "failed-precondition",
+          "The bag is no longer empty. Please review the current game.",
+        );
+      let finalScoreAdjustments = await readScoreAdjustments(
+        tx,
+        gameRef,
+        game.data()!,
+        "agreed-end",
+      );
+      // A clock that expires while private racks are read still wins over
+      // the voluntary end; timeout never deducts remaining rack points.
+      at = Date.now();
+      const reason = timerExpired(game.data()!, at) ? "timed" : "agreed-end";
+      if (reason === "timed")
+        finalScoreAdjustments = scoreAdjustments(
+          game.data()!.scores,
+          {
+            mom: finalScoreAdjustments.players.mom.rackValue,
+            aunt: finalScoreAdjustments.players.aunt.rackValue,
+          },
+          "timed",
+        );
+      const scores = {
+        mom: finalScoreAdjustments.players.mom.final,
+        aunt: finalScoreAdjustments.players.aunt.final,
+      };
+      fields = {
+        status: "finished",
+        scores,
+        revision: game.data()!.revision + 1,
+        winner:
+          scores.mom === scores.aunt
+            ? "tie"
+            : scores.mom > scores.aunt
+              ? "mom"
+              : "aunt",
+        endedReason: reason,
+        endedAt: at,
+        finalScoreAdjustments,
+      };
+    }
+    const revision = fields?.revision ?? request.expectedRevision;
+    tx.update(ref, {
+      status,
+      respondedBy: slot,
+      respondedAt: at,
+      ...(approve ? { finishedRevision: revision } : {}),
+    });
+    tx.update(pairRef, { pendingEndGameRequestId: null });
+    if (fields) tx.update(gameRef, fields);
+    return { status, gameId: request.gameId, revision };
+  });
+}
+
 function timerExpired(
   game: FirebaseFirestore.DocumentData,
   now: number,
@@ -807,7 +1062,7 @@ async function readScoreAdjustments(
   tx: FirebaseFirestore.Transaction,
   ref: FirebaseFirestore.DocumentReference,
   game: FirebaseFirestore.DocumentData,
-  reason: "timed" | "new-game",
+  reason: "timed" | "new-game" | "agreed-end",
 ) {
   const [momRack, auntRack] = await tx.getAll(
     ref.collection("racks").doc("mom"),
@@ -978,6 +1233,23 @@ export async function submit(
           command.kind,
         );
         if (expiredBeforeReads) return expiredBeforeReads;
+        const endRequestId = pair.data()?.pendingEndGameRequestId;
+        if (typeof endRequestId === "string") {
+          const endRequest = (
+            await tx.get(db.doc(`pairs/family/endGameRequests/${endRequestId}`))
+          ).data() as EndGameRequest | undefined;
+          if (
+            saved.data()!.status === "active" &&
+            endRequest?.status === "pending" &&
+            endRequest.gameId === command.gameId &&
+            endRequest.expectedRevision === saved.data()!.revision
+          )
+            throw new HttpsError(
+              "failed-precondition",
+              "Please answer the end-game request before playing or passing.",
+              { rule: "end-game-pending" },
+            );
+        }
         const [mom, aunt, secret] = await tx.getAll(
           gameRef.collection("racks").doc("mom"),
           gameRef.collection("racks").doc("aunt"),
@@ -1147,4 +1419,10 @@ export const respondToNewGame = onCall(options, (request) =>
 );
 export const finishTimedGame = onCall(options, (request) =>
   finishGameTimer(request.auth?.uid, request.data),
+);
+export const requestEndGame = onCall(options, (request) =>
+  requestGameEnd(request.auth?.uid, request.data),
+);
+export const respondToEndGame = onCall(options, (request) =>
+  respondGameEnd(request.auth?.uid, request.data),
 );

@@ -24,3 +24,21 @@ export interface TimedGameResult {
   status: "active" | "finished";
   serverNow: number;
 }
+
+export interface EndGameRequest {
+  id: string;
+  gameId: string;
+  expectedRevision: number;
+  requestedBy: Slot;
+  status: "pending" | "accepted" | "declined";
+  requestedAt: number;
+  respondedBy?: Slot;
+  respondedAt?: number;
+  finishedRevision?: number;
+}
+
+export interface EndGameResponse {
+  status: "accepted" | "declined";
+  gameId: string;
+  revision: number;
+}

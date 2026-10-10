@@ -55,6 +55,8 @@ let respondHouseWord: typeof import("../functions/index").respondHouseWord;
 let requestGameRestart: typeof import("../functions/index").requestGameRestart;
 let respondGameRestart: typeof import("../functions/index").respondGameRestart;
 let finishGameTimer: typeof import("../functions/index").finishGameTimer;
+let requestGameEnd: typeof import("../functions/index").requestGameEnd;
+let respondGameEnd: typeof import("../functions/index").respondGameEnd;
 const codeHash = (code: string) =>
   createHash("sha256").update(code).digest("hex");
 const codeAlphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
@@ -175,6 +177,8 @@ describe.skipIf(!enabled)(
         requestGameRestart,
         respondGameRestart,
         finishGameTimer,
+        requestGameEnd,
+        respondGameEnd,
       } = await import(/* @vite-ignore */ modulePath));
     });
     beforeEach(async () => {
@@ -2491,6 +2495,405 @@ describe.skipIf(!enabled)(
         revision: 0,
       });
     });
+    it("requires membership, a current revision and an actually empty bag before requesting an agreed end", async () => {
+      const db = getFirestore();
+      const request = {
+        id: randomUUID(),
+        gameId: game.id,
+        expectedRevision: 0,
+      };
+      for (const uid of [undefined, "stranger"])
+        await expect(requestGameEnd(uid, request)).rejects.toMatchObject({
+          code: uid ? "permission-denied" : "unauthenticated",
+        });
+      for (const value of [
+        { ...request, expectedRevision: -1 },
+        { ...request, expectedRevision: 0.5 },
+        { ...request, id: "x" },
+        { ...request, approve: true },
+      ])
+        await expect(requestGameEnd(uids.mom, value)).rejects.toMatchObject({
+          code: "invalid-argument",
+        });
+      await expect(requestGameEnd(uids.mom, request)).rejects.toMatchObject({
+        code: "failed-precondition",
+      });
+      await db.doc(`games/${game.id}`).update({ bagCount: 0 });
+      await expect(requestGameEnd(uids.mom, request)).rejects.toMatchObject({
+        code: "failed-precondition",
+      });
+      game.bag = [];
+      await writeGame(game);
+      await expect(
+        requestGameEnd(uids.mom, { ...request, expectedRevision: 1 }),
+      ).rejects.toMatchObject({ code: "failed-precondition" });
+      game.status = "finished";
+      await writeGame(game);
+      await expect(requestGameEnd(uids.mom, request)).rejects.toMatchObject({
+        code: "failed-precondition",
+      });
+      expect(
+        (await db.collection("pairs/family/endGameRequests").get()).size,
+      ).toBe(0);
+    }, 15000);
+
+    it("keeps one simultaneous empty-bag proposal without changing turns, game or private tiles", async () => {
+      const db = getFirestore();
+      game.bag = [];
+      await writeGame(game);
+      const before = (await db.doc(`games/${game.id}`).get()).data();
+      const rack = (await db.doc(`games/${game.id}/racks/mom`).get()).data();
+      const requests = [uids.mom, uids.aunt].map((uid) =>
+        requestGameEnd(uid, {
+          id: randomUUID(),
+          gameId: game.id,
+          expectedRevision: 0,
+        }),
+      );
+      const [one, two] = await Promise.all(requests);
+      expect(one).toEqual(two);
+      expect(
+        (await db.collection("pairs/family/endGameRequests").get()).size,
+      ).toBe(1);
+      const saved = (
+        await db.doc(`pairs/family/endGameRequests/${one.id}`).get()
+      ).data()!;
+      expect(saved).toMatchObject({
+        id: one.id,
+        gameId: game.id,
+        expectedRevision: 0,
+        status: "pending",
+        requestedAt: expect.any(Number),
+      });
+      expect((await db.doc(`games/${game.id}`).get()).data()).toEqual(before);
+      expect((await db.doc(`games/${game.id}/racks/mom`).get()).data()).toEqual(
+        rack,
+      );
+      expect(
+        (await db.doc(`games/${game.id}/private/state`).get()).data()?.bag,
+      ).toEqual([]);
+      for (const uid of [uids.mom, uids.aunt])
+        await expect(submit(uid, command())).rejects.toMatchObject({
+          code: "failed-precondition",
+          details: { rule: "end-game-pending" },
+        });
+      expect(
+        (await db.collection(`games/${game.id}/commands`).get()).size,
+      ).toBe(0);
+    }, 30000);
+
+    it("persists a coalesced UUID result across lost replies and later decline without silently reopening the request", async () => {
+      const db = getFirestore();
+      game.bag = [];
+      await writeGame(game);
+      const first = { id: randomUUID(), gameId: game.id, expectedRevision: 0 };
+      const simultaneous = { ...first, id: randomUUID() };
+      await requestGameEnd(uids.mom, first);
+      expect(await requestGameEnd(uids.aunt, simultaneous)).toEqual({
+        id: first.id,
+      });
+      const client = env.authenticatedContext(uids.aunt).firestore();
+      await assertFails(
+        getDoc(doc(client, `endGameRequestReceipts/${simultaneous.id}`)),
+      );
+      await assertFails(
+        setDoc(doc(client, `endGameRequestReceipts/${simultaneous.id}`), {
+          resolvedRequestId: "forged",
+        }),
+      );
+      await respondGameEnd(uids.aunt, { requestId: first.id, approve: false });
+      expect(await requestGameEnd(uids.aunt, simultaneous)).toEqual({
+        id: first.id,
+      });
+      expect(
+        (await db.collection("pairs/family/endGameRequests").get()).size,
+      ).toBe(1);
+      expect(
+        (await db.doc("pairs/family").get()).data()?.pendingEndGameRequestId,
+      ).toBeNull();
+      await expect(
+        requestGameEnd(uids.aunt, { ...simultaneous, expectedRevision: 1 }),
+      ).rejects.toMatchObject({ code: "already-exists" });
+      await expect(
+        requestGameEnd(uids.mom, simultaneous),
+      ).rejects.toMatchObject({ code: "already-exists" });
+      await db.doc("pairs/family").update({ activeGameId: "new-table" });
+      expect(await requestGameEnd(uids.aunt, simultaneous)).toEqual({
+        id: first.id,
+      });
+    }, 15000);
+
+    it("only the opposing player can decline; repeated old replies never answer a renewed UUID proposal", async () => {
+      const db = getFirestore();
+      game.bag = [];
+      await writeGame(game);
+      const before = (await db.doc(`games/${game.id}`).get()).data();
+      const request = {
+        id: randomUUID(),
+        gameId: game.id,
+        expectedRevision: 0,
+      };
+      await requestGameEnd(uids.aunt, request);
+      await db.doc("players/aunt").update({ sessionVersion: 0 });
+      await db
+        .doc("bindings/aunt-second")
+        .set({ slot: "aunt", sessionVersion: 0 });
+      await expect(
+        respondGameEnd("aunt-second", {
+          requestId: request.id,
+          approve: false,
+        }),
+      ).rejects.toMatchObject({ code: "permission-denied" });
+      const answer = { requestId: request.id, approve: false };
+      expect(await respondGameEnd(uids.mom, answer)).toEqual({
+        status: "declined",
+        gameId: game.id,
+        revision: 0,
+      });
+      expect(await respondGameEnd(uids.mom, answer)).toEqual({
+        status: "declined",
+        gameId: game.id,
+        revision: 0,
+      });
+      await expect(
+        respondGameEnd(uids.mom, { ...answer, approve: true }),
+      ).rejects.toMatchObject({ code: "failed-precondition" });
+      expect((await db.doc(`games/${game.id}`).get()).data()).toEqual(before);
+      const renewed = { ...request, id: randomUUID() };
+      await requestGameEnd(uids.aunt, renewed);
+      await respondGameEnd(uids.mom, answer);
+      expect(
+        (
+          await db.doc(`pairs/family/endGameRequests/${renewed.id}`).get()
+        ).data()?.status,
+      ).toBe("pending");
+      expect(
+        (await db.doc("pairs/family").get()).data()?.pendingEndGameRequestId,
+      ).toBe(renewed.id);
+      await expect(
+        requestGameEnd(uids.aunt, { ...request, expectedRevision: 1 }),
+      ).rejects.toMatchObject({ code: "already-exists" });
+      await respondGameEnd(uids.mom, { requestId: renewed.id, approve: false });
+      await expect(submit(uids.mom, command())).resolves.toMatchObject({
+        revision: 1,
+      });
+    }, 15000);
+
+    it("agreed ending deducts actual racks once with no transfer, preserves history and receipts, and rejects further turns", async () => {
+      const db = getFirestore();
+      const prior = command();
+      const receipt = await submit(uids.mom, prior);
+      const current = (await db.doc(`games/${game.id}`).get()).data()!;
+      game = {
+        ...game,
+        ...current,
+        bag: [],
+        racks: {
+          mom: [
+            { id: "Q-0", letter: "Q", value: 10 },
+            { id: "?-0", letter: "?", value: 0 },
+          ],
+          aunt: [
+            { id: "A-0", letter: "A", value: 1 },
+            { id: "T-0", letter: "T", value: 1 },
+          ],
+        },
+        scores: { mom: 20, aunt: 12 },
+      };
+      await writeGame(game);
+      const original = (await db.doc(`games/${game.id}`).get()).data()!;
+      const request = {
+        id: randomUUID(),
+        gameId: game.id,
+        expectedRevision: 1,
+      };
+      expect(await requestGameEnd(uids.mom, request)).toEqual({
+        id: request.id,
+      });
+      expect(await requestGameEnd(uids.mom, request)).toEqual({
+        id: request.id,
+      });
+      expect(await submit(uids.mom, prior)).toEqual(receipt);
+      const answer = { requestId: request.id, approve: true };
+      const replies = await Promise.all([
+        respondGameEnd(uids.aunt, answer),
+        respondGameEnd(uids.aunt, answer),
+      ]);
+      expect(replies).toEqual([
+        { status: "accepted", gameId: game.id, revision: 2 },
+        { status: "accepted", gameId: game.id, revision: 2 },
+      ]);
+      const ended = (await db.doc(`games/${game.id}`).get()).data()!;
+      expect(ended).toMatchObject({
+        status: "finished",
+        endedReason: "agreed-end",
+        endedAt: expect.any(Number),
+        revision: 2,
+        winner: "tie",
+        scores: { mom: 10, aunt: 10 },
+        finalScoreAdjustments: {
+          reason: "agreed-end",
+          players: {
+            mom: {
+              earned: 20,
+              rackValue: 10,
+              deducted: 10,
+              transferred: 0,
+              final: 10,
+            },
+            aunt: {
+              earned: 12,
+              rackValue: 2,
+              deducted: 2,
+              transferred: 0,
+              final: 10,
+            },
+          },
+        },
+      });
+      for (const field of [
+        "board",
+        "lastMove",
+        "history",
+        "turn",
+        "turnsPlayed",
+        "scorelessTurns",
+        "bagCount",
+        "rackCounts",
+      ])
+        expect(ended[field]).toEqual(original[field]);
+      expect(
+        (await db.doc(`games/${game.id}/racks/mom`).get()).data()?.tiles,
+      ).toEqual(game.racks.mom);
+      expect(
+        (await db.doc(`games/${game.id}/racks/aunt`).get()).data()?.tiles,
+      ).toEqual(game.racks.aunt);
+      expect(await respondGameEnd(uids.aunt, answer)).toEqual(replies[0]);
+      expect(await submit(uids.mom, prior)).toEqual(receipt);
+      await expect(submit(uids.aunt, command("pass", 2))).rejects.toMatchObject(
+        { code: "failed-precondition" },
+      );
+      expect(
+        (await db.collection(`games/${game.id}/commands`).get()).size,
+      ).toBe(1);
+      await db.doc("pairs/family").update({ activeGameId: "new-board" });
+      expect(await respondGameEnd(uids.aunt, answer)).toEqual(replies[0]);
+    }, 30000);
+
+    it("rejects old revisions and replaced games without ending or blocking the current board", async () => {
+      const db = getFirestore();
+      game.bag = [];
+      await writeGame(game);
+      const request = {
+        id: randomUUID(),
+        gameId: game.id,
+        expectedRevision: 0,
+      };
+      await requestGameEnd(uids.aunt, request);
+      await db.doc(`games/${game.id}`).update({ revision: 1 });
+      await expect(
+        respondGameEnd(uids.mom, { requestId: request.id, approve: true }),
+      ).rejects.toMatchObject({ code: "failed-precondition" });
+      await expect(submit(uids.mom, command("pass", 1))).resolves.toMatchObject(
+        { revision: 2 },
+      );
+      const fresh = { ...request, id: randomUUID(), expectedRevision: 2 };
+      await requestGameEnd(uids.mom, fresh);
+      await db.doc("pairs/family").update({ activeGameId: "new-board" });
+      await expect(
+        respondGameEnd(uids.aunt, { requestId: fresh.id, approve: true }),
+      ).rejects.toMatchObject({ code: "failed-precondition" });
+      expect((await db.doc(`games/${game.id}`).get()).data()).toMatchObject({
+        status: "active",
+        revision: 2,
+      });
+    }, 15000);
+
+    it("limits end-game reads to current members and keeps requests and decisions exclusively server writable", async () => {
+      const db = getFirestore();
+      game.bag = [];
+      await writeGame(game);
+      const { id } = await requestGameEnd(uids.mom, {
+        id: randomUUID(),
+        gameId: game.id,
+        expectedRevision: 0,
+      });
+      for (const uid of [uids.mom, uids.aunt]) {
+        const client = env.authenticatedContext(uid).firestore();
+        await assertSucceeds(
+          getDoc(doc(client, `pairs/family/endGameRequests/${id}`)),
+        );
+        await assertSucceeds(
+          getDocs(collection(client, "pairs/family/endGameRequests")),
+        );
+        await assertFails(
+          setDoc(
+            doc(client, `pairs/family/endGameRequests/${id}`),
+            { status: "accepted" },
+            { merge: true },
+          ),
+        );
+        await assertFails(
+          deleteDoc(doc(client, `pairs/family/endGameRequests/${id}`)),
+        );
+      }
+      await db.doc("players/aunt").update({ uid: "replacement-aunt" });
+      for (const client of [
+        env.unauthenticatedContext().firestore(),
+        env.authenticatedContext("stranger").firestore(),
+        env.authenticatedContext(uids.aunt).firestore(),
+      ]) {
+        await assertFails(
+          getDoc(doc(client, `pairs/family/endGameRequests/${id}`)),
+        );
+        await assertFails(
+          getDocs(collection(client, "pairs/family/endGameRequests")),
+        );
+      }
+      await expect(
+        respondGameEnd(uids.aunt, { requestId: id, approve: true }),
+      ).rejects.toMatchObject({ code: "permission-denied" });
+      await expect(
+        requestGameEnd(uids.aunt, {
+          id: randomUUID(),
+          gameId: game.id,
+          expectedRevision: 0,
+        }),
+      ).rejects.toMatchObject({ code: "permission-denied" });
+    }, 15000);
+
+    it("preserves server deadline results when approval arrives after timed expiry", async () => {
+      const db = getFirestore();
+      game = createGame(game.id, () => 0.5, "timed", 1, Date.now());
+      game.bag = [];
+      game.scores = { mom: 50, aunt: 30 };
+      await writeGame(game);
+      const request = {
+        id: randomUUID(),
+        gameId: game.id,
+        expectedRevision: 0,
+      };
+      await requestGameEnd(uids.mom, request);
+      await db.doc(`games/${game.id}`).update({ deadlineAt: Date.now() - 1 });
+      expect(
+        await respondGameEnd(uids.aunt, {
+          requestId: request.id,
+          approve: true,
+        }),
+      ).toMatchObject({ status: "accepted", revision: 1 });
+      expect((await db.doc(`games/${game.id}`).get()).data()).toMatchObject({
+        status: "finished",
+        endedReason: "timed",
+        scores: { mom: 50, aunt: 30 },
+        finalScoreAdjustments: {
+          players: {
+            mom: { deducted: 0, transferred: 0 },
+            aunt: { deducted: 0, transferred: 0 },
+          },
+        },
+      });
+    });
+
     it("uses standard rack-out scoring before extra-mode cutoffs in all chosen modes", async () => {
       const db = getFirestore();
       await approveHouseWord("MW");

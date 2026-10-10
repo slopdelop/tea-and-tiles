@@ -33,6 +33,7 @@ service cloud.firestore {
       match /houseWords/{word} { allow get, list: if member(); }
       match /wordRequests/{requestId} { allow get, list: if member(); }
       match /gameRequests/{requestId} { allow get, list: if member(); }
+      match /endGameRequests/{requestId} { allow get, list: if member(); }
       match /presence/{uid} {
         function validHeartbeat() {
           return request.resource.data.keys().hasAll(['slot', 'lastSeen'])

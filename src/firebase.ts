@@ -43,7 +43,12 @@ import type {
   WordRequest,
   WordDecision,
 } from "../shared/dictionary";
-import type { NewGameRequest, TimedGameResult } from "../shared/game-request";
+import type {
+  NewGameRequest,
+  TimedGameResult,
+  EndGameRequest,
+  EndGameResponse,
+} from "../shared/game-request";
 export type PublicGame = Omit<Game, "racks" | "bag"> & {
   rackCounts: Record<Slot, number>;
   bagCount: number;
@@ -131,6 +136,11 @@ export function useGameSession() {
     [dictionaryError, setDictionaryError] = useState<string | null>(null),
     [newGameRequests, setNewGameRequests] = useState<NewGameRequest[]>([]),
     [newGameRequestsReady, setNewGameRequestsReady] = useState(false),
+    [endGameRequests, setEndGameRequests] = useState<EndGameRequest[]>([]),
+    [endGameRequestsReady, setEndGameRequestsReady] = useState(false),
+    [endGameRequestsError, setEndGameRequestsError] = useState<string | null>(
+      null,
+    ),
     [newGameRequestsError, setNewGameRequestsError] = useState<string | null>(
       null,
     ),
@@ -323,6 +333,33 @@ export function useGameSession() {
       gameStop();
       rackStop();
     };
+  }, [slot]);
+  useEffect(() => {
+    setEndGameRequests([]);
+    setEndGameRequestsReady(false);
+    setEndGameRequestsError(null);
+    if (!slot) return;
+    let knownRequests = false;
+    return onSnapshot(
+      collection(db, "pairs", "family", "endGameRequests"),
+      { includeMetadataChanges: true },
+      (snapshot) => {
+        setEndGameRequests(
+          snapshot.docs.map(
+            (record) => ({ ...record.data(), id: record.id }) as EndGameRequest,
+          ),
+        );
+        knownRequests ||= !snapshot.metadata.fromCache;
+        setEndGameRequestsReady(knownRequests);
+        setEndGameRequestsError(null);
+      },
+      () => {
+        setEndGameRequestsReady(false);
+        setEndGameRequestsError(
+          "End-game requests are unavailable. Please reconnect and reload.",
+        );
+      },
+    );
   }, [slot]);
   useEffect(() => {
     setNewGameRequests([]);
@@ -562,6 +599,40 @@ export function useGameSession() {
     },
     [callShared],
   );
+  const requestEndGame = useCallback(
+    async (request: {
+      id: string;
+      gameId: string;
+      expectedRevision: number;
+    }) => {
+      if (!navigator.onLine)
+        throw new Error("Reconnect before asking to end the game.");
+      if (pendingRef.current)
+        throw new Error(
+          "Confirm your submitted move before asking to end the game.",
+        );
+      return callShared<typeof request, { id: string }>(
+        "requestEndGame",
+        request,
+      );
+    },
+    [callShared],
+  );
+  const respondToEndGame = useCallback(
+    async (request: { requestId: string; approve: boolean }) => {
+      if (!navigator.onLine)
+        throw new Error("Reconnect before reviewing an end-game request.");
+      if (pendingRef.current)
+        throw new Error(
+          "Confirm your submitted move before reviewing an end-game request.",
+        );
+      return callShared<typeof request, EndGameResponse>(
+        "respondToEndGame",
+        request,
+      );
+    },
+    [callShared],
+  );
   const finishTimedGame = useCallback(
     async (gameId: string) => {
       if (!navigator.onLine)
@@ -663,6 +734,11 @@ export function useGameSession() {
     newGameRequestsError,
     requestNewGame,
     respondToNewGame,
+    endGameRequests,
+    endGameRequestsReady,
+    endGameRequestsError,
+    requestEndGame,
+    respondToEndGame,
     timedClockReady: !!game && timedClock?.gameId === game.id,
     serverTimeOffset:
       timedClock && timedClock.gameId === game?.id ? timedClock.offset : 0,

@@ -45,6 +45,8 @@ import {
   celebrationDuration,
   handoffDelay,
 } from "./celebrationTiming";
+import { useTabletViewport } from "./hooks/useTabletViewport";
+import { previewSummary } from "./components/gameSummaryData";
 import "./styles.css";
 
 type Dialog =
@@ -58,6 +60,9 @@ type Dialog =
   | "incoming-game"
   | "result"
   | "score-details"
+  | "end-game"
+  | "incoming-end-game"
+  | "debug-result"
   | null;
 type Draft = { key: string; revision: number; placements: Placement[] };
 const themeChoices = [
@@ -669,6 +674,31 @@ export default function App() {
       request.status === "pending" &&
       request.requestedBy !== slot,
   );
+  const [endGameBusy, setEndGameBusy] = useState(false);
+  const [endGameError, setEndGameError] = useState("");
+  const endGameBusyRef = useRef(false);
+  const endGameAttempt = useRef<{
+    id: string;
+    gameId: string;
+    expectedRevision: number;
+  } | null>(null);
+  const currentEndRequest = session.endGameRequests.find(
+    (request) =>
+      game?.status === "active" &&
+      request.gameId === game.id &&
+      request.expectedRevision === game.revision &&
+      request.status === "pending",
+  );
+  const incomingEndRequest =
+    currentEndRequest?.requestedBy !== slot ? currentEndRequest : undefined;
+  const latestEndRequest = [...session.endGameRequests]
+    .reverse()
+    .find(
+      (request) =>
+        request.gameId === game?.id &&
+        request.expectedRevision === game?.revision &&
+        request.requestedBy === slot,
+    );
   const incomingWordRequest = session.wordRequests.find(
     (request) =>
       request.id === incomingWordId &&
@@ -821,11 +851,14 @@ export default function App() {
     !busy &&
     !wordBusy &&
     !newGameBusy &&
+    !endGameBusy &&
+    !currentEndRequest &&
     !timedExpired &&
     !sharedActionsPaused &&
     !recallAnimation.active;
   const [finePointer, setFinePointer] = useState(false);
   const [zoomed, setZoomed] = useState(false);
+  const tabletFits = useTabletViewport(!!game && !!slot && !zoomed);
   const [tabletLandscape, setTabletLandscape] = useState(
     () =>
       matchMedia(
@@ -984,6 +1017,10 @@ export default function App() {
   }, [game?.id]);
 
   useEffect(() => {
+    if (dialog === "incoming-end-game") {
+      if (!incomingEndRequest) setDialog(null);
+      return;
+    }
     if (dialog === "incoming-word") {
       if (!incomingWordRequest) {
         setDialog(null);
@@ -1009,9 +1046,15 @@ export default function App() {
       pending ||
       busy ||
       wordBusy ||
-      newGameBusy
+      newGameBusy ||
+      endGameBusy
     )
       return;
+    if (incomingEndRequest) {
+      setEndGameError("");
+      setDialog("incoming-end-game");
+      return;
+    }
     const request = [...session.wordRequests]
       .sort((a, b) => a.requestedAt - b.requestedAt)
       .find(
@@ -1060,6 +1103,8 @@ export default function App() {
     session.newGameRequests,
     incomingWordRequest?.id,
     incomingNewGameRequest?.id,
+    incomingEndRequest?.id,
+    endGameBusy,
   ]);
 
   useEffect(() => {
@@ -1122,7 +1167,10 @@ export default function App() {
     setMessage("");
     setBusy(false);
     setDialog((current) =>
-      current === "pass" || current === "exchange" || current === "dictionary"
+      current === "pass" ||
+      current === "exchange" ||
+      current === "dictionary" ||
+      current === "end-game"
         ? null
         : current,
     );
@@ -1416,6 +1464,7 @@ export default function App() {
   }, [game?.id, game?.revision, game?.status, game?.endedReason]);
 
   const hasIncomingDecision =
+    !!incomingEndRequest ||
     session.wordRequests.some(
       (request) => request.status === "pending" && request.requestedBy !== slot,
     ) ||
@@ -1774,6 +1823,68 @@ export default function App() {
       setNewGameBusy(false);
     }
   }
+  const endGameUnavailable = sharedActionsPaused
+    ? sharedActionMessage
+    : !connected
+      ? "Reconnect to decide whether to end the game."
+      : pending || busy || wordBusy || newGameBusy || endGameBusy
+        ? "Wait for the current action to finish saving."
+        : !session.endGameRequestsReady
+          ? session.endGameRequestsError || "Checking end-game requests…"
+          : "";
+  const canUseEndGame =
+    !!slot &&
+    game?.status === "active" &&
+    game.bagCount === 0 &&
+    !endGameUnavailable;
+  async function requestEndGame() {
+    if (!canUseEndGame || !game || currentEndRequest || endGameBusyRef.current)
+      return;
+    const attempt =
+      endGameAttempt.current?.gameId === game.id &&
+      endGameAttempt.current.expectedRevision === game.revision
+        ? endGameAttempt.current
+        : { id: newId(), gameId: game.id, expectedRevision: game.revision };
+    endGameAttempt.current = attempt;
+    endGameBusyRef.current = true;
+    setEndGameBusy(true);
+    setEndGameError("");
+    try {
+      await session.requestEndGame(attempt);
+      if (latestGameId.current === attempt.gameId)
+        setDialog((current) => (current === "end-game" ? null : current));
+    } catch (error) {
+      if (latestGameId.current === attempt.gameId)
+        setEndGameError(
+          error instanceof Error
+            ? error.message
+            : "The request could not be confirmed. Try again.",
+        );
+    } finally {
+      endGameBusyRef.current = false;
+      setEndGameBusy(false);
+    }
+  }
+  async function respondToEndGame(approve: boolean) {
+    if (!canUseEndGame || !incomingEndRequest || endGameBusyRef.current) return;
+    const request = incomingEndRequest;
+    endGameBusyRef.current = true;
+    setEndGameBusy(true);
+    setEndGameError("");
+    try {
+      await session.respondToEndGame({ requestId: request.id, approve });
+    } catch (error) {
+      if (latestGameId.current === request.gameId)
+        setEndGameError(
+          error instanceof Error
+            ? error.message
+            : "Your decision could not be confirmed. Try again.",
+        );
+    } finally {
+      endGameBusyRef.current = false;
+      setEndGameBusy(false);
+    }
+  }
   function shuffle() {
     const ids = rack.map((t) => t.id);
     for (let i = ids.length - 1; i > 0; i--) {
@@ -1843,19 +1954,21 @@ export default function App() {
         ? "scoreless"
         : undefined);
   const endingDescription =
-    endingReason === "turn-limit"
-      ? "Ten turns each, all played. The highest score wins."
-      : endingReason === "target-score"
-        ? "150 points reached."
-        : endingReason === "timed"
-          ? "Time is up. The highest score wins."
-          : endingReason === "scoreless"
-            ? "Six consecutive turns without points ended the game. Each player’s remaining tile values were deducted."
-            : endingReason === "rack-out"
-              ? emptiedRack
-                ? `${names[emptiedRack]} used their last tile with the bag empty. ${names[other(emptiedRack)]}’s remaining tile values were deducted and added to ${names[emptiedRack]}’s score.`
-                : "A player used their last tile with the bag empty. The remaining tile values were deducted from their partner and added to their score."
-              : "The game is complete. Final scores are shown above.";
+    endingReason === "agreed-end"
+      ? "You both agreed to finish with the bag empty. Each player’s remaining tile values were deducted; no tiles were transferred."
+      : endingReason === "turn-limit"
+        ? "Ten turns each, all played. The highest score wins."
+        : endingReason === "target-score"
+          ? "150 points reached."
+          : endingReason === "timed"
+            ? "Time is up. The highest score wins."
+            : endingReason === "scoreless"
+              ? "Six consecutive turns without points ended the game. Each player’s remaining tile values were deducted."
+              : endingReason === "rack-out"
+                ? emptiedRack
+                  ? `${names[emptiedRack]} used their last tile with the bag empty. ${names[other(emptiedRack)]}’s remaining tile values were deducted and added to ${names[emptiedRack]}’s score.`
+                  : "A player used their last tile with the bag empty. The remaining tile values were deducted from their partner and added to their score."
+                : "The game is complete. Final scores are shown above.";
   const resultTitle =
     game?.winner === "tie"
       ? "An even match — a tie!"
@@ -1901,6 +2014,7 @@ export default function App() {
     !busy &&
     !wordBusy &&
     !newGameBusy &&
+    !endGameBusy &&
     !sharedActionsPaused;
   const popupWords = dictionaryWords.filter((word) => !houseWords.has(word));
   const requestableWords = popupWords.filter(
@@ -1921,17 +2035,20 @@ export default function App() {
     (!!sentNewGameRequest &&
       sentNewGameRequest.gameId === game?.id &&
       (!sentGameResult || sentGameResult.status === "pending"));
-  const newGameUnavailable = sharedActionsPaused
-    ? sharedActionMessage
-    : !connected
-      ? "Reconnect to request or start a new game."
-      : pending || busy
-        ? "Wait for your move to finish saving."
-        : wordBusy || newGameBusy
-          ? "Wait for this decision to finish saving."
-          : !session.newGameRequestsReady
-            ? session.newGameRequestsError || "Checking for new game requests…"
-            : "";
+  const newGameUnavailable = currentEndRequest
+    ? "Finish the end-game decision before starting a new game."
+    : sharedActionsPaused
+      ? sharedActionMessage
+      : !connected
+        ? "Reconnect to request or start a new game."
+        : pending || busy
+          ? "Wait for your move to finish saving."
+          : wordBusy || newGameBusy
+            ? "Wait for this decision to finish saving."
+            : !session.newGameRequestsReady
+              ? session.newGameRequestsError ||
+                "Checking for new game requests…"
+              : "";
   const canUseNewGame = !!game && !!slot && !newGameUnavailable;
   const uncertainGameRequest =
     !!newGameAttempt.current &&
@@ -1945,24 +2062,26 @@ export default function App() {
   const pendingWordCount = session.wordRequests.filter(
     (request) => request.status === "pending",
   ).length;
-  const turnActionReason = sharedActionsPaused
-    ? sharedActionMessage
-    : timedExpired
-      ? connected
-        ? "Time is up. Confirming the final score…"
-        : "Time is up. Reconnect to confirm the final score."
-      : !connected
-        ? "Reconnect to pass or exchange tiles."
-        : pending || busy
-          ? "Wait for your move to finish saving."
-          : wordBusy || newGameBusy
-            ? "Wait for this decision to finish saving."
-            : !yourTurn
-              ? `${partnerName} is playing. Pass and exchange are available on your turn.`
-              : "";
+  const turnActionReason = currentEndRequest
+    ? "Play is paused while you decide whether to end this game."
+    : sharedActionsPaused
+      ? sharedActionMessage
+      : timedExpired
+        ? connected
+          ? "Time is up. Confirming the final score…"
+          : "Time is up. Reconnect to confirm the final score."
+        : !connected
+          ? "Reconnect to pass or exchange tiles."
+          : pending || busy
+            ? "Wait for your move to finish saving."
+            : wordBusy || newGameBusy
+              ? "Wait for this decision to finish saving."
+              : !yourTurn
+                ? `${partnerName} is playing. ${game?.bagCount === 0 ? "Pass is" : "Pass and exchange are"} available on your turn.`
+                : "";
   const exchangeReason =
     turnActionReason ||
-    (game && game.bagCount < 7
+    (game && game.bagCount > 0 && game.bagCount < 7
       ? "Exchanging needs at least 7 tiles in the bag."
       : "");
   const currentWordRequests = session.wordRequests.filter(
@@ -2245,6 +2364,7 @@ export default function App() {
                 recallAnimation.active ||
                 !!wordBusy ||
                 newGameBusy ||
+                endGameBusy ||
                 hasIncomingDecision
               }
               onClick={() => void appUpdate.apply()}
@@ -2281,7 +2401,7 @@ export default function App() {
   return (
     <MotionConfig reducedMotion="user">
       <div
-        className={`app-shell ${game && slot ? "active-game" : ""} ${compactTable ? "compact-table" : ""} ${zoomed ? "board-focus" : ""}`}
+        className={`app-shell ${game && slot ? "active-game" : ""} ${compactTable ? "compact-table" : ""} ${tabletFits ? "tablet-viewport-fit" : ""} ${zoomed ? "board-focus" : ""}`}
       >
         {!compactTable && appHeader}
 
@@ -3096,7 +3216,7 @@ export default function App() {
                     <>
                       {placements.length > 0 && (
                         <div
-                          className={`move-preview has-preview ${previewError ? "invalid-preview" : ""}`}
+                          className={`move-preview has-preview ${previewError ? "invalid-preview" : `dictionary-${wordCheckState}`}`}
                           data-testid="move-preview"
                           aria-live="polite"
                         >
@@ -3187,20 +3307,32 @@ export default function App() {
                       </button>
                       <div className="quiet-actions">
                         <button
-                          className="secondary-button"
-                          data-testid="exchange-tiles"
+                          className={`secondary-button ${game.bagCount === 0 ? "end-game-button" : ""}`}
+                          data-testid={
+                            game.bagCount === 0
+                              ? "request-end-game"
+                              : "exchange-tiles"
+                          }
                           disabled={
-                            !canSubmit || !connected || game.bagCount < 7
+                            game.bagCount === 0
+                              ? !canUseEndGame || !!currentEndRequest
+                              : !canSubmit || !connected || game.bagCount < 7
                           }
                           aria-describedby={
                             exchangeReason ? "turn-actions-note" : undefined
                           }
                           onClick={() => {
-                            setExchange([]);
-                            setDialog("exchange");
+                            if (game.bagCount === 0) {
+                              endGameAttempt.current = null;
+                              setEndGameError("");
+                              setDialog("end-game");
+                            } else {
+                              setExchange([]);
+                              setDialog("exchange");
+                            }
                           }}
                         >
-                          Exchange tiles
+                          {game.bagCount === 0 ? "END GAME" : "Exchange tiles"}
                         </button>
                         <button
                           className="secondary-button"
@@ -3216,6 +3348,20 @@ export default function App() {
                             : "Pass turn"}
                         </button>
                       </div>
+                      {(currentEndRequest ||
+                        latestEndRequest?.status === "declined") && (
+                        <p
+                          className="end-request-status"
+                          data-testid="end-game-request-status"
+                          role="status"
+                        >
+                          {currentEndRequest
+                            ? currentEndRequest.requestedBy === slot
+                              ? `Waiting for ${partnerName} to decide whether to end the game.`
+                              : `${partnerName} has asked to end this game.`
+                            : `${partnerName} chose to keep playing.`}
+                        </p>
+                      )}
                       {game.scorelessTurns >= 4 && !passReachesTurnLimit && (
                         <p
                           className="scoreless-notice"
@@ -3552,6 +3698,121 @@ export default function App() {
                     )}
               </Modal>
             )}
+          {(dialog === "end-game" ||
+            (dialog === "incoming-end-game" && incomingEndRequest)) && (
+            <Modal
+              title="Finish this game together?"
+              testId={
+                dialog === "incoming-end-game"
+                  ? "incoming-end-game-popup"
+                  : "end-game-request-popup"
+              }
+              dismissible={dialog !== "incoming-end-game"}
+              close={() => setDialog(null)}
+              footer={
+                <div className="dialog-actions">
+                  <button
+                    className="secondary-button"
+                    data-testid={
+                      dialog === "incoming-end-game"
+                        ? "decline-end-game"
+                        : "cancel-end-game"
+                    }
+                    disabled={dialog === "incoming-end-game" && !canUseEndGame}
+                    onClick={() =>
+                      dialog === "incoming-end-game"
+                        ? void respondToEndGame(false)
+                        : setDialog(null)
+                    }
+                  >
+                    Keep playing
+                  </button>
+                  <button
+                    className="primary-button"
+                    data-testid={
+                      dialog === "incoming-end-game"
+                        ? "approve-end-game"
+                        : "confirm-end-game-request"
+                    }
+                    disabled={
+                      !canUseEndGame ||
+                      (dialog === "end-game" && !!currentEndRequest)
+                    }
+                    onClick={() =>
+                      dialog === "incoming-end-game"
+                        ? void respondToEndGame(true)
+                        : void requestEndGame()
+                    }
+                  >
+                    {endGameBusy
+                      ? "Saving…"
+                      : dialog === "incoming-end-game"
+                        ? "Agree & end game"
+                        : `Ask ${partnerName}`}
+                  </button>
+                </div>
+              }
+            >
+              <p>
+                {dialog === "incoming-end-game"
+                  ? `${partnerName} would like to finish this game.`
+                  : "The bag is empty. You can finish now if you both agree, or keep playing your remaining tiles."}
+              </p>
+              <p className="new-game-warning">
+                Each player’s remaining tile values will be deducted from their
+                own score. The highest final score wins. No tiles are
+                transferred.
+              </p>
+              {sharedActionsPaused
+                ? pauseNotice(true)
+                : endGameUnavailable && (
+                    <p role="status">{endGameUnavailable}</p>
+                  )}
+              {endGameError && !sharedActionsPaused && (
+                <p className="word-request-error" role="alert">
+                  {endGameError}
+                </p>
+              )}
+            </Modal>
+          )}
+          {dialog === "debug-result" && (
+            <Modal
+              title="End-game preview"
+              testId="debug-end-game-popup"
+              close={() => setDialog(null)}
+              footer={
+                <div className="dialog-actions">
+                  <button
+                    className="secondary-button"
+                    onClick={() => setDialog("help")}
+                  >
+                    Back to Help
+                  </button>
+                  <button className="primary-button" disabled>
+                    Preview only
+                  </button>
+                </div>
+              }
+            >
+              <p className="dictionary-reassurance">
+                Sample scores only. This preview does not change your game.
+              </p>
+              <div className="final-scores">
+                {(["mom", "aunt"] as const).map((player) => (
+                  <div className="final-score" key={player}>
+                    <span>{names[player]}</span>
+                    <strong>{previewSummary.scores[player]}</strong>
+                    <small>points</small>
+                  </div>
+                ))}
+              </div>
+              <p>
+                You both agreed to finish with the bag empty. Remaining tile
+                values were deducted.
+              </p>
+              <GameSummary game={previewSummary} names={names} />
+            </Modal>
+          )}
           {dialog === "new-game" && (
             <Modal
               title="Start a new game together?"
@@ -4018,6 +4279,7 @@ export default function App() {
                         recallAnimation.active ||
                         !!wordBusy ||
                         newGameBusy ||
+                        endGameBusy ||
                         hasIncomingDecision
                       }
                       onClick={() => void appUpdate.apply()}
@@ -4078,6 +4340,13 @@ export default function App() {
                       Try the effects here. These sample points do not change
                       your game.
                     </p>
+                    <button
+                      className="secondary-button"
+                      data-testid="debug-end-game"
+                      onClick={() => setDialog("debug-result")}
+                    >
+                      Preview final results
+                    </button>
                     <div className="debug-buttons">
                       {(["low", "medium", "high", "bingo"] as const).map(
                         (band) => (

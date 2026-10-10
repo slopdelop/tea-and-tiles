@@ -4,6 +4,7 @@ import type { Game, MoveRecord, Slot } from "../../shared/engine";
 import type { WordScore } from "../../shared/scoring";
 import { buildScoreTimeline, SCORE_FINAL_HOLD_MS } from "../scoreTimeline";
 import { CELEBRATION_HOLD_MS } from "../celebrationTiming";
+import { topWordScores } from "./gameSummaryData";
 
 function PremiumBadge({ premium }: { premium: "DL" | "TL" | "DW" | "TW" }) {
   const names = {
@@ -344,6 +345,34 @@ export function GameSummary({
   const history = game.history ?? [];
   return (
     <section className="game-summary" data-testid="game-summary">
+      <h3 className="help-section-title">Best words at the table</h3>
+      <div className="top-word-columns">
+        {(["mom", "aunt"] as const).map((player) => {
+          const words = topWordScores(history, player);
+          return (
+            <section key={player} data-testid={`top-word-scores-${player}`}>
+              <h4>{names[player]}</h4>
+              {words.length ? (
+                <ol>
+                  {words.map((word, index) => (
+                    <li key={`${index}:${word.word}`}>
+                      <span>{word.word}</span>
+                      <strong>
+                        {word.score}
+                        <small> points</small>
+                      </strong>
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <p className="history-note">
+                  No individual word scores recorded.
+                </p>
+              )}
+            </section>
+          );
+        })}
+      </div>
       <h3 className="help-section-title">The game in words</h3>
       {game.historyComplete !== true && (
         <p className="history-note" data-testid="partial-history">

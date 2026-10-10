@@ -51,7 +51,8 @@ export function scoreAdjustments(
   out: Slot | null = null,
 ): FinalScoreAdjustments {
   const players = {} as FinalScoreAdjustments["players"];
-  const deduct = reason === "rack-out" || reason === "scoreless";
+  const deduct =
+    reason === "rack-out" || reason === "scoreless" || reason === "agreed-end";
   for (const slot of ["mom", "aunt"] as const) {
     const deducted = deduct ? rackValues[slot] : 0;
     const transferred =

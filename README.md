@@ -125,6 +125,10 @@ Choose the ending before proposing the new game. **Classic** uses the bag/rack a
 
 Every mode can finish earlier when the bag is empty and a player uses her last tile, or after six consecutive scoreless turns. These normal endings retain their usual rack adjustments. The rack-out ending takes precedence if reached on the same accepted move as the turn or score limit. The consent popup shows the proposed mode and timed duration; pending or retried proposals cannot silently change them. Existing games and older proposals without a choice remain Classic. The new-game dialog is centered in the viewport, with its title and actions visible while long content scrolls inside.
 
+When the bag is empty, **End game** replaces Exchange tiles. Either player may propose an early finish; the other player must agree. Approval deducts each player's remaining rack value, without transferring points, then shows the final tally. Declining resumes the game. A pending decision pauses shared moves; the six-scoreless-turn ending still works after the decision is resolved.
+
+The final tally highlights each player's three highest recorded individual word scores above the full turn history. Cross-words are ranked separately and bingo points remain a turn bonus. Debug controls in Help include a clearly labelled mock end-game preview; previewing it does not modify the shared match.
+
 The server owns the timed deadline and rejects late moves. An authenticated, idempotent callable finalizes an expired match when an open screen reaches the deadline or a player returns. If both screens are closed, the saved status is finalized on return; the deadline still prevents extra play. This needs no scheduled job or additional always-running service. The display uses calm text such as **25 minutes left**, rounding up to whole minutes until the final 60 seconds, when it shows seconds remaining. Countdown display is local and is calibrated against the server clock; it does not write to Firestore each second.
 
 ### Colour themes

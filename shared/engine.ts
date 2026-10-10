@@ -56,7 +56,8 @@ export interface Game {
     | "target-score"
     | "timed"
     | "rack-out"
-    | "scoreless";
+    | "scoreless"
+    | "agreed-end";
   replacedByGameId?: string;
   replacedAt?: number;
   endedAt?: number;

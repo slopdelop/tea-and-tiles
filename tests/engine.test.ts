@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { scoreAdjustments } from "../shared/scoring";
 import {
   applyCommand,
   createGame,
@@ -48,6 +49,35 @@ const command = (
   kind,
 });
 describe("rules and scoring", () => {
+  it("deducts both racks without transferring points for an agreed empty-bag ending", () => {
+    const scores = { mom: 20, aunt: 12 };
+    const racks = { mom: 10, aunt: 2 };
+    expect(scoreAdjustments(scores, racks, "agreed-end")).toEqual({
+      reason: "agreed-end",
+      players: {
+        mom: {
+          earned: 20,
+          rackValue: 10,
+          deducted: 10,
+          transferred: 0,
+          final: 10,
+        },
+        aunt: {
+          earned: 12,
+          rackValue: 2,
+          deducted: 2,
+          transferred: 0,
+          final: 10,
+        },
+      },
+    });
+    expect(
+      scoreAdjustments({ mom: 0, aunt: 1 }, { mom: 10, aunt: 0 }, "agreed-end")
+        .players.mom.final,
+    ).toBe(-10);
+    expect(scores).toEqual({ mom: 20, aunt: 12 });
+    expect(racks).toEqual({ mom: 10, aunt: 2 });
+  });
   it("has 100 unique standard tiles and exactly two blanks", () => {
     const g = createGame("one");
     const all = [...g.bag, ...g.racks.mom, ...g.racks.aunt];

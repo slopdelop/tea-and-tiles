@@ -108,6 +108,14 @@ On each iPad, open the website in Safari → Share → Add to Home Screen. **The
 
 Confirm correct names, private racks and the same match. Play alternating turns, close/reopen both apps, sleep/reconnect one device, test touch dragging/reordering and approve word/new-game requests from the other device. Check sound, reduced motion and FaceTime placement. Inspect App Check metrics and enable Firestore enforcement as above. Static assets are cached; shared turns require a connection.
 
+After the empty-bag end-game update, deploy `requestEndGame`, `respondToEndGame`, `submitCommand` and the Firestore rules before publishing the client. The new request collection is member-readable and server-written; the callable functions enforce two-player consent and compute rack deductions. Local emulators use the same flow. This does not require resetting games, credentials or device bindings.
+
+```powershell
+npx firebase deploy --project YOUR_PROJECT_ID --only functions:tea-and-tiles:requestEndGame,functions:tea-and-tiles:respondToEndGame,functions:tea-and-tiles:submitCommand,firestore:rules
+```
+
+On real iPads, also check portrait/landscape fit, Safari toolbar changes, background/foreground return, dragging, and scrolling inside Help and the final tally. The app prevents ordinary game-surface pan/zoom gestures where supported; Safari or system accessibility zoom can override author restrictions. Very short windows and text-entry situations retain a scrolling fallback so controls remain reachable.
+
 Presence sends a small direct Firestore heartbeat about every 60 seconds while each signed-in device is visible. Another player appears recently online while any of her device timestamps is no more than 120 seconds old. Hidden/closed devices expire naturally; this is approximate activity rather than immediate disconnect detection. Each heartbeat consumes one Firestore write plus listener/rule reads, and no Function invocation. Two continuously foreground devices add roughly 120 writes/hour; additional devices increase usage. The deployed rules must include the own-device presence exception, server-timestamp requirement and 55-second update minimum. Client deletes and all authoritative game writes remain denied. Deploying these rules does not require changing Functions or resetting any game/session.
 
 ## Updating the dictionary

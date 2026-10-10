@@ -4551,6 +4551,131 @@ button {
     scale: 1.045;
   }
 }
+
+/* Keep a comfortably sized table inside the current tablet viewport. Short
+   windows and keyboards retain normal page scrolling instead of clipping. */
+html.tablet-page-fitted,
+.tablet-page-fitted body {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+.app-shell.tablet-viewport-fit:not(.board-focus) {
+  height: var(--tablet-height, 100dvh);
+  min-height: 0;
+  padding-top: 10px;
+  padding-bottom: 6px;
+  touch-action: pan-y;
+}
+.tablet-viewport-fit:not(.board-focus) > .app-header {
+  margin-bottom: 12px;
+}
+.tablet-viewport-fit:not(.board-focus) .board-frame {
+  width: min(100%, var(--tablet-board-size));
+  min-width: 0;
+}
+.tablet-viewport-fit .board {
+  touch-action: none;
+}
+.tablet-viewport-fit:not(.board-focus) .game-layout {
+  row-gap: 10px;
+}
+.tablet-viewport-fit:not(.board-focus) .rack-hint {
+  margin-top: 5px;
+  margin-bottom: 0;
+}
+
+:root[data-theme] .turn-card .move-preview.dictionary-recognized {
+  background: #e5f1e3;
+  border-color: #8eaf88;
+  color: #26492d;
+}
+:root[data-theme] .turn-card .move-preview.dictionary-unrecognized {
+  background: #fae8e5;
+  border-color: #c89891;
+  color: #803c36;
+}
+:root[data-theme]
+  .move-preview:is(.dictionary-recognized, .dictionary-unrecognized)
+  :is(strong, small, .eyebrow, .preview-score) {
+  color: inherit;
+}
+:root[data-theme] .quiet-actions .end-game-button:not(:disabled) {
+  background: #fae8e5;
+  color: #85372f;
+  border: 2px solid #ac5549;
+  font-weight: 750;
+  animation: end-game-breathe 2.4s ease-in-out infinite;
+}
+@keyframes end-game-breathe {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 #b24b3822;
+  }
+  50% {
+    box-shadow: 0 0 0 4px #b24b3838;
+  }
+}
+.end-request-status {
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.top-word-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin-bottom: 24px;
+}
+.top-word-columns h4 {
+  font-size: 18px;
+  margin: 8px 0 12px;
+}
+.top-word-columns ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: bestword;
+}
+.top-word-columns li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  border-bottom: 1px solid var(--line);
+  padding: 9px 0;
+  font-size: 15px;
+}
+.top-word-columns li::before {
+  counter-increment: bestword;
+  content: counter(bestword);
+  color: var(--muted);
+  font-size: 12px;
+}
+.top-word-columns li > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.top-word-columns strong {
+  margin-left: auto;
+  white-space: nowrap;
+}
+.top-word-columns small {
+  font-size: 10px;
+  font-weight: 400;
+}
+@media (max-width: 520px) {
+  .top-word-columns {
+    gap: 12px;
+  }
+  .top-word-columns li {
+    flex-wrap: wrap;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .end-game-button:not(:disabled) {
+    animation: none;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   .draft-word-tile {
     animation: none;
