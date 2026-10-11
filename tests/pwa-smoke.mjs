@@ -67,6 +67,10 @@ try {
   });
   await page.goto(origin + base);
   await expect(page.locator(".brand")).toContainText("Tea");
+  const buildTime = page.getByTestId("build-time");
+  await expect(buildTime).toHaveAttribute("datetime", /^\d{4}-\d{2}-\d{2}T/);
+  await expect(buildTime).toHaveText(/\d{4}.*\d{1,2}:\d{2} [AP]M P[DS]T/);
+  const initialBuildTime = await buildTime.getAttribute("datetime");
   const manifest = await (
     await page.request.get(origin + base + "manifest.webmanifest")
   ).json();
@@ -142,6 +146,10 @@ try {
   await context.setOffline(true);
   await page.reload();
   await expect(page.locator(".brand")).toContainText("Tea");
+  await expect(page.getByTestId("build-time")).toHaveAttribute(
+    "datetime",
+    initialBuildTime,
+  );
   const cacheURLs = await page.evaluate(async () => {
     const urls = [];
     for (const name of await caches.keys()) {

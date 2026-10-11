@@ -687,8 +687,15 @@ test("tablet landscape expands the board to the top and exposes the build versio
     });
   }
   await page.getByTestId("help-settings").click();
-  await expect(page.getByTestId("app-version")).toHaveText(
+  await expect(page.getByTestId("app-version")).toContainText(
     `Version ${packageInfo.version} · local`,
+  );
+  await expect(page.getByTestId("build-time")).toHaveAttribute(
+    "datetime",
+    /^\d{4}-\d{2}-\d{2}T/,
+  );
+  await expect(page.getByTestId("build-time")).toHaveText(
+    /\d{4}.*\d{1,2}:\d{2} [AP]M P[DS]T/,
   );
   await page.getByRole("button", { name: "Close dialog" }).click();
   await page.setViewportSize({ width: 820, height: 1180 });

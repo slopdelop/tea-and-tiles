@@ -4,6 +4,7 @@ import { VitePWA } from "vite-plugin-pwa";
 import packageInfo from "./package.json";
 import { execFileSync } from "node:child_process";
 const { version } = packageInfo;
+const builtAt = new Date().toISOString();
 let revision = "local";
 try {
   revision = execFileSync("git", ["rev-parse", "--short=7", "HEAD"], {
@@ -21,6 +22,7 @@ export default defineConfig(({ mode }) => {
   return {
     base,
     define: {
+      "import.meta.env.VITE_BUILD_TIME": JSON.stringify(builtAt),
       "import.meta.env.VITE_APP_VERSION": JSON.stringify(
         `${version} · ${mode === "development" ? "local" : revision}`,
       ),
