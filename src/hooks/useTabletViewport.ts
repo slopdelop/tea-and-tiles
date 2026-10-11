@@ -1,4 +1,5 @@
 import { useLayoutEffect, useState } from "react";
+import { installResumeZoomRecovery } from "./resumeZoomRecovery";
 
 /** Fit the active tablet table without changing the user's browser zoom. */
 export function useTabletViewport(enabled: boolean) {
@@ -96,6 +97,11 @@ export function useTabletViewport(enabled: boolean) {
       )
         event.preventDefault();
     };
+    const stopZoomRecovery = installResumeZoomRecovery(
+      window,
+      document,
+      measure,
+    );
     const observer = new ResizeObserver(measure);
     document
       .querySelectorAll(".app-header, .game-sidebar, .hand-row")
@@ -111,6 +117,7 @@ export function useTabletViewport(enabled: boolean) {
     document.addEventListener("gesturechange", preventZoom, { passive: false });
     document.addEventListener("touchmove", preventZoom, { passive: false });
     return () => {
+      stopZoomRecovery();
       cancelAnimationFrame(frame);
       observer.disconnect();
       window.removeEventListener("resize", measure);
