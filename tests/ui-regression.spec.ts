@@ -4177,6 +4177,7 @@ test("actual last tile with an empty bag ends both devices, transfers leftover p
     await expect(page.getByTestId("end-game-popup")).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("end-game-popup")).toHaveCount(0);
+    await expect(page.getByTestId("new-game")).toBeVisible();
     // A pending required decision takes precedence over the automatic result,
     // then the result resumes after that decision without changing scores.
     await db.doc("pairs/family/wordRequests/mom-MW").set({

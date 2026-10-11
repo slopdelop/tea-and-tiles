@@ -2323,7 +2323,7 @@ export default function App() {
             )}
           </div>
         )}
-        {game?.status === "active" && slot && (
+        {game && slot && (
           <button
             className="secondary-button header-new-game"
             data-testid="new-game"
