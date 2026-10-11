@@ -1562,9 +1562,11 @@ export default function App() {
     });
     setMessage("");
   }
-  function recallTiles() {
+  function recallTiles(tileId?: string) {
     if (!canEdit || !placements.length || drag || settling) return;
-    const sources = placements.flatMap((placement): RecallSource[] => {
+    const returning = placements.filter((p) => !tileId || p.tileId === tileId);
+    if (!returning.length) return;
+    const sources = returning.flatMap((placement): RecallSource[] => {
       const tile = rack.find((candidate) => candidate.id === placement.tileId);
       const element = document.querySelector<HTMLElement>(
         `[data-testid="board-cell-${placement.row}-${placement.col}"] .board-tile`,
@@ -1584,7 +1586,7 @@ export default function App() {
       ];
     });
     recallAnimation.begin(sources);
-    edit([]);
+    edit(tileId ? placements.filter((p) => p.tileId !== tileId) : []);
     setSelected(null);
     tick();
   }
@@ -2852,6 +2854,26 @@ export default function App() {
                     data-testid="tile-rack"
                     data-drop-rack="true"
                     data-rack-insertion-index={rackPreview?.insertionIndex}
+                    role="group"
+                    tabIndex={
+                      selected && placements.some((p) => p.tileId === selected)
+                        ? 0
+                        : -1
+                    }
+                    onClick={(event) => {
+                      if ((event.target as Element).closest("button")) return;
+                      if (selected) recallTiles(selected);
+                    }}
+                    onKeyDown={(event) => {
+                      if (
+                        event.target !== event.currentTarget ||
+                        !selected ||
+                        !["Enter", " "].includes(event.key)
+                      )
+                        return;
+                      event.preventDefault();
+                      recallTiles(selected);
+                    }}
                   >
                     {(visibleRack.length > 0 || reserveRackReturn) && (
                       <div
@@ -3038,7 +3060,7 @@ export default function App() {
                     disabled={
                       !canEdit || !placements.length || !!drag || !!settling
                     }
-                    onClick={recallTiles}
+                    onClick={() => recallTiles()}
                   >
                     <Icon name="recall" />
                     <span>Recall</span>

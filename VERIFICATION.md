@@ -274,3 +274,9 @@ Release 1.1.3 keeps a fitted tablet page locked even when draft feedback makes t
 
 Validation: TypeScript/Vite/Functions build passed. The isolated tablet UI regression passed across portrait and landscape dimensions, foreground restoration and short-viewport Help. It forces a 1,100px draft preview to verify the page remains locked, the sidebar actually scrolls, Play stays reachable, outer scrollY stays zero and board user-select is none. The test leaves authoritative game state unchanged. Physical iPad long-press behavior still needs device confirmation.
 
+# Tap-to-return a tentative tile — 2026-10-11
+
+Release 1.1.4 allows selecting a tentative board tile and tapping the wooden holder to return only that tile, using the existing recall animation. Rack tile buttons retain their selection behavior. The holder also supports Enter/Space when focused after board selection. Existing all-tile recall and dragging remain available. Return respects the same editing, drag, settle and animation guards.
+
+Validation: TypeScript/Vite/Functions build passed. Two isolated touch UI checks passed on and off turn, verifying single-tile return preserves another placement, normal rack selection, keyboard return, seven tiles restored and unchanged authoritative game state.
+

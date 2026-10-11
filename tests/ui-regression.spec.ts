@@ -849,6 +849,47 @@ test("tablet fit survives short browser toolbars and foreground restore while He
   expect(await authoritativeState()).toEqual(before);
 });
 
+for (const offTurn of [false, true]) {
+  test(`tap selected board tile then holder returns only that tile${offTurn ? " off turn" : ""}`, async ({
+    page,
+  }) => {
+    if (offTurn) await db.doc("games/ui-table").update({ turn: "aunt" });
+    await enroll(page);
+    await expect(page.getByTestId("turn-announcement")).toBeHidden();
+    const before = await authoritativeState();
+    await rack(page, "A").tap();
+    await cell(page, 0, 1).tap();
+    await rack(page, "T").tap();
+    await cell(page, 0, 2).tap();
+    await expect(page.getByTestId("tile-rack").locator("button")).toHaveCount(
+      5,
+    );
+    await cell(page, 0, 2).tap();
+    await page.getByTestId("tile-rack").tap({ position: { x: 5, y: 5 } });
+    await expect(cell(page, 0, 2)).not.toHaveClass(/has-tentative/);
+    await expect(cell(page, 0, 1)).toHaveClass(/has-tentative/);
+    await expect(rack(page, "T")).toBeVisible();
+    await expect(page.getByTestId("tile-rack").locator("button")).toHaveCount(
+      6,
+    );
+    // Let the return animation finish before another interaction.
+    await expect(page.getByTestId("recall-tiles")).toBeEnabled();
+    await cell(page, 0, 1).tap();
+    // A rack tile still selects itself rather than returning the board tile.
+    await rack(page, "T").tap();
+    await expect(cell(page, 0, 1)).toHaveClass(/has-tentative/);
+    await expect(rack(page, "T")).toHaveAttribute("aria-pressed", "true");
+    await cell(page, 0, 1).tap();
+    await page.getByTestId("tile-rack").focus();
+    await page.keyboard.press("Enter");
+    await expect(cell(page, 0, 1)).not.toHaveClass(/has-tentative/);
+    await expect(page.getByTestId("tile-rack").locator("button")).toHaveCount(
+      7,
+    );
+    expect(await authoritativeState()).toEqual(before);
+  });
+}
+
 test("wooden rack stays the same size as tiles leave and return and bonus legend lives in Help", async ({
   page,
 }, info) => {
