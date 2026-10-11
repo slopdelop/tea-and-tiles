@@ -2327,7 +2327,7 @@ export default function App() {
         )}
         {game && slot && (
           <button
-            className="secondary-button header-new-game"
+            className={`secondary-button header-new-game ${game.status === "finished" ? "new-game-next-action" : ""}`}
             data-testid="new-game"
             disabled={
               !canUseNewGame || !!currentGameRequest || waitingForNewGame

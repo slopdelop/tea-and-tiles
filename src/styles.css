@@ -759,6 +759,31 @@ button {
   font-size: 12px;
   white-space: nowrap;
 }
+/* The next-game cue stays green across table palettes. */
+.header-new-game.new-game-next-action:not(:disabled) {
+  box-shadow:
+    0 0 0 2px #398b55,
+    0 0 10px 2px #398b5533;
+  animation: new-game-next-action-breathe 2.8s ease-in-out infinite;
+}
+@keyframes new-game-next-action-breathe {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 2px #398b55,
+      0 0 10px 2px #398b5533;
+  }
+  50% {
+    box-shadow:
+      0 0 0 2px #4ca767,
+      0 0 16px 4px #398b5559;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .header-new-game.new-game-next-action:not(:disabled) {
+    animation: none;
+  }
+}
 .icon-button {
   width: 44px;
   height: 44px;
