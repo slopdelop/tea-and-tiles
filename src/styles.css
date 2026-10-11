@@ -4580,6 +4580,26 @@ html.tablet-page-fitted,
 .tablet-viewport-fit:not(.board-focus) .game-layout {
   row-gap: 10px;
 }
+.tablet-viewport-fit:not(.board-focus) .game-sidebar {
+  max-height: var(--tablet-sidebar-height);
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+}
+.tablet-viewport-fit:not(.board-focus) .game-sidebar > * {
+  flex-shrink: 0;
+}
+.app-shell.active-game {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+.app-shell.active-game :is(input, textarea, [contenteditable="true"]) {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
 .tablet-viewport-fit:not(.board-focus) .rack-hint {
   margin-top: 5px;
   margin-bottom: 0;

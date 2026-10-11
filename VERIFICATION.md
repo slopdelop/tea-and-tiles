@@ -268,3 +268,9 @@ Release 1.1.1 adds a foreground-only recovery for installed iOS/iPadOS apps. If 
 
 Validation: all 103 unit tests passed, including five lifecycle tests for delayed zoom, platform gating, normal/pre-existing/input zoom, cleanup, and bounded retries. TypeScript, Vite/PWA and Functions builds passed. Actual iPad Home Screen background/resume behavior still requires device confirmation: browser simulation verifies the recovery lifecycle, not WebKit's native zoom response.
 
+# Tablet draft scrolling and text selection — 2026-10-11
+
+Release 1.1.3 keeps a fitted tablet page locked even when draft feedback makes the sidebar taller. The sidebar has a viewport-height budget and scrolls internally, with scroll chaining contained. Portrait reserves a stable sidebar budget so preview growth does not consume more board space. Short viewports and focused inputs retain the existing fallback. Game-surface text selection and iOS long-press callouts are disabled; editable fields retain text selection.
+
+Validation: TypeScript/Vite/Functions build passed. The isolated tablet UI regression passed across portrait and landscape dimensions, foreground restoration and short-viewport Help. It forces a 1,100px draft preview to verify the page remains locked, the sidebar actually scrolls, Play stays reachable, outer scrollY stays zero and board user-select is none. The test leaves authoritative game state unchanged. Physical iPad long-press behavior still needs device confirmation.
+

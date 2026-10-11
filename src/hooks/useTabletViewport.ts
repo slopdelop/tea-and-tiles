@@ -56,20 +56,27 @@ export function useTabletViewport(enabled: boolean) {
             parseFloat(getComputedStyle(header).marginBottom)
           : 0;
         const oneColumn = layoutCss.gridTemplateColumns.split(" ").length === 1;
+        const layoutHeight = Math.floor(height - padding - headerHeight - 6);
+        // Reserve a stable portrait panel budget. Draft previews must not
+        // unlock the outer page or take more space away from the board.
+        const sidebarHeight = oneColumn
+          ? Math.min(360, Math.floor(height * 0.3))
+          : layoutHeight;
         const extra =
           play.offsetHeight -
           board.offsetHeight +
-          (oneColumn ? sidebar.offsetHeight + parseFloat(layoutCss.rowGap) : 0);
+          (oneColumn ? sidebarHeight + parseFloat(layoutCss.rowGap) : 0);
         const available = Math.floor(
           height - padding - headerHeight - extra - 6,
         );
-        const sidebarFits =
-          oneColumn || sidebar.offsetHeight + padding + headerHeight <= height;
         const canFit =
           height >= 650 &&
           available >= 330 &&
-          sidebarFits &&
           !document.activeElement?.matches("input, textarea, select");
+        shell.style.setProperty(
+          "--tablet-sidebar-height",
+          `${sidebarHeight}px`,
+        );
         shell.style.setProperty("--tablet-height", `${Math.floor(height)}px`);
         shell.style.setProperty(
           "--tablet-board-size",

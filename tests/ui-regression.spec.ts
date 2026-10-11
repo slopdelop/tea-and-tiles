@@ -801,6 +801,24 @@ test("tablet fit survives short browser toolbars and foreground restore while He
     await expect(cell(page, 0, 1)).toHaveClass(/has-tentative/);
     await expect(cell(page, 0, 2)).toHaveClass(/has-tentative/);
   }
+  await page.setViewportSize({ width: 1024, height: 720 });
+  const panel = page.locator(".game-sidebar");
+  await page.getByTestId("move-preview").evaluate((node) => {
+    (node as HTMLElement).style.minHeight = "1100px";
+  });
+  await expect(page.locator("html")).toHaveClass(/tablet-page-fitted/);
+  await expect(panel).toHaveCSS("overflow-y", "auto");
+  expect(
+    await panel.evaluate((node) => node.scrollHeight > node.clientHeight),
+  ).toBe(true);
+  await page.getByTestId("play-word").scrollIntoViewIfNeeded();
+  await expectControlInsideViewport(page, page.getByTestId("play-word"));
+  expect(await panel.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
+  expect(await page.evaluate(() => scrollY)).toBe(0);
+  await expect(page.getByTestId("game-board")).toHaveCSS("user-select", "none");
+  await page.getByTestId("move-preview").evaluate((node) => {
+    (node as HTMLElement).style.removeProperty("min-height");
+  });
   await page.setViewportSize({ width: 1024, height: 500 });
   await page.getByTestId("help-settings").click();
   const help = page.getByRole("dialog", { name: "Help & settings" });
