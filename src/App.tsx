@@ -1351,6 +1351,7 @@ export default function App() {
 
   const turnAnnouncementBlocked =
     !!dialog ||
+    !!debugBoardMove ||
     !!blank ||
     !!drag ||
     !!settling ||
@@ -3784,35 +3785,39 @@ export default function App() {
               </p>
               <h3>Scoring over the board</h3>
               <div className="debug-buttons">
-                {(["multiple-words", "high", "bingo"] as const).map((kind) => (
-                  <button
-                    key={kind}
-                    className="secondary-button"
-                    data-testid={`debug-scene-${kind}`}
-                    disabled={
-                      !game ||
-                      !!pending ||
-                      busy ||
-                      !!drag ||
-                      !!settling ||
-                      !!animatedMove
-                    }
-                    onClick={() => {
-                      const move = debugMove(kind);
-                      setDebugBoardMove({
-                        move: { ...move, id: `preview:${Date.now()}` },
-                        board: debugMoveBoard(kind),
-                      });
-                      setDialog(null);
-                    }}
-                  >
-                    {kind === "multiple-words"
-                      ? "Multiple words"
-                      : kind === "bingo"
-                        ? "Seven tiles"
-                        : "High score"}
-                  </button>
-                ))}
+                {(["normal", "multiple-words", "high", "bingo"] as const).map(
+                  (kind) => (
+                    <button
+                      key={kind}
+                      className="secondary-button"
+                      data-testid={`debug-scene-${kind}`}
+                      disabled={
+                        !game ||
+                        !!pending ||
+                        busy ||
+                        !!drag ||
+                        !!settling ||
+                        !!animatedMove
+                      }
+                      onClick={() => {
+                        const move = debugMove(kind);
+                        setDebugBoardMove({
+                          move: { ...move, id: `preview:${Date.now()}` },
+                          board: debugMoveBoard(kind),
+                        });
+                        setDialog(null);
+                      }}
+                    >
+                      {kind === "normal"
+                        ? "Single word"
+                        : kind === "multiple-words"
+                          ? "Multiple words"
+                          : kind === "bingo"
+                            ? "Seven tiles"
+                            : "High score"}
+                    </button>
+                  ),
+                )}
               </div>
               <h3>Game endings</h3>
               <label>

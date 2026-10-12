@@ -288,3 +288,9 @@ Local development alone exposes Help’s preview toggle and the main Debug launc
 
 Validation: 119 unit tests and TypeScript checks passed. Isolated UI checks passed for real rack-out/transfer and mutually agreed endings on both devices, all ending previews, animated tally stages, skip/reduced motion, natural and stopped scoring-preview completion, preservation of all board-cell labels/private draft and unchanged authoritative game/racks/bag/receipts. Production PWA checks passed for hidden debug controls, explicit update/reload, offline shell and stable build timestamp. Astra reviewed Blue & Ink and dark portrait screenshots and enlarged ledger text; the short-screen fanfare is compact to keep the winner visible above the fixed footer. Physical iPad validation remains a device check.
 
+# Single-word preview and scoring tile headroom — 2026-10-12
+
+Release 1.2.2 adds a local Single word scene using the engine-scored five-letter HOUSE (16 points). The scoring card is wider, animated letter rows have headroom for lift/scale plus outlines, and words up to seven letters stay on one row. Narrow screens can scroll that row horizontally; longer words retain wrapping. Local scoring previews hold queued turn announcements until the scene finishes so those overlays cannot obscure the letters.
+
+Validation: 119 unit tests and the TypeScript/Vite/Functions build passed. The isolated geometry regression verifies HOUSE/GARDENS on one row at 1024×768 and 820×1180, actual enlarged first/last tile bounds plus 5px outlines inside the row/list, visible premium badges, and unchanged private draft and authoritative game data. Astra reviewed the active scoring screenshots. Physical iPad rendering remains a device check.
+

@@ -4120,7 +4120,7 @@ button {
 }
 /* Readable scoring: a calm, centered presentation with one counted word at a time. */
 .floating-points:has(.with-score-detail) {
-  width: min(480px, calc(100% - 36px));
+  width: min(560px, calc(100% - 36px));
   max-height: calc(100% - 32px);
   overflow: auto;
   overscroll-behavior: contain;
@@ -4148,7 +4148,14 @@ button {
 .score-explanation .scored-word-tiles {
   justify-content: center;
   gap: 15px 7px;
-  padding: 9px 0 14px;
+  /* The counted tile rises 6px, grows 8%, and has a 5px outer outline. */
+  padding: 18px 10px 14px;
+}
+.score-explanation .scored-word-tiles.single-row-word {
+  flex-wrap: nowrap;
+  justify-content: safe center;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
 }
 .score-explanation .score-letter {
   flex: 0 0 52px;
@@ -4251,7 +4258,7 @@ button {
   max-height: 300px;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 8px 5px;
+  padding: 8px;
 }
 .score-word-list > .scored-word {
   position: relative;

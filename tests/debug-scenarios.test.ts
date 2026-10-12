@@ -93,7 +93,12 @@ describe("isolated local preview scenarios", () => {
   });
 
   it("uses engine-calculated per-letter premiums, crossing words and seven-tile bonus", () => {
-    for (const kind of ["multiple-words", "high", "bingo"] as DebugMoveKind[]) {
+    for (const kind of [
+      "normal",
+      "multiple-words",
+      "high",
+      "bingo",
+    ] as DebugMoveKind[]) {
       const move = debugMove(kind);
       expect(move.score).toBe(move.breakdown!.total);
       expect(move.score).toBe(
@@ -111,10 +116,16 @@ describe("isolated local preview scenarios", () => {
           );
       }
       expect(Object.keys(debugMoveBoard(kind))).toHaveLength(
-        move.placements.length + 1,
+        new Set(
+          move.breakdown!.words.flatMap((word) =>
+            word.tiles.map((tile) => tile.tileId),
+          ),
+        ).size,
       );
     }
     expect(debugMove("multiple-words").words).toEqual(["CAT", "TA"]);
+    expect(debugMove("normal").words).toEqual(["HOUSE"]);
+    expect(debugMove("normal").score).toBe(16);
     expect(debugMove("high").score).toBeGreaterThan(100);
     expect(debugMove("bingo").placements).toHaveLength(7);
     expect(debugMove("bingo").breakdown!.bingoBonus).toBe(50);

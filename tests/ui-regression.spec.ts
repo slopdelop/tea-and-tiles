@@ -4724,6 +4724,103 @@ test("timer switches from minutes to seconds and local debug celebrations never 
   expect(await authoritativeState()).toEqual(before);
 });
 
+test("local normal and seven-tile scoring stay in one row without clipping enlarged active letters", async ({
+  page,
+}, info) => {
+  await enroll(page);
+  await rack(page, "A").tap();
+  await cell(page, 0, 1).tap();
+  const before = await authoritativeState();
+  await page.getByTestId("help-settings").click();
+  await page.getByTestId("debug-enabled").check();
+  await page.getByRole("button", { name: "Close dialog" }).click();
+  for (const viewport of [
+    { width: 1024, height: 768 },
+    { width: 820, height: 1180 },
+  ]) {
+    await page.setViewportSize(viewport);
+    for (const kind of ["normal", "bingo"] as const) {
+      await page.getByTestId("local-debug-tools").click();
+      await page.getByTestId(`debug-scene-${kind}`).click();
+      const preview = page.getByTestId("celebration-preview");
+      const word = preview.getByTestId("score-word-row").first();
+      await expect(page.getByTestId("turn-announcement")).toHaveCount(0);
+      const letters = word.locator(".score-letter");
+      const spelling = kind === "normal" ? "HOUSE" : "GARDENS";
+      await expect(letters.locator(".tile-letter")).toHaveText([...spelling]);
+      const positions = await letters.evaluateAll((tiles) =>
+        tiles.map((tile) => tile.getBoundingClientRect().y),
+      );
+      expect(Math.max(...positions) - Math.min(...positions)).toBeLessThan(0.5);
+      await expect(word.locator(".single-row-word")).toBeVisible();
+      for (const index of [0, spelling.length - 1]) {
+        const active = letters.nth(index);
+        await expect
+          .poll(
+            () =>
+              active.evaluate((tile) => {
+                const box = tile.getBoundingClientRect();
+                return (
+                  tile.classList.contains("counting-letter") &&
+                  box.width >= 55.5
+                );
+              }),
+            { intervals: [25] },
+          )
+          .toBe(true);
+        const clipping = await active.evaluate((tile) => {
+          const box = tile.getBoundingClientRect();
+          const ancestors = [
+            tile.closest(".scored-word-tiles")!,
+            tile.closest(".score-word-list")!,
+          ];
+          return ancestors.map((ancestor) => {
+            const bounds = ancestor.getBoundingClientRect();
+            return {
+              left: box.left - 5 - bounds.left,
+              right: bounds.right - box.right - 5,
+              top: box.top - 5 - bounds.top,
+              bottom: bounds.bottom - box.bottom - 5,
+            };
+          });
+        });
+        for (const bounds of clipping)
+          for (const value of Object.values(bounds))
+            expect(value).toBeGreaterThanOrEqual(-0.5);
+        if (index === 0)
+          await page.screenshot({
+            path: info.outputPath(
+              `scoring-${kind}-${viewport.width}-active.png`,
+            ),
+            fullPage: false,
+          });
+      }
+      if (kind === "bingo") {
+        const badges = word.getByTestId("score-letter-premium");
+        expect(await badges.count()).toBeGreaterThan(0);
+        for (const badge of await badges.all()) {
+          await expect(badge).toBeVisible();
+          const badgeBox = await badge.boundingBox();
+          const listBox = await preview
+            .getByTestId("score-word-list")
+            .boundingBox();
+          expect(badgeBox!.y + badgeBox!.height).toBeLessThanOrEqual(
+            listBox!.y + listBox!.height,
+          );
+        }
+      }
+      await page.getByTestId("local-debug-tools").click();
+      await page
+        .getByTestId("local-debug-popup")
+        .getByRole("button", { name: "Close dialog" })
+        .click();
+      await expect(cell(page, 0, 1)).toHaveClass(/has-tentative/);
+      await expect(cell(page, 0, 1)).toContainText("A");
+      expect(await authoritativeState()).toEqual(before);
+    }
+  }
+});
+
 test("a real DON move counts two then three then four in a large centered card", async ({
   page,
 }, info) => {

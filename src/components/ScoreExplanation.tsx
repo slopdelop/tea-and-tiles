@@ -51,7 +51,10 @@ function WordTiles({
 }) {
   const reduced = useReducedMotion();
   return (
-    <div className="scored-word-tiles" aria-label={word.word}>
+    <div
+      className={`scored-word-tiles ${word.tiles.length <= 7 ? "single-row-word" : ""}`}
+      aria-label={word.word}
+    >
       {word.tiles.map((tile, index) => (
         <motion.span
           className={`tile score-letter ${active === index ? "counting-letter" : ""} ${counted !== undefined && index <= counted ? "counted-letter" : ""}`}
