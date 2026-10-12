@@ -8191,3 +8191,59 @@ test("both players see only the exchange count before the next turn", async ({
     await auntContext.close();
   }
 });
+
+test("iPad transport uses XHR rather than fetch streams while receiving a real move", async ({
+  page,
+  browser,
+}) => {
+  await enroll(page);
+  await db
+    .doc(`setupCodes/${createHash("sha256").update("PEACH").digest("hex")}`)
+    .set({ slot: "aunt", consumedUid: null, expiresAt: Date.now() + 3600000 });
+  const context = await browser.newContext({
+    baseURL: "http://127.0.0.1:5183",
+    hasTouch: true,
+    viewport: { width: 1024, height: 768 },
+    userAgent:
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15) AppleWebKit/605.1.15 Version/26.4 Safari/605.1.15",
+  });
+  try {
+    await context.addInitScript(() => {
+      const counters = { fetch: 0, xhr: 0 };
+      (window as any).transportCounters = counters;
+      const originalFetch = window.fetch;
+      window.fetch = (...args) => {
+        const url = args[0] instanceof Request ? args[0].url : String(args[0]);
+        if (url.includes("/Listen/channel")) counters.fetch++;
+        return originalFetch(...args);
+      };
+      const originalOpen = XMLHttpRequest.prototype.open;
+      XMLHttpRequest.prototype.open = function (...args: any[]) {
+        if (String(args[1]).includes("/Listen/channel")) counters.xhr++;
+        return (originalOpen as any).apply(this, args);
+      };
+    });
+    const ipad = await context.newPage();
+    await ipad.goto("/");
+    await openInvitationForm(ipad);
+    await ipad.getByTestId("setup-code").fill("peach");
+    await ipad.getByTestId("enroll-submit").click();
+    await expect(ipad.getByTestId("game-board")).toBeVisible();
+    await rack(page, "A").tap();
+    await cell(page, 0, 1).tap();
+    await rack(page, "T").tap();
+    await cell(page, 0, 2).tap();
+    expectedRevision = expectedCommandCount = 1;
+    expectedBoardKeys = ["0,0", "0,1", "0,2"];
+    await page.getByTestId("play-word").click();
+    await expect(cell(ipad, 0, 1)).toContainText("A");
+    await expect(cell(ipad, 0, 2)).toContainText("T");
+    const counters = await ipad.evaluate(
+      () => (window as any).transportCounters,
+    );
+    expect(counters.xhr).toBeGreaterThan(0);
+    expect(counters.fetch).toBe(0);
+  } finally {
+    await context.close();
+  }
+});

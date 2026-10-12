@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { firestoreTransport } from "../src/firestoreTransport";
+import { initializeApp, deleteApp } from "firebase/app";
 
 const browsers = [
+  {
+    name: "standalone iPad without Safari token",
+    userAgent:
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15) AppleWebKit/605.1.15 Mobile/15E148",
+    maxTouchPoints: 5,
+    forced: true,
+  },
   {
     name: "iPad Safari",
     userAgent:
@@ -66,6 +74,7 @@ describe("Firestore browser compatibility", () => {
   it.each(browsers)("preserves local transport for $name", (browser) => {
     expect(firestoreTransport(true, browser)).toEqual({
       experimentalAutoDetectLongPolling: true,
+      ...(browser.forced ? { useFetchStreams: false } : {}),
     });
   });
   it("handles unavailable browser identity", () => {
@@ -73,4 +82,38 @@ describe("Firestore browser compatibility", () => {
       experimentalAutoDetectLongPolling: true,
     });
   });
+  it.each(browsers)(
+    "actually selects the browser SDK transport for $name",
+    async (browser) => {
+      // Import the browser entry explicitly: Node's default entry has different
+      // fetch defaults and would conceal the bug this test is meant to catch.
+      const browserEntry = new URL(
+        "../node_modules/@firebase/firestore/dist/index.esm.js",
+        import.meta.url,
+      ).href;
+      const { initializeFirestore } = await import(
+        /* @vite-ignore */ browserEntry
+      );
+      for (const emulator of [false, true]) {
+        const app = initializeApp(
+          { projectId: "demo-transport-test" },
+          `${browser.name}-${emulator}`,
+        );
+        try {
+          // Initialization/settings inspection never starts a listener or an RPC.
+          const db = initializeFirestore(
+            app,
+            firestoreTransport(emulator, browser),
+          );
+          const effective = db._getSettings();
+          expect(effective.useFetchStreams).toBe(!browser.forced);
+          expect(effective.experimentalForceLongPolling).toBe(
+            !emulator && browser.forced,
+          );
+        } finally {
+          await deleteApp(app);
+        }
+      }
+    },
+  );
 });

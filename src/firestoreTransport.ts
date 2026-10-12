@@ -1,11 +1,17 @@
 import type { FirestoreSettings } from "firebase/firestore";
 
 type BrowserIdentity = Pick<Navigator, "userAgent" | "maxTouchPoints">;
+// Firebase's browser SDK accepts this setting, although its public TypeScript
+// interface currently omits it. The SDK-level regression test protects this
+// compatibility option when dependencies change.
+type BrowserFirestoreSettings = FirestoreSettings & {
+  useFetchStreams?: boolean;
+};
 
 export function firestoreTransport(
   emulator: boolean,
   browser?: BrowserIdentity,
-): FirestoreSettings {
+): BrowserFirestoreSettings {
   const ua = browser?.userAgent || "";
   const appleMobile =
     /iPad|iPhone|iPod/i.test(ua) ||
@@ -14,9 +20,14 @@ export function firestoreTransport(
     /Safari/i.test(ua) &&
     !/Chrome|Chromium|CriOS|FxiOS|Edg|OPR|Android/i.test(ua);
   // WebKit can buffer Firestore streaming updates until its next keep-alive.
-  // Close each response after data arrives rather than relying on detection.
+  // Long polling alone still uses fetch streams by default. Explicitly select
+  // XHR on Apple browsers to avoid the affected WebKit streaming reader.
   // https://github.com/firebase/firebase-js-sdk/issues/9789
-  return !emulator && (appleMobile || safari)
-    ? { experimentalForceLongPolling: true }
-    : { experimentalAutoDetectLongPolling: true };
+  const appleBrowser = appleMobile || safari;
+  return {
+    ...(!emulator && appleBrowser
+      ? { experimentalForceLongPolling: true }
+      : { experimentalAutoDetectLongPolling: true }),
+    ...(appleBrowser ? { useFetchStreams: false } : {}),
+  };
 }

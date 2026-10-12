@@ -1,5 +1,11 @@
 const releases = [
   {
+    version: "1.4.1",
+    items: [
+      "Changed how iPad and Safari receive game updates to address occasional delayed turns.",
+    ],
+  },
+  {
     version: "1.4.0",
     items: [
       "Each new game randomly chooses who starts.",

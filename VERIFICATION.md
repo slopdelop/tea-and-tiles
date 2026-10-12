@@ -336,3 +336,17 @@ Astra's settled screenshot review caught nested tile containment resolving long-
 Approved the round-feedback candidate and automatic local timestamp updates for publication, with a What’s new changelog at the bottom of Help covering versions 1.0.0–1.4.0. Debug exchanges now include the partner's turn announcement after the brief notice and fade handoff. The release retains the existing Firestore transport; disabling Apple fetch streams is explicitly reserved for subsequent local testing.
 
 Release preparation: all 133 unit tests, client/Functions build, and production PWA checks passed. Earlier isolated checks passed all 72 backend/privacy tests, both-player exchange sequencing, draft-safe previews, word sizing/legibility, and post-results new-game cues. The random starter/exchange count changes require updating submitCommand and respondToNewGame alongside the frontend.
+
+Publication confirmed: Pages deployed commit 4e58ecf with live version 1.4.0, build timestamp 2026-10-12T23:28:49.079Z and the Help changelog. Both submitCommand and respondToNewGame deployed successfully. The published client has no useFetchStreams override.
+
+# Local-only Apple transport experiment — 2026-10-12
+
+Explicitly disable useFetchStreams on Apple mobile/desktop-mode iPad and Safari. Production retains existing forced long polling; emulators retain automatic long-poll detection while using XHR on Apple identities. Other browsers and unknown identities keep their original settings. The SDK accepts this compatibility setting despite omitting it from the public TypeScript interface, so tests inspect the actual browser entry point's effective settings.
+
+All 25 transport tests passed, covering mobile/standalone/desktop-mode iPad, iPhone Chrome, Mac Safari and non-Apple browsers in cloud/emulator modes. An isolated browser test with an iPad identity received a real opponent move, recorded actual Firestore Listen/channel XHR requests, and recorded zero fetch-channel requests. This verifies the selected transport, not whether the real WebKit delay is eliminated. No polling, new backend calls or database operations were added. This experiment remains uncommitted and unpublished.
+
+# Release 1.4.1 — 2026-10-12
+
+User approved publication of the Apple transport experiment. Version and Help changelog updated to 1.4.1; the build date/time is generated during deployment. This is a frontend-only transport fix; no Firebase Functions or database rules changes are required. Real-iPad testing is still needed to confirm whether it resolves the intermittent delay.
+
+Release validation: all 143 unit tests, client/Functions build and production PWA smoke checks passed, including explicit update/reload behavior and offline app shell. The prior isolated browser test confirmed a real opponent move arrives through XHR with zero fetch-channel requests for an iPad identity.
