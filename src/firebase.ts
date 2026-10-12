@@ -510,7 +510,7 @@ export function useGameSession() {
           explainedRejection
             ? null
             : retryable(e)
-              ? "Your move was submitted, but its reply is uncertain. Reconnect or retry to confirm it."
+              ? "We couldn’t confirm your move. Your letters are still here. Tap Try again to send your move again."
               : message(e),
         );
         throw e;

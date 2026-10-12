@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { buildScoreTimeline } from "../src/scoreTimeline";
-import { celebrationDuration } from "../src/celebrationTiming";
+import {
+  celebrationDuration,
+  movePresentationDuration,
+  boardArrivalDuration,
+} from "../src/celebrationTiming";
 import type { MoveBreakdown, WordScore } from "../shared/scoring";
 import type { MoveRecord } from "../shared/engine";
 
@@ -179,7 +183,7 @@ describe("readable authoritative score timeline", () => {
     expect(wordBonus.duration).toBeGreaterThanOrEqual(1000);
     const final = plan.steps.at(-1)!;
     expect(final.kind).toBe("move-total");
-    expect(final.duration).toBeGreaterThanOrEqual(3000);
+    expect(final.duration).toBe(2200);
     expect(final.duration).toBeGreaterThan(wordBonus.duration);
     expect(celebrationDuration(move(breakdown([quartz])))).toBe(
       final.at + final.duration,
@@ -228,4 +232,17 @@ describe("readable authoritative score timeline", () => {
     expect(celebrationDuration(crossed, true)).toBe(4500);
     expect(celebrationDuration(undefined)).toBe(4500);
   });
+});
+
+it("lets the board arrive before scoring and includes it in the turn/result handoff", () => {
+  const played = move(breakdown([word("DON", [2, 1, 1], 4)]));
+  expect(boardArrivalDuration()).toBe(850);
+  expect(boardArrivalDuration(true)).toBe(120);
+  expect(movePresentationDuration(played)).toBe(
+    850 + celebrationDuration(played),
+  );
+  expect(movePresentationDuration(played, true)).toBe(4620);
+  expect(movePresentationDuration({ ...played, kind: "pass" })).toBe(
+    celebrationDuration({ ...played, kind: "pass" }),
+  );
 });

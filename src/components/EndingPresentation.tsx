@@ -4,8 +4,44 @@ import type { Slot } from "../../shared/engine";
 import {
   endingPresentationData,
   endingTally,
+  ENDING_TIMING,
   type EndingGame,
 } from "./endingPresentationData";
+
+function WinnerFireworks() {
+  return (
+    <div
+      className="winner-fireworks"
+      aria-hidden="true"
+      data-testid="winner-fireworks"
+    >
+      {[0, 1, 2].map((burst) => (
+        <svg
+          key={burst}
+          className="winner-firework-burst"
+          viewBox="0 0 64 64"
+          fill="none"
+        >
+          {Array.from({ length: 8 }, (_, ray) => (
+            <g key={ray} transform={`rotate(${ray * 45} 32 32)`}>
+              <path
+                d="M32 11v8"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+              <circle cx="32" cy="5" r="1.8" fill="currentColor" />
+            </g>
+          ))}
+          <path
+            d="m32 26 1.8 4.2L38 32l-4.2 1.8L32 38l-1.8-4.2L26 32l4.2-1.8Z"
+            fill="currentColor"
+          />
+        </svg>
+      ))}
+    </div>
+  );
+}
 
 export function EndingPresentation({
   game,
@@ -19,23 +55,23 @@ export function EndingPresentation({
   const reduced = useReducedMotion();
   const data = endingPresentationData(game, names);
   const play = animated && !reduced && data.hasBreakdown;
-  const [elapsed, setElapsed] = useState(play ? 0 : 3800);
+  const [elapsed, setElapsed] = useState(play ? 0 : ENDING_TIMING.finalReveal);
   const [skipped, setSkipped] = useState(false);
   useEffect(() => {
     if (!play || skipped) {
-      setElapsed(3800);
+      setElapsed(ENDING_TIMING.finalReveal);
       return;
     }
     const start = Date.now();
     setElapsed(0);
     const timer = window.setInterval(() => {
-      const next = Math.min(3800, Date.now() - start);
+      const next = Math.min(ENDING_TIMING.finalReveal, Date.now() - start);
       setElapsed(next);
-      if (next === 3800) window.clearInterval(timer);
+      if (next === ENDING_TIMING.finalReveal) window.clearInterval(timer);
     }, 60);
     return () => window.clearInterval(timer);
   }, [play, skipped]);
-  const done = skipped || !play || elapsed >= 3400;
+  const done = skipped || !play || elapsed >= ENDING_TIMING.finalReveal;
   const deductsTiles =
     data.players.some((player) => (player.deducted ?? 0) !== 0) ||
     data.reason === "rack-out" ||
@@ -43,15 +79,17 @@ export function EndingPresentation({
     data.reason === "agreed-end";
   const phase = done
     ? "The final scores"
-    : elapsed < 1400
+    : elapsed < ENDING_TIMING.earnedEnd
       ? "Counting points earned, including bonuses"
-      : elapsed < 2500
-        ? deductsTiles
-          ? "Applying remaining tiles"
-          : "No remaining-tile deductions"
-        : data.hasTransfer
-          ? "Adding the remaining tile points"
-          : "Settling the final scores";
+      : elapsed < ENDING_TIMING.adjustmentStart
+        ? "Points earned"
+        : elapsed < ENDING_TIMING.deductionEnd
+          ? deductsTiles
+            ? "Applying remaining tiles"
+            : "No remaining-tile deductions"
+          : elapsed < ENDING_TIMING.transferEnd && data.hasTransfer
+            ? "Adding the remaining tile points"
+            : "Settling the final scores";
   return (
     <section
       className={`end-game-result ending-presentation ${done ? "is-complete" : "is-counting"} ${!animated || reduced ? "ending-static" : ""}`}
@@ -91,8 +129,11 @@ export function EndingPresentation({
         {data.players.map((player) => (
           <div
             key={player.slot}
-            className={`final-score ${done && game.winner === player.slot ? "winner" : ""}`}
+            className={`final-score ${done && game.winner === player.slot ? "winner" : ""} ${done && (game.winner === player.slot || game.winner === "tie") ? "is-celebrating" : ""}`}
           >
+            {done && (game.winner === player.slot || game.winner === "tie") && (
+              <WinnerFireworks />
+            )}
             <span>{player.name}</span>
             {done ? (
               <strong data-testid={`result-score-${player.slot}`}>
@@ -118,14 +159,26 @@ export function EndingPresentation({
                   </dt>
                   <dd>{player.earned}</dd>
                 </div>
-                <div className={elapsed >= 1400 || done ? "" : "pending"}>
+                <div
+                  className={
+                    elapsed >= ENDING_TIMING.adjustmentStart || done
+                      ? ""
+                      : "pending"
+                  }
+                >
                   <dt>Remaining tiles</dt>
-                  <dd>−{player.deducted}</dd>
+                  <dd>{player.deducted ? `−${player.deducted}` : "0"}</dd>
                 </div>
                 {data.hasTransfer && (
-                  <div className={elapsed >= 2500 || done ? "" : "pending"}>
+                  <div
+                    className={
+                      elapsed >= ENDING_TIMING.deductionEnd || done
+                        ? ""
+                        : "pending"
+                    }
+                  >
                     <dt>Partner’s remaining tiles</dt>
-                    <dd>+{player.transferred}</dd>
+                    <dd>{player.transferred ? `+${player.transferred}` : "0"}</dd>
                   </div>
                 )}
               </dl>

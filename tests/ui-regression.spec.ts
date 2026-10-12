@@ -135,7 +135,11 @@ async function enroll(page: Page, expectedRackCount = 7) {
     expectedRackCount,
   );
 }
-async function joinRita(browser: Browser, expectedRackCount = 7) {
+async function joinRita(
+  browser: Browser,
+  expectedRackCount = 7,
+  reducedMotion: "reduce" | "no-preference" = "reduce",
+) {
   await db
     .doc(`setupCodes/${createHash("sha256").update("PEACH").digest("hex")}`)
     .set({
@@ -147,7 +151,7 @@ async function joinRita(browser: Browser, expectedRackCount = 7) {
     baseURL: "http://127.0.0.1:5183",
     hasTouch: true,
     viewport: { width: 820, height: 1180 },
-    reducedMotion: "reduce",
+    reducedMotion,
   });
   try {
     const aunt = await auntContext.newPage();
@@ -4577,6 +4581,7 @@ test("timer switches from minutes to seconds and local debug celebrations never 
     "Counting points earned, including bonuses",
   );
   await expect(ending.getByTestId("result-score-aunt")).toHaveCount(0);
+  await expect(ending.getByTestId("winner-fireworks")).toHaveCount(0);
   await expect(ending.locator(".ending-phase")).toHaveText(
     "Applying remaining tiles",
   );
@@ -4585,9 +4590,36 @@ test("timer switches from minutes to seconds and local debug celebrations never 
   );
   await expect(ending.getByTestId("result-score-mom")).toHaveText("106");
   await expect(ending.getByTestId("result-score-aunt")).toHaveText("144");
+  await expect(ending.getByTestId("winner-fireworks")).toHaveCount(1);
+  const winnerStyle = await ending
+    .locator(".final-score.winner")
+    .evaluate((card) => ({
+      border: getComputedStyle(card).borderColor,
+      standardBorder: getComputedStyle(
+        card.parentElement!.querySelector(".final-score:not(.winner)")!,
+      ).borderColor,
+      shimmer: getComputedStyle(card, "::after").animationName,
+    }));
+  expect(winnerStyle.border).not.toBe(winnerStyle.standardBorder);
+  expect(winnerStyle.shimmer).not.toBe("none");
+  await expect(
+    ending.locator(".final-score.winner").getByTestId("winner-fireworks"),
+  ).toHaveCount(1);
+  await ending.locator(".winner-firework-burst").evaluateAll((bursts) => {
+    for (const burst of bursts)
+      for (const animation of burst.getAnimations()) {
+        animation.pause();
+        animation.currentTime = 450;
+      }
+  });
   await expect(
     ending.getByRole("heading", { name: "Rita wins!" }),
   ).toBeVisible();
+  expect(
+    await ending
+      .locator(".ending-verdict h3")
+      .evaluate((heading) => getComputedStyle(heading).animationName),
+  ).not.toBe("none");
   const verdictBox = await ending
     .getByRole("heading", { name: "Rita wins!" })
     .boundingBox();
@@ -4597,11 +4629,11 @@ test("timer switches from minutes to seconds and local debug celebrations never 
   expect(verdictBox!.y + verdictBox!.height).toBeLessThanOrEqual(footerBox!.y);
   await expect(ending.locator(".ending-ledger dd")).toHaveText([
     "100",
-    "−0",
+    "0",
     "+6",
     "150",
     "−6",
-    "+0",
+    "0",
   ]);
   await page.screenshot({
     path: info.outputPath("ending-rack-out-rita-wins.png"),
@@ -4630,12 +4662,30 @@ test("timer switches from minutes to seconds and local debug celebrations never 
   await page.emulateMedia({ reducedMotion: "reduce" });
   await tools.getByTestId("debug-ending-agreed-end").click();
   await expect(ending.getByTestId("result-score-mom")).toHaveText("108");
+  await expect(ending.getByTestId("winner-fireworks")).toHaveCount(2);
+  expect(
+    await ending
+      .locator(".is-celebrating")
+      .first()
+      .evaluate((card) => getComputedStyle(card, "::after").animationName),
+  ).toBe("none");
+  expect(
+    await ending
+      .locator(".winner-firework-burst")
+      .first()
+      .evaluate((burst) => getComputedStyle(burst).animationName),
+  ).toBe("none");
   await expect(
     ending.getByRole("button", { name: "Show final scores" }),
   ).toHaveCount(0);
   await expect(
     ending.getByRole("heading", { name: "An even match — a tie!" }),
   ).toBeVisible();
+  expect(
+    await ending
+      .locator(".ending-verdict h3")
+      .evaluate((heading) => getComputedStyle(heading).animationName),
+  ).toBe("none");
   await ending.getByRole("button", { name: "Play a new game?" }).click();
   await page.emulateMedia({ reducedMotion: "no-preference" });
   await tools.getByTestId("debug-end-request").click();
@@ -4695,6 +4745,14 @@ test("timer switches from minutes to seconds and local debug celebrations never 
   await page.getByTestId("debug-ending-agreed-end").click();
   await page.getByRole("button", { name: "Show final scores" }).click();
   await expect(page.getByTestId("result-score-mom")).toBeVisible();
+  await expect(page.getByTestId("winner-fireworks")).toHaveCount(1);
+  await page.locator(".winner-firework-burst").evaluateAll((bursts) => {
+    for (const burst of bursts)
+      for (const animation of burst.getAnimations()) {
+        animation.pause();
+        animation.currentTime = 450;
+      }
+  });
   await page.screenshot({
     path: info.outputPath("ending-dark-portrait.png"),
     fullPage: false,
@@ -6669,6 +6727,276 @@ test("new-game approval discards an old blank picker and a finished game closes 
   }
 });
 
+async function installArrivalProbe(page: Page, scoringId = "move-celebration") {
+  await page.evaluate((id) => {
+    const probe = {
+      arrivedAt: null as number | null,
+      scoredAt: null as number | null,
+    };
+    (window as unknown as { teaArrivalProbe: typeof probe }).teaArrivalProbe =
+      probe;
+    const observer = new MutationObserver(() => {
+      if (
+        probe.arrivedAt === null &&
+        document.querySelector(
+          '[data-testid="game-board"][data-placement-phase="arriving"]',
+        )
+      )
+        probe.arrivedAt = performance.now();
+      if (
+        probe.scoredAt === null &&
+        document.querySelector(`[data-testid="${id}"]`)
+      )
+        probe.scoredAt = performance.now();
+    });
+    observer.observe(document.getElementById("root")!, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ["data-placement-phase"],
+    });
+  }, scoringId);
+}
+
+async function arrivalElapsed(page: Page) {
+  return page.evaluate(() => {
+    const probe = (
+      window as unknown as {
+        teaArrivalProbe: { arrivedAt: number | null; scoredAt: number | null };
+      }
+    ).teaArrivalProbe;
+    return probe.arrivedAt !== null && probe.scoredAt !== null
+      ? probe.scoredAt - probe.arrivedAt
+      : null;
+  });
+}
+
+test("local slow and uncertain submissions preserve the live draft and reduced motion shortens arrival", async ({
+  page,
+}, info) => {
+  await enroll(page);
+  await rack(page, "A").tap();
+  await cell(page, 0, 1).tap();
+  const before = await authoritativeState();
+  await page.getByTestId("help-settings").click();
+  await page.getByTestId("debug-enabled").check();
+  await page.getByRole("button", { name: "Close dialog" }).click();
+  await page.getByTestId("local-debug-tools").click();
+  await installArrivalProbe(page, "debug-board-scoring");
+  await page.getByTestId("debug-scene-slow-submit").click();
+  const notice = page.getByTestId("slow-submit-popup");
+  await expect(notice).toBeVisible();
+  await expect(notice).toContainText("Please wait a moment");
+  await expect(page.getByTestId("debug-board-scoring")).toHaveCount(0);
+  expect(await authoritativeState()).toEqual(before);
+  await page.screenshot({
+    path: info.outputPath("local-slow-submission.png"),
+    fullPage: false,
+  });
+  await expect(page.getByTestId("game-board")).toHaveAttribute(
+    "data-placement-phase",
+    "arriving",
+  );
+  await expect(notice).toHaveCount(0);
+  await expect(page.getByTestId("debug-board-scoring")).toHaveCount(0);
+  await page.screenshot({
+    path: info.outputPath("local-arrival-before-scoring.png"),
+    fullPage: false,
+  });
+  await expect(page.getByTestId("debug-board-scoring")).toBeVisible();
+  expect(await arrivalElapsed(page)).toBeGreaterThanOrEqual(800);
+  await page.getByTestId("local-debug-tools").click();
+  await page.getByTestId("debug-scene-uncertain-submit").click();
+  await expect(notice).toBeVisible();
+  await expect(notice).toContainText("Your letters are still here");
+  await expect(notice.getByTestId("submission-try-again")).toBeEnabled();
+  await page.waitForTimeout(1600);
+  await expect(notice).toBeVisible();
+  await expect(page.getByTestId("debug-board-scoring")).toHaveCount(0);
+  await expect(page.getByTestId("game-board")).not.toHaveAttribute(
+    "data-placement-phase",
+    "arriving",
+  );
+  await page.screenshot({
+    path: info.outputPath("local-uncertain-no-fake-acceptance.png"),
+    fullPage: false,
+  });
+  await notice.getByTestId("submission-back-to-board").click();
+  await expect(notice).toHaveCount(0);
+  await expect(cell(page, 0, 1)).toHaveClass(/has-tentative/);
+  await expect(cell(page, 0, 1)).toContainText("A");
+  expect(await authoritativeState()).toEqual(before);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.reload();
+  await expect(page.getByTestId("local-debug-tools")).toBeVisible();
+  await page.getByTestId("local-debug-tools").click();
+  await installArrivalProbe(page, "debug-board-scoring");
+  await page.getByTestId("debug-scene-normal").click();
+  await expect(page.getByTestId("debug-board-scoring")).toBeVisible();
+  const elapsed = await arrivalElapsed(page);
+  expect(elapsed).not.toBeNull();
+  expect(elapsed!).toBeGreaterThanOrEqual(90);
+  expect(elapsed!).toBeLessThan(350);
+  await page.getByTestId("local-debug-tools").click();
+  await page
+    .getByTestId("local-debug-popup")
+    .getByRole("button", { name: "Close dialog" })
+    .click();
+  await expect(cell(page, 0, 1)).toHaveClass(/has-tentative/);
+  expect(await authoritativeState()).toEqual(before);
+});
+
+test("an uncertain real submission keeps its pending command and draft after dismissing feedback", async ({
+  page,
+}, info) => {
+  await enroll(page);
+  await rack(page, "A").tap();
+  await cell(page, 0, 1).tap();
+  await rack(page, "T").tap();
+  await cell(page, 0, 2).tap();
+  const before = await authoritativeState();
+  const submittedIds: string[] = [];
+  await page.route("**/submitCommand", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    submittedIds.push(route.request().postDataJSON().data.id);
+    await new Promise((resolve) => setTimeout(resolve, 2200));
+    await route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      headers: { "access-control-allow-origin": "*" },
+      body: JSON.stringify({
+        error: {
+          status: "UNAVAILABLE",
+          message: "The shared service is temporarily unavailable.",
+        },
+      }),
+    });
+  });
+  await page.getByTestId("play-word").click();
+  const notice = page.getByTestId("slow-submit-popup");
+  await expect(notice).toBeVisible();
+  await expect(notice).toContainText("Your letters are still here");
+  await notice.getByTestId("submission-try-again").click();
+  await expect.poll(() => submittedIds.length).toBe(2);
+  await expect(notice.getByTestId("submission-try-again")).toBeVisible();
+  expect(submittedIds[1]).toBe(submittedIds[0]);
+  await notice.getByTestId("submission-back-to-board").click();
+  await expect(notice).toHaveCount(0);
+  await expect(page.getByTestId("shared-action-pause")).toBeVisible();
+  await expect(page.locator(".has-tentative")).toHaveCount(2);
+  await expect(page.getByTestId("move-celebration")).toHaveCount(0);
+  await expect(page.getByTestId("game-board")).not.toHaveAttribute(
+    "data-placement-phase",
+    "arriving",
+  );
+  await page.getByTestId("resume-shared-actions").click();
+  await expect(page.getByTestId("retry-pending")).toBeEnabled();
+  expect(await authoritativeState()).toEqual(before);
+  await page.screenshot({
+    path: info.outputPath("uncertain-real-submit-keeps-draft-and-retry.png"),
+    fullPage: false,
+  });
+});
+
+test("slow acceptance feedback closes on authoritative arrival before a held HTTP reply on both devices", async ({
+  page,
+  browser,
+}, info) => {
+  await writeFixture({ ...fixtureGame, revision: 1 });
+  expectedRevision = 1;
+  await enroll(page);
+  const { aunt, auntContext } = await joinRita(browser, 7, "no-preference");
+  let forward!: () => void;
+  let finishReply!: () => void;
+  const forwardGate = new Promise<void>((resolve) => {
+    forward = resolve;
+  });
+  const replyGate = new Promise<void>((resolve) => {
+    finishReply = resolve;
+  });
+  let accepted = false;
+  let replyDelivered = false;
+  await page.route("**/submitCommand", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    await forwardGate;
+    const response = await route.fetch();
+    expect(response.ok()).toBe(true);
+    accepted = true;
+    await replyGate;
+    await route.fulfill({ response });
+    replyDelivered = true;
+  });
+  try {
+    await expect(page.getByTestId("turn-announcement")).toBeHidden();
+    await rack(page, "A").tap();
+    await cell(page, 0, 1).tap();
+    await rack(page, "T").tap();
+    await cell(page, 0, 2).tap();
+    const before = await authoritativeState();
+    await page.getByTestId("play-word").click();
+    await expect(page.getByTestId("slow-submit-popup")).toBeVisible();
+    expect(await authoritativeState()).toEqual(before);
+    await expect(page.getByTestId("move-celebration")).toHaveCount(0);
+    await page.screenshot({
+      path: info.outputPath("submission-waiting-before-acceptance.png"),
+      fullPage: false,
+    });
+    expectedRevision = 2;
+    expectedCommandCount = 1;
+    expectedBoardKeys.push("0,1", "0,2");
+    await Promise.all([installArrivalProbe(page), installArrivalProbe(aunt)]);
+    const arrivalSeen = Promise.all(
+      [page, aunt].map(async (target) => {
+        await target.waitForFunction(
+          () =>
+            (
+              window as unknown as {
+                teaArrivalProbe: { arrivedAt: number | null };
+              }
+            ).teaArrivalProbe.arrivedAt !== null,
+        );
+        await expect(target.getByTestId("move-celebration")).toHaveCount(0);
+        await expect(cell(target, 0, 1)).toContainText("A");
+      }),
+    );
+    forward();
+    await arrivalSeen;
+    await aunt.screenshot({
+      path: info.outputPath("accepted-word-arrives-before-scoring.png"),
+      fullPage: false,
+    });
+    await expect.poll(() => accepted).toBe(true);
+    await expect(page.getByTestId("slow-submit-popup")).toHaveCount(0);
+    expect(replyDelivered).toBe(false);
+    for (const target of [page, aunt])
+      await expect(target.getByTestId("move-celebration")).toBeVisible();
+    for (const target of [page, aunt])
+      expect(await arrivalElapsed(target)).toBeGreaterThanOrEqual(800);
+    expect(replyDelivered).toBe(false);
+    expect((await db.doc("games/ui-table").get()).data()!.revision).toBe(2);
+    finishReply();
+    await expect.poll(() => replyDelivered).toBe(true);
+  } finally {
+    console.log(
+      "Accepted arrival probes",
+      await Promise.all(
+        [page, aunt].map((target) =>
+          target.evaluate(
+            () =>
+              (window as unknown as { teaArrivalProbe: unknown })
+                .teaArrivalProbe,
+          ),
+        ),
+      ),
+    );
+    forward();
+    finishReply();
+    await expect.poll(() => replyDelivered).toBe(true);
+    await page.unroute("**/submitCommand");
+    await auntContext.close();
+  }
+});
+
 test("a delayed old-turn reply cannot block or overwrite a fresh game's private draft", async ({
   page,
   browser,
@@ -7613,5 +7941,85 @@ test("a brighter private draft breathes across complete words and crossings with
   await expect(page.locator('[data-draft-word="true"]')).toHaveCount(0);
   await expect(page.locator(".has-tentative")).toHaveCount(0);
   await expect(page.getByTestId("tile-rack").locator("button")).toHaveCount(7);
+  expect(await authoritativeState()).toEqual(before);
+});
+
+test("multiple-word scoring scrolls gradually to the next word", async ({
+  page,
+}) => {
+  await enroll(page);
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.getByTestId("help-settings").click();
+  await page.getByTestId("debug-enabled").check();
+  await page.getByRole("button", { name: "Close dialog" }).click();
+  await page.getByTestId("local-debug-tools").click();
+  await page.getByTestId("debug-scene-multiple-words").click();
+  const score = page
+    .getByTestId("debug-board-scoring")
+    .getByTestId("score-breakdown");
+  await expect(score).toBeVisible();
+  const samples = await score.evaluate(async (element) => {
+    const list = element.querySelector(
+      '[data-testid="score-word-list"]',
+    ) as HTMLElement;
+    const samples: number[] = [];
+    const start = performance.now();
+    let transitionStart: number | undefined;
+    await new Promise<void>((resolve) => {
+      const sample = () => {
+        if (element.getAttribute("data-word-index") === "1") {
+          transitionStart ??= performance.now();
+          samples.push(list.scrollTop);
+        }
+        if (
+          transitionStart !== undefined &&
+          performance.now() - transitionStart > 600
+        )
+          resolve();
+        else if (performance.now() - start > 6000) resolve();
+        else requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+    });
+    return samples;
+  });
+  const distinct = new Set(samples.map((value) => Math.round(value)));
+  expect(distinct.size).toBeGreaterThan(3);
+  expect(Math.max(...samples) - Math.min(...samples)).toBeGreaterThan(20);
+});
+
+test("local game-over board previews final controls and restores the live draft", async ({
+  page,
+}, info) => {
+  await enroll(page);
+  await rack(page, "A").tap();
+  await cell(page, 0, 1).tap();
+  const before = await authoritativeState();
+  await page.getByTestId("help-settings").click();
+  await page.getByTestId("debug-enabled").check();
+  await page.getByRole("button", { name: "Close dialog" }).click();
+  await page.getByTestId("local-debug-tools").click();
+  await page.getByTestId("debug-scene-game-over").click();
+  await expect(page.getByTestId("view-result")).toBeVisible();
+  await expect(page.getByTestId("new-game")).toHaveClass(
+    /new-game-next-action/,
+  );
+  await expect(page.getByTestId("new-game")).toBeEnabled();
+  await expect(page.getByTestId("play-word")).toHaveCount(0);
+  await expect(page.locator(".has-tentative")).toHaveCount(0);
+  await expect(cell(page, 7, 5)).toContainText("T");
+  await page.screenshot({ path: info.outputPath("game-over-board.png") });
+  await page.getByTestId("view-result").click();
+  await expect(page.getByTestId("debug-end-game-popup")).toBeVisible();
+  await page.getByRole("button", { name: "See the board" }).click();
+  await expect(page.getByTestId("view-result")).toBeVisible();
+  expect(await authoritativeState()).toEqual(before);
+  await page.getByTestId("local-debug-tools").click();
+  await page.getByRole("button", { name: "Close dialog" }).click();
+  await expect(cell(page, 0, 1)).toHaveClass(/has-tentative/);
+  await expect(page.getByTestId("view-result")).toHaveCount(0);
+  await expect(page.getByTestId("new-game")).not.toHaveClass(
+    /new-game-next-action/,
+  );
   expect(await authoritativeState()).toEqual(before);
 });

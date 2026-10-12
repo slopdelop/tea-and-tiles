@@ -88,6 +88,14 @@ export function endingPresentationData(
   };
 }
 
+export const ENDING_TIMING = {
+  earnedEnd: 1400,
+  adjustmentStart: 2400,
+  deductionEnd: 3500,
+  transferEnd: 4400,
+  finalReveal: 4800,
+} as const;
+
 export function endingTally(
   earned: number,
   deducted: number,
@@ -95,12 +103,27 @@ export function endingTally(
   final: number,
   elapsed: number,
 ) {
-  if (elapsed < 1400) return Math.round((earned * Math.max(0, elapsed)) / 1400);
-  if (elapsed < 2500)
-    return earned - Math.round((deducted * (elapsed - 1400)) / 1100);
-  if (elapsed < 3400)
+  const t = ENDING_TIMING;
+  if (elapsed < t.earnedEnd)
+    return Math.round((earned * Math.max(0, elapsed)) / t.earnedEnd);
+  if (elapsed < t.adjustmentStart) return earned;
+  if (elapsed < t.deductionEnd)
     return (
-      earned - deducted + Math.round((transferred * (elapsed - 2500)) / 900)
+      earned -
+      Math.round(
+        (deducted * (elapsed - t.adjustmentStart)) /
+          (t.deductionEnd - t.adjustmentStart),
+      )
     );
+  if (elapsed < t.transferEnd)
+    return (
+      earned -
+      deducted +
+      Math.round(
+        (transferred * (elapsed - t.deductionEnd)) /
+          (t.transferEnd - t.deductionEnd),
+      )
+    );
+  if (elapsed < t.finalReveal) return earned - deducted + transferred;
   return final;
 }

@@ -760,27 +760,89 @@ button {
   white-space: nowrap;
 }
 /* The next-game cue stays green across table palettes. */
+:root .header-actions .header-new-game.new-game-next-action:not(:disabled) {
+  background: #dff0df;
+  color: #204c2d;
+  border-color: #398b55;
+}
+:root
+  .header-actions
+  .header-new-game.new-game-next-action:hover:not(:disabled) {
+  background: #d0e9d2;
+}
+:root
+  .header-actions
+  .header-new-game.new-game-next-action:active:not(:disabled) {
+  background: #c2dfc6;
+}
 .header-new-game.new-game-next-action:not(:disabled) {
+  position: relative;
   box-shadow:
     0 0 0 2px #398b55,
-    0 0 10px 2px #398b5533;
-  animation: new-game-next-action-breathe 2.8s ease-in-out infinite;
+    0 0 0 3px #398b551a,
+    0 0 12px 2px #398b553d;
+  animation: new-game-next-action-breathe 2.6s ease-in-out infinite;
+}
+.header-new-game.new-game-next-action:not(:disabled)::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  padding: 3px;
+  pointer-events: none;
+  background: linear-gradient(
+      110deg,
+      transparent 43%,
+      #efffec 50%,
+      transparent 57%
+    )
+    100% 0 / 300% 100%;
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  opacity: 0;
+  animation: new-game-edge-glint 6.4s linear 0.6s infinite;
+}
+@keyframes new-game-edge-glint {
+  0% {
+    background-position: 100% 0;
+    opacity: 0;
+  }
+  3%,
+  24% {
+    opacity: 1;
+  }
+  30%,
+  100% {
+    background-position: 0% 0;
+    opacity: 0;
+  }
 }
 @keyframes new-game-next-action-breathe {
   0%,
   100% {
+    scale: 1;
     box-shadow:
       0 0 0 2px #398b55,
-      0 0 10px 2px #398b5533;
+      0 0 0 3px #398b551a,
+      0 0 12px 2px #398b553d;
   }
   50% {
+    scale: 1.025;
     box-shadow:
       0 0 0 2px #4ca767,
-      0 0 16px 4px #398b5559;
+      0 0 0 6px #398b5538,
+      0 0 23px 6px #398b5573;
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .header-new-game.new-game-next-action:not(:disabled) {
+  .header-new-game.new-game-next-action:not(:disabled),
+  .header-new-game.new-game-next-action:not(:disabled)::after {
     animation: none;
   }
 }
@@ -4744,13 +4806,21 @@ html.tablet-page-fitted,
 }
 
 /* A quiet, shared celebration; the score ledger stays readable throughout. */
-.ending-presentation.ending-static * {
+.ending-presentation.ending-static *:not(.winner-firework-burst):not(h3) {
   animation: none !important;
   transition: none !important;
 }
 .ending-presentation {
+  --ending-gold: #b88725;
+  --ending-gold-ink: #805a12;
+  --ending-gold-highlight: #b18429;
   position: relative;
   padding-top: 4px;
+}
+:root:is([data-theme="ink"], [data-theme="midnight"]) .ending-presentation {
+  --ending-gold: #e5bf67;
+  --ending-gold-ink: #f0ce7f;
+  --ending-gold-highlight: #fff1bc;
 }
 .ending-presentation .game-ending-reason {
   max-width: 44ch;
@@ -4759,7 +4829,7 @@ html.tablet-page-fitted,
 }
 .ending-fanfare {
   height: 86px;
-  color: var(--green);
+  color: var(--ending-gold);
   overflow: hidden;
 }
 .ending-fanfare svg {
@@ -4793,6 +4863,7 @@ html.tablet-page-fitted,
   margin-bottom: 0;
 }
 .ending-scorecards .final-score {
+  position: relative;
   min-width: 0;
   padding: 18px 12px 12px;
   border-radius: 16px 16px 8px 8px;
@@ -4814,6 +4885,116 @@ html.tablet-page-fitted,
   color: var(--ink);
   background: var(--soft);
   border-color: var(--green);
+}
+/* Bursts occupy the card corners, leaving the name, score and ledger clear. */
+.ending-scorecards .final-score.is-celebrating {
+  border-color: var(--ending-gold);
+  background: linear-gradient(
+    150deg,
+    color-mix(in srgb, var(--surface) 88%, var(--ending-gold)),
+    color-mix(in srgb, var(--surface) 95%, var(--ending-gold))
+  );
+  box-shadow:
+    inset 0 0 0 1px var(--ending-gold),
+    0 0 0 2px color-mix(in srgb, var(--ending-gold) 22%, transparent),
+    0 3px 20px color-mix(in srgb, var(--ending-gold) 24%, transparent);
+}
+.ending-scorecards .final-score.is-celebrating > span,
+.ending-scorecards .final-score.is-celebrating > strong {
+  color: var(--ending-gold-ink);
+}
+/* A single glint travels across the outline, then rests for most of each cycle.
+   The mask keeps every pixel of the shimmer off the card face and its text. */
+.ending-scorecards .final-score.is-celebrating::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  padding: 3px;
+  pointer-events: none;
+  background: linear-gradient(
+      110deg,
+      transparent 43%,
+      #ffe6a6 48%,
+      #fff9e8 50%,
+      #ffe6a6 52%,
+      transparent 57%
+    )
+    100% 0 / 300% 100%;
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  opacity: 0;
+  animation: ending-gold-edge 8.5s linear 1s infinite;
+}
+@keyframes ending-gold-edge {
+  0% {
+    background-position: 100% 0;
+    opacity: 0;
+  }
+  2% {
+    opacity: 1;
+  }
+  24% {
+    opacity: 1;
+  }
+  28%,
+  100% {
+    background-position: 0% 0;
+    opacity: 0;
+  }
+}
+.winner-fireworks {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.winner-firework-burst {
+  position: absolute;
+  width: 56px;
+  height: 56px;
+  color: var(--ending-gold);
+  opacity: 0;
+  animation: winner-firework-bloom 1100ms cubic-bezier(0.18, 0.65, 0.3, 1) both;
+}
+.winner-firework-burst:nth-child(1) {
+  top: -25px;
+  left: -10px;
+}
+.winner-firework-burst:nth-child(2) {
+  top: 40%;
+  right: -20px;
+  width: 42px;
+  height: 42px;
+  animation-delay: 150ms;
+}
+.winner-firework-burst:nth-child(3) {
+  top: -19px;
+  right: -6px;
+  width: 42px;
+  height: 42px;
+  animation-delay: 300ms;
+}
+@keyframes winner-firework-bloom {
+  0% {
+    transform: scale(0.12) rotate(-12deg);
+    opacity: 0;
+  }
+  14% {
+    opacity: 1;
+  }
+  62% {
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(1) rotate(5deg);
+    opacity: 0;
+  }
 }
 .ending-ledger {
   display: grid;
@@ -4861,8 +5042,39 @@ html.tablet-page-fitted,
   font-size: clamp(26px, 6vw, 38px);
   font-weight: 500;
   line-height: 1.2;
-  color: var(--green);
+  color: var(--ending-gold-ink);
+  text-shadow: 0 0 16px color-mix(in srgb, var(--ending-gold) 24%, transparent);
   overflow-wrap: anywhere;
+}
+@supports (background-clip: text) {
+  .ending-verdict h3 {
+    background: linear-gradient(
+        110deg,
+        var(--ending-gold-ink) 43%,
+        var(--ending-gold-highlight) 49%,
+        var(--ending-gold-highlight) 51%,
+        var(--ending-gold-ink) 57%
+      )
+      100% 0 / 300% 100%;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: ending-gold-title 8.5s linear 1s infinite;
+  }
+}
+@keyframes ending-gold-title {
+  0% {
+    background-position: 100% 0;
+  }
+  28%,
+  100% {
+    background-position: 0% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ending-verdict h3 {
+    background: none;
+    -webkit-text-fill-color: currentColor;
+  }
 }
 .ending-verdict p {
   margin: 8px 0 0;
@@ -4903,5 +5115,116 @@ html.tablet-page-fitted,
   .ending-presentation *::after {
     animation: none !important;
     transition: none !important;
+  }
+}
+
+/* Move confirmation stays calm while the server reply catches up. */
+.submission-notice {
+  padding-top: 2px;
+}
+.submission-notice-words {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 2px 0 18px;
+}
+.submission-notice-words > span {
+  min-width: 0;
+  max-width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  font: 500 clamp(18px, 5vw, 24px) / 1.25 var(--serif);
+  letter-spacing: 0.035em;
+  overflow-wrap: anywhere;
+  box-shadow: 0 2px 0 var(--line);
+}
+.submission-notice-status {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 14px 0 2px;
+  border-top: 1px solid var(--line);
+}
+.modal .submission-notice-status p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.65;
+  text-wrap: pretty;
+}
+.submission-notice-dots {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 4px;
+  align-self: flex-start;
+  padding-top: 8px;
+  color: var(--green);
+}
+.submission-notice-dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.45;
+  animation: submission-dot-breathe 1800ms ease-in-out infinite;
+}
+.submission-notice-dots i:nth-child(2) {
+  animation-delay: 180ms;
+}
+.submission-notice-dots i:nth-child(3) {
+  animation-delay: 360ms;
+}
+@keyframes submission-dot-breathe {
+  0%,
+  70%,
+  100% {
+    opacity: 0.45;
+  }
+  35% {
+    opacity: 1;
+  }
+}
+
+/* Independent scale leaves the tile's layout transform free for Motion. */
+.board-tile.arriving-play-tile {
+  z-index: 4;
+  animation: played-tile-arrival 400ms cubic-bezier(0.2, 0.75, 0.25, 1)
+    clamp(0ms, var(--arrival-delay, 0ms), 300ms) both;
+}
+.board-tile.arriving-play-tile::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border: 2px solid #357451;
+  border-radius: inherit;
+  background: #3574510d;
+  box-shadow: 0 0 0 3px #3574511a;
+  opacity: 1;
+  pointer-events: none;
+  z-index: 2;
+  animation: none;
+}
+@keyframes played-tile-arrival {
+  0% {
+    scale: 0.68;
+  }
+  65% {
+    scale: 1.14;
+  }
+  100% {
+    scale: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .submission-notice-dots i {
+    animation: none;
+    opacity: 0.65;
+  }
+  .board-tile.arriving-play-tile {
+    animation: none;
+    scale: 1;
+    opacity: 1;
   }
 }

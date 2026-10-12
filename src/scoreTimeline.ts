@@ -1,6 +1,6 @@
 import type { MoveBreakdown } from "../shared/scoring";
 
-export const SCORE_FINAL_HOLD_MS = 3200;
+export const SCORE_FINAL_HOLD_MS = 2200;
 
 export type ScoreStep = {
   at: number;

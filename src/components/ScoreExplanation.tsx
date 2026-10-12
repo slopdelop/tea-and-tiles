@@ -171,14 +171,22 @@ export function ScoreExplanation({
       `[data-score-word-index="${activeStep.wordIndex}"]`,
     );
     if (!list || !row) return;
-    if (activeStep.kind === "intro") list.scrollTop = row.offsetTop;
+    const listTop = list.getBoundingClientRect().top + list.clientTop;
+    if (activeStep.kind === "intro")
+      list.scrollTo({
+        top: list.scrollTop + row.getBoundingClientRect().top - listTop - 8,
+        behavior: "smooth",
+      });
     if (activeStep.kind === "word-bonus" || activeStep.kind === "word-total") {
       const calculation = row.querySelector<HTMLElement>(".score-equation");
       if (calculation) {
         const bottom =
-          row.offsetTop + calculation.offsetTop + calculation.offsetHeight;
+          list.scrollTop + calculation.getBoundingClientRect().bottom - listTop;
         if (bottom > list.scrollTop + list.clientHeight)
-          list.scrollTop = bottom - list.clientHeight;
+          list.scrollTo({
+            top: bottom - list.clientHeight,
+            behavior: "smooth",
+          });
       }
     }
   }, [activeStep?.wordIndex, activeStep?.kind, animated, reduced, showTotal]);

@@ -144,8 +144,12 @@ describe("ending presentation", () => {
   it("counts each adjustment once and settles on the authoritative final", () => {
     expect(endingTally(125, 5, 10, 130, 0)).toBe(0);
     expect(endingTally(125, 5, 10, 130, 1400)).toBe(125);
-    expect(endingTally(125, 5, 10, 130, 2500)).toBe(120);
-    expect(endingTally(125, 5, 10, 130, 3400)).toBe(130);
-    expect(endingTally(2, 10, 0, -8, 3800)).toBe(-8);
+    expect(endingTally(125, 5, 10, 130, 1900)).toBe(125);
+    expect(endingTally(125, 5, 10, 130, 2399)).toBe(125);
+    expect(endingTally(125, 5, 10, 130, 2400)).toBe(125);
+    expect(endingTally(125, 5, 10, 130, 3500)).toBe(120);
+    expect(endingTally(125, 5, 10, 130, 4400)).toBe(130);
+    expect(endingTally(125, 5, 10, 130, 4800)).toBe(130);
+    expect(endingTally(2, 10, 0, -8, 4800)).toBe(-8);
   });
 });

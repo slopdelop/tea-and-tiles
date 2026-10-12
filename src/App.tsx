@@ -42,12 +42,15 @@ import { readSignInLink } from "./signInLink";
 import { GameSummary, ScoreExplanation } from "./components/ScoreExplanation";
 import {
   HANDOFF_MS,
-  celebrationDuration,
   handoffDelay,
+  boardArrivalDuration,
+  movePresentationDuration,
 } from "./celebrationTiming";
 import { useTabletViewport } from "./hooks/useTabletViewport";
 import { EndingPresentation } from "./components/EndingPresentation";
 import { debugEndingGame, debugMove, debugMoveBoard } from "./debugScenarios";
+import { SubmissionNotice } from "./components/SubmissionNotice";
+import { useSubmissionFeedback } from "./hooks/useSubmissionFeedback";
 import "./styles.css";
 
 type Dialog =
@@ -602,6 +605,7 @@ export default function App() {
   const [enrolling, setEnrolling] = useState(false);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [arrivingMove, setArrivingMove] = useState<string | null>(null);
   const [dialog, setDialog] = useState<Dialog>(null);
   const latestDialog = useRef(dialog);
   latestDialog.current = dialog;
@@ -764,19 +768,86 @@ export default function App() {
     move: MoveRecord;
     board: ReturnType<typeof debugMoveBoard>;
   } | null>(null);
+  const [debugFinishedBoard, setDebugFinishedBoard] = useState<ReturnType<
+    typeof debugEndingGame
+  > | null>(null);
+  const [debugSubmission, setDebugSubmission] = useState<{
+    id: string;
+    uncertain: boolean;
+  } | null>(null);
+  const [debugScoringReady, setDebugScoringReady] = useState<string | null>(
+    null,
+  );
+  const submissionKey =
+    debugSubmission?.id ||
+    (pending?.kind === "play" && game?.lastMove?.id !== pending.id
+      ? pending.id
+      : null);
+  const submissionFeedback = useSubmissionFeedback(submissionKey);
+  const submissionNoticeVisible =
+    submissionFeedback.visible && !dialog && !hasSubmissionDecision();
+  function hasSubmissionDecision() {
+    return (
+      !!incomingEndRequest ||
+      session.wordRequests.some(
+        (request) =>
+          request.status === "pending" && request.requestedBy !== slot,
+      ) ||
+      session.newGameRequests.some(
+        (request) =>
+          request.gameId === game?.id &&
+          request.status === "pending" &&
+          request.requestedBy !== slot,
+      )
+    );
+  }
+  useEffect(() => {
+    setDebugScoringReady(null);
+    if (!debugBoardMove) return;
+    const timer = setTimeout(
+      () => setDebugScoringReady(debugBoardMove.move.id),
+      boardArrivalDuration(!!reduced),
+    );
+    return () => clearTimeout(timer);
+  }, [debugBoardMove?.move.id]);
+  useEffect(() => {
+    if (!debugSubmission || debugSubmission.uncertain) return;
+    const timer = setTimeout(() => {
+      setDebugSubmission(null);
+      setDebugFinishedBoard(null);
+      const move = debugMove("normal");
+      setDebugBoardMove({
+        move: { ...move, id: `preview:${Date.now()}` },
+        board: debugMoveBoard("normal"),
+      });
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, [debugSubmission?.id]);
   useEffect(() => {
     if (import.meta.env.DEV)
       localStorage.setItem("tea-tiles-debug", String(debugEnabled));
     if (!debugEnabled) {
       setDebugBoardMove(null);
       setDebugEnding(null);
+      setDebugSubmission(null);
+      setDebugFinishedBoard(null);
     }
   }, [debugEnabled]);
   useEffect(() => {
     setDebugBoardMove(null);
     setDebugEnding(null);
+    setDebugSubmission(null);
+    setDebugFinishedBoard(null);
     setDialog((current) => (current?.startsWith("debug-") ? null : current));
   }, [game?.id, game?.revision]);
+  useEffect(() => {
+    if (!debugFinishedBoard) return;
+    const stop = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setDebugFinishedBoard(null);
+    };
+    window.addEventListener("keydown", stop);
+    return () => window.removeEventListener("keydown", stop);
+  }, [debugFinishedBoard]);
   useEffect(() => {
     if (!debugBoardMove) return;
     const stop = (event: KeyboardEvent) => {
@@ -847,7 +918,10 @@ export default function App() {
   );
   const draftPulseKey = `${game?.id}:${game?.revision}:${placements.map((p) => `${p.tileId}:${p.row}:${p.col}`).join("|")}`;
   const openingBoard =
-    !!game && game.status === "active" && Object.keys(game.board).length === 0;
+    !debugFinishedBoard &&
+    !!game &&
+    game.status === "active" &&
+    Object.keys(game.board).length === 0;
   const centreCovered = placements.some((p) => p.row === 7 && p.col === 7);
   const yourTurn = !!game && game.turn === slot && game.status === "active";
   const reduced = useReducedMotion();
@@ -862,6 +936,8 @@ export default function App() {
     !pending &&
     !busy &&
     !debugBoardMove &&
+    !debugFinishedBoard &&
+    !debugSubmission &&
     !timedExpired &&
     !recallAnimation.active;
   const canSubmit =
@@ -875,6 +951,8 @@ export default function App() {
     !timedExpired &&
     !sharedActionsPaused &&
     !debugBoardMove &&
+    !debugFinishedBoard &&
+    !debugSubmission &&
     !recallAnimation.active;
   const [finePointer, setFinePointer] = useState(false);
   const [zoomed, setZoomed] = useState(false);
@@ -1282,6 +1360,7 @@ export default function App() {
     session.loading,
   ]);
   useEffect(() => {
+    setArrivingMove(null);
     if (!game) {
       setAnimatedMove(null);
       return;
@@ -1299,12 +1378,23 @@ export default function App() {
       game.lastMove &&
       previous.lastMoveId !== game.lastMove.id
     ) {
-      setAnimatedMove(game.lastMove.id);
+      const accepted = game.lastMove;
+      const arrival =
+        accepted.kind === "play" ? boardArrivalDuration(!!reduced) : 0;
+      setAnimatedMove(null);
+      if (arrival) setArrivingMove(accepted.id);
+      const reveal = setTimeout(() => {
+        setArrivingMove(null);
+        setAnimatedMove(accepted.id);
+      }, arrival);
       const timer = setTimeout(
         () => setAnimatedMove(null),
-        celebrationDuration(game.lastMove, !!reduced) + HANDOFF_MS,
+        movePresentationDuration(game.lastMove, !!reduced) + HANDOFF_MS,
       );
-      return () => clearTimeout(timer);
+      return () => {
+        clearTimeout(reveal);
+        clearTimeout(timer);
+      };
     }
   }, [game?.id, game?.revision]);
 
@@ -1343,7 +1433,7 @@ export default function App() {
       readyAt:
         Date.now() +
         (afterPlay
-          ? celebrationDuration(game.lastMove, !!reduced) + HANDOFF_MS
+          ? movePresentationDuration(game.lastMove, !!reduced) + HANDOFF_MS
           : 0),
       afterPlay,
     });
@@ -1351,7 +1441,10 @@ export default function App() {
 
   const turnAnnouncementBlocked =
     !!dialog ||
+    !!debugFinishedBoard ||
     !!debugBoardMove ||
+    !!debugSubmission ||
+    submissionNoticeVisible ||
     !!blank ||
     !!drag ||
     !!settling ||
@@ -1438,11 +1531,12 @@ export default function App() {
       game?.status === "finished" &&
       freshMove === game.lastMove?.id &&
       freshMove &&
+      arrivingMove !== freshMove &&
       animatedMove !== freshMove &&
       !document.querySelector('[data-testid="move-celebration"]')
     )
       setFadingMove(freshMove);
-  }, [game?.status, game?.lastMove?.id, freshMove, animatedMove]);
+  }, [game?.status, game?.lastMove?.id, freshMove, arrivingMove, animatedMove]);
   useEffect(() => {
     if (!fadingMove) return;
     const timer = setTimeout(
@@ -1479,7 +1573,7 @@ export default function App() {
       readyAt:
         Date.now() +
         (finalPlay
-          ? celebrationDuration(game.lastMove, !!reduced) + HANDOFF_MS
+          ? movePresentationDuration(game.lastMove, !!reduced) + HANDOFF_MS
           : 0),
     });
   }, [game?.id, game?.revision, game?.status, game?.endedReason]);
@@ -1705,8 +1799,9 @@ export default function App() {
       if (latestGameContext.current === submittedContext) setBusy(false);
     }
   }
-  async function retry() {
-    if (sharedActionsPaused) return;
+  async function retry(resume = false) {
+    if (sharedActionsPaused && !resume) return;
+    if (resume) session.resumeSharedActions();
     const submittedContext = gameContext;
     setBusy(true);
     setMessage("");
@@ -1775,6 +1870,11 @@ export default function App() {
     }
   }
   async function requestNewGame() {
+    if (debugFinishedBoard) {
+      setDebugFinishedBoard(null);
+      setDialog(null);
+      return;
+    }
     if (
       !game ||
       !canUseNewGame ||
@@ -2257,13 +2357,15 @@ export default function App() {
       : [],
   );
   const notice = sharedActionsPaused ? "" : message || session.error;
+  const finishedOnBoard = !!debugFinishedBoard || game?.status === "finished";
+  const boardGame = debugFinishedBoard || game;
   const status =
     pending || busy
       ? "Saving your move…"
       : !connected
         ? "Reconnecting…"
-        : game?.status === "finished"
-          ? game.endedReason === "new-game"
+        : finishedOnBoard
+          ? boardGame?.endedReason === "new-game"
             ? "Starting your new game…"
             : "A lovely game, well played."
           : yourTurn
@@ -2302,14 +2404,14 @@ export default function App() {
                 className="sidebar-bag-count"
                 data-testid="sidebar-bag-count"
               >
-                {game?.bagCount} tiles in the bag
+                {boardGame?.bagCount} tiles in the bag
               </span>
             )}
           </div>
         )}
         {game && slot && (
           <button
-            className={`secondary-button header-new-game ${game.status === "finished" ? "new-game-next-action" : ""}`}
+            className={`secondary-button header-new-game ${finishedOnBoard ? "new-game-next-action" : ""}`}
             data-testid="new-game"
             disabled={
               !canUseNewGame ||
@@ -2339,10 +2441,14 @@ export default function App() {
             data-testid="local-debug-tools"
             onClick={() => {
               setDebugBoardMove(null);
+              setDebugSubmission(null);
+              setDebugFinishedBoard(null);
               setDialog("debug-tools");
             }}
           >
-            {debugBoardMove ? "Stop preview" : "Debug"}
+            {debugBoardMove || debugSubmission || debugFinishedBoard
+              ? "Stop preview"
+              : "Debug"}
           </button>
         )}
         {appUpdate.available && (
@@ -2591,7 +2697,7 @@ export default function App() {
                     <span>
                       {zoomed
                         ? "Scroll to look around"
-                        : `${game.bagCount} tiles in the bag`}
+                        : `${boardGame?.bagCount} tiles in the bag`}
                     </span>
                     <button
                       className="board-zoom-button"
@@ -2628,6 +2734,13 @@ export default function App() {
                       role="group"
                       aria-label="15 by 15 word board"
                       data-testid="game-board"
+                      data-placement-phase={
+                        arrivingMove ||
+                        (debugBoardMove &&
+                          debugScoringReady !== debugBoardMove.move.id)
+                          ? "arriving"
+                          : undefined
+                      }
                       data-draft-error={draftErrorCode || undefined}
                       data-draft-pulse-paused={
                         !!drag || !!settling || recallAnimation.active
@@ -2639,12 +2752,13 @@ export default function App() {
                           key = `${row},${col}`;
                         const committed = debugBoardMove
                             ? debugBoardMove.board[key]
-                            : game.board[key],
-                          tentative = !debugBoardMove
-                            ? placements.find(
-                                (p) => p.row === row && p.col === col,
-                              )
-                            : undefined,
+                            : boardGame!.board[key],
+                          tentative =
+                            !debugBoardMove && !debugFinishedBoard
+                              ? placements.find(
+                                  (p) => p.row === row && p.col === col,
+                                )
+                              : undefined,
                           rackTile =
                             tentative &&
                             rack.find((t) => t.id === tentative.tileId);
@@ -2665,6 +2779,18 @@ export default function App() {
                           isFresh = isLatest && freshMove === latest?.id,
                           isFading = isFresh && fadingMove === latest?.id,
                           isDraftWord = draftWordMembers.has(key);
+                        const arrivalIndex =
+                          (
+                            debugBoardMove?.move || latest
+                          )?.placements.findIndex(
+                            (p) => p.row === row && p.col === col,
+                          ) ?? -1;
+                        const arriving =
+                          arrivalIndex >= 0 &&
+                          !!committed &&
+                          (debugBoardMove
+                            ? debugScoringReady !== debugBoardMove.move.id
+                            : arrivingMove === latest?.id);
                         const landing =
                           drag?.target?.kind === "board" &&
                           drag.target.row === row &&
@@ -2719,7 +2845,14 @@ export default function App() {
                           >
                             {tile ? (
                               <motion.span
-                                className={`tile board-tile ${tentative ? "tentative" : ""} ${isDraftWord ? "draft-word-tile" : ""} ${tentative && draftErrorCode ? "invalid-arrangement" : ""} ${tentative && canEdit ? "draggable-tile" : ""} ${drag?.tile.id === tile.id ? "drag-source" : ""} ${settling?.tile.id === tile.id ? "settling-target" : ""} ${isLatest && committed ? "latest-play-tile" : ""} ${isFresh && committed ? "held-play-tile" : ""} ${isFading && committed ? "fresh-play-tile" : ""}`}
+                                className={`tile board-tile ${arriving ? "arriving-play-tile" : ""} ${tentative ? "tentative" : ""} ${isDraftWord ? "draft-word-tile" : ""} ${tentative && draftErrorCode ? "invalid-arrangement" : ""} ${tentative && canEdit ? "draggable-tile" : ""} ${drag?.tile.id === tile.id ? "drag-source" : ""} ${settling?.tile.id === tile.id ? "settling-target" : ""} ${isLatest && committed ? "latest-play-tile" : ""} ${isFresh && committed ? "held-play-tile" : ""} ${isFading && committed ? "fresh-play-tile" : ""}`}
+                                style={
+                                  arriving
+                                    ? ({
+                                        "--arrival-delay": `${Math.min(300, arrivalIndex * 45)}ms`,
+                                      } as CSSProperties)
+                                    : undefined
+                                }
                                 key={tile.id}
                                 onPointerDown={
                                   tentative
@@ -2789,30 +2922,34 @@ export default function App() {
                         setFadingMove(freshMove);
                     }}
                   >
-                    {import.meta.env.DEV && debugEnabled && debugBoardMove && (
-                      <motion.div
-                        key={debugBoardMove.move.id}
-                        className="floating-points"
-                        style={{
-                          left: "50%",
-                          top: "50%",
-                          x: "-50%",
-                          y: "-50%",
-                        }}
-                        data-testid="debug-board-scoring"
-                      >
-                        <Celebration
-                          debug
-                          score={debugBoardMove.move.score}
-                          bingo={
-                            (debugBoardMove.move.breakdown?.bingoBonus ?? 0) > 0
-                          }
-                          variant={0}
-                          move={debugBoardMove.move}
-                          onComplete={() => setDebugBoardMove(null)}
-                        />
-                      </motion.div>
-                    )}
+                    {import.meta.env.DEV &&
+                      debugEnabled &&
+                      debugBoardMove &&
+                      debugScoringReady === debugBoardMove.move.id && (
+                        <motion.div
+                          key={debugBoardMove.move.id}
+                          className="floating-points"
+                          style={{
+                            left: "50%",
+                            top: "50%",
+                            x: "-50%",
+                            y: "-50%",
+                          }}
+                          data-testid="debug-board-scoring"
+                        >
+                          <Celebration
+                            debug
+                            score={debugBoardMove.move.score}
+                            bingo={
+                              (debugBoardMove.move.breakdown?.bingoBonus ?? 0) >
+                              0
+                            }
+                            variant={0}
+                            move={debugBoardMove.move}
+                            onComplete={() => setDebugBoardMove(null)}
+                          />
+                        </motion.div>
+                      )}
                     {animatedMove && latest?.kind === "play" && (
                       <motion.div
                         key={animatedMove}
@@ -3075,9 +3212,7 @@ export default function App() {
                     )}
                     {!visibleRack.length && !reserveRackReturn && (
                       <span className="empty-rack-hint">
-                        {game.status === "finished"
-                          ? "Hand empty"
-                          : "Return tiles here"}
+                        {finishedOnBoard ? "Hand empty" : "Return tiles here"}
                       </span>
                     )}
                   </div>
@@ -3131,7 +3266,7 @@ export default function App() {
                   {(["mom", "aunt"] as Slot[]).map((player) => (
                     <div
                       key={player}
-                      className={`player-score ${game.turn === player && game.status === "active" ? "current-player" : ""}`}
+                      className={`player-score ${game.turn === player && !finishedOnBoard && game.status === "active" ? "current-player" : ""}`}
                     >
                       <div className={`avatar ${player}`} aria-hidden="true">
                         {names[player].slice(0, 1)}
@@ -3157,7 +3292,7 @@ export default function App() {
                             )}
                         </span>
                         <span className="player-caption">
-                          {game.status === "finished"
+                          {finishedOnBoard
                             ? "Final score"
                             : game.turn === player
                               ? player === slot
@@ -3166,7 +3301,10 @@ export default function App() {
                               : `${game.rackCounts[player]} tiles on the rack`}
                         </span>
                       </div>
-                      <Score value={game.scores[player]} player={player} />
+                      <Score
+                        value={boardGame!.scores[player]}
+                        player={player}
+                      />
                     </div>
                   ))}
                 </section>
@@ -3222,7 +3360,7 @@ export default function App() {
                   <p className="turn-description">
                     {pending
                       ? "Please keep this move here until it is confirmed."
-                      : game.status === "finished"
+                      : finishedOnBoard
                         ? game.endedReason === "new-game"
                           ? "A fresh board is on its way."
                           : "Your final scores are saved. Take a look back over the board."
@@ -3248,15 +3386,18 @@ export default function App() {
                         : "Your first word must cover the centre star."}
                     </p>
                   )}
-                  {game.status === "finished" ? (
+                  {finishedOnBoard ? (
                     game.endedReason !== "new-game" && (
                       <button
                         className="secondary-button result-reopen"
                         onClick={() =>
-                          setQueuedResult({
-                            gameId: game.id,
-                            readyAt: Date.now(),
-                          })
+                          debugFinishedBoard
+                            ? (setDebugEnding(debugFinishedBoard),
+                              setDialog("debug-result"))
+                            : setQueuedResult({
+                                gameId: game.id,
+                                readyAt: Date.now(),
+                              })
                         }
                         data-testid="view-result"
                       >
@@ -3456,7 +3597,7 @@ export default function App() {
                       disabled={!connected || sharedActionsPaused}
                       data-testid="retry-pending"
                     >
-                      Check & retry saved move
+                      Try again
                     </button>
                   )}
                   {pauseNotice()}
@@ -3623,6 +3764,58 @@ export default function App() {
           </motion.div>
         ))}
         <AnimatePresence>
+          {submissionNoticeVisible && (
+            <Modal
+              title={
+                debugSubmission?.uncertain || (!busy && !!pending)
+                  ? "We couldn’t confirm your move"
+                  : "Your move hasn’t been confirmed yet"
+              }
+              testId="slow-submit-popup"
+              close={() => {
+                submissionFeedback.dismiss();
+                if (debugSubmission?.uncertain) setDebugSubmission(null);
+              }}
+              footer={
+                <>
+                  {(debugSubmission?.uncertain || (!busy && !!pending)) && (
+                    <button
+                      className="primary-button"
+                      data-testid="submission-try-again"
+                      disabled={!debugSubmission && !connected}
+                      onClick={() => {
+                        if (debugSubmission) {
+                          setDebugSubmission({
+                            id: `preview:${Date.now()}`,
+                            uncertain: false,
+                          });
+                        } else {
+                          void retry(true);
+                        }
+                      }}
+                    >
+                      Try again
+                    </button>
+                  )}
+                  <button
+                    className="secondary-button"
+                    data-testid="submission-back-to-board"
+                    onClick={() => {
+                      submissionFeedback.dismiss();
+                      if (debugSubmission?.uncertain) setDebugSubmission(null);
+                    }}
+                  >
+                    Back to board
+                  </button>
+                </>
+              }
+            >
+              <SubmissionNotice
+                words={debugSubmission ? ["HOUSE"] : preview?.words}
+                uncertain={debugSubmission?.uncertain || (!busy && !!pending)}
+              />
+            </Modal>
+          )}
           {dialog === "result" &&
             game?.status === "finished" &&
             game.endedReason !== "new-game" && (
@@ -3820,6 +4013,34 @@ export default function App() {
                 )}
               </div>
               <h3>Game endings</h3>
+              <div className="debug-buttons">
+                <button
+                  className="secondary-button"
+                  data-testid="debug-scene-slow-submit"
+                  onClick={() => {
+                    setDebugSubmission({
+                      id: `debug-submit:${Date.now()}`,
+                      uncertain: false,
+                    });
+                    setDialog(null);
+                  }}
+                >
+                  Slow submission
+                </button>
+                <button
+                  className="secondary-button"
+                  data-testid="debug-scene-uncertain-submit"
+                  onClick={() => {
+                    setDebugSubmission({
+                      id: `debug-submit:${Date.now()}`,
+                      uncertain: true,
+                    });
+                    setDialog(null);
+                  }}
+                >
+                  Uncertain reply
+                </button>
+              </div>
               <label>
                 Preview outcome{" "}
                 <select
@@ -3835,6 +4056,20 @@ export default function App() {
                 </select>
               </label>
               <div className="debug-buttons">
+                <button
+                  className="secondary-button"
+                  data-testid="debug-scene-game-over"
+                  onClick={() => {
+                    setDebugFinishedBoard(
+                      debugEndingGame("agreed-end", debugWinner),
+                    );
+                    setDebugBoardMove(null);
+                    setDebugSubmission(null);
+                    setDialog(null);
+                  }}
+                >
+                  Game over
+                </button>
                 {(
                   [
                     ["rack-out", "Last tile played"],
