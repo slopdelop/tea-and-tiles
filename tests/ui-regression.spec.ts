@@ -4607,7 +4607,7 @@ test("timer switches from minutes to seconds and local debug celebrations never 
     path: info.outputPath("ending-rack-out-rita-wins.png"),
     fullPage: false,
   });
-  await ending.getByRole("button", { name: "More previews" }).click();
+  await ending.getByRole("button", { name: "Play a new game?" }).click();
   for (const [reason, text] of [
     ["agreed-end", "both agreed"],
     ["scoreless", "Six consecutive turns"],
@@ -4624,7 +4624,7 @@ test("timer switches from minutes to seconds and local debug celebrations never 
           .scores.aunt,
       ),
     );
-    await ending.getByRole("button", { name: "More previews" }).click();
+    await ending.getByRole("button", { name: "Play a new game?" }).click();
   }
   await tools.getByTestId("debug-winner").selectOption("tie");
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -4636,15 +4636,15 @@ test("timer switches from minutes to seconds and local debug celebrations never 
   await expect(
     ending.getByRole("heading", { name: "An even match — a tie!" }),
   ).toBeVisible();
-  await ending.getByRole("button", { name: "More previews" }).click();
+  await ending.getByRole("button", { name: "Play a new game?" }).click();
   await page.emulateMedia({ reducedMotion: "no-preference" });
   await tools.getByTestId("debug-end-request").click();
   await expect(page.getByTestId("debug-end-request-popup")).toContainText(
-    "Nothing is sent",
+    "The bag is empty",
   );
   await page.getByTestId("debug-agree-end").click();
   await expect(ending).toBeVisible();
-  await ending.getByRole("button", { name: "Back to your game" }).click();
+  await ending.getByRole("button", { name: "See the board" }).click();
   const boardState = () =>
     page
       .getByTestId("game-board")
@@ -4699,7 +4699,7 @@ test("timer switches from minutes to seconds and local debug celebrations never 
     path: info.outputPath("ending-dark-portrait.png"),
     fullPage: false,
   });
-  await page.getByRole("button", { name: "Back to your game" }).click();
+  await page.getByRole("button", { name: "See the board" }).click();
   await page.setViewportSize({ width: 1024, height: 768 });
   await page.getByTestId("help-settings").click();
   const secondDevice = await browser.newContext({

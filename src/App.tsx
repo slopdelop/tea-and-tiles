@@ -90,7 +90,6 @@ type TurnNotice = {
 };
 function TurnAnnouncement({
   name,
-  debug,
   onComplete,
 }: {
   name: string;
@@ -117,7 +116,6 @@ function TurnAnnouncement({
         </svg>
         <i />
       </span>
-      {debug && <small>Debug preview</small>}
       <strong>{name}’s turn</strong>
     </motion.div>
   );
@@ -206,11 +204,6 @@ function Celebration({
             </g>
           ))}
         </svg>
-      )}
-      {debug && (
-        <span className="celebration-debug-label">
-          Debug preview · sample points
-        </span>
       )}
       <strong>+{score}</strong>
       <span>
@@ -3901,7 +3894,7 @@ export default function App() {
                       className="secondary-button"
                       onClick={() => setDialog("debug-tools")}
                     >
-                      Decline preview
+                      Keep playing
                     </button>
                     <button
                       className="primary-button"
@@ -3913,14 +3906,11 @@ export default function App() {
                         setDialog("debug-result");
                       }}
                     >
-                      Agree in preview
+                      Agree & end game
                     </button>
                   </div>
                 }
               >
-                <p className="dictionary-reassurance">
-                  Local sample request. Nothing is sent to your partner.
-                </p>
                 <p>
                   The bag is empty. Agreeing finishes the game and subtracts
                   each player’s remaining tile values.
@@ -3936,22 +3926,19 @@ export default function App() {
                 <div className="dialog-actions">
                   <button
                     className="secondary-button"
-                    onClick={() => setDialog("debug-tools")}
+                    onClick={() => setDialog(null)}
                   >
-                    More previews
+                    See the board
                   </button>
                   <button
                     className="primary-button"
-                    onClick={() => setDialog(null)}
+                    onClick={() => setDialog("debug-tools")}
                   >
-                    Back to your game
+                    Play a new game?
                   </button>
                 </div>
               }
             >
-              <p className="dictionary-reassurance">
-                Local sample scores. Your game is unchanged.
-              </p>
               <EndingPresentation
                 key={debugEnding?.id}
                 game={debugEnding || debugEndingGame("agreed-end")}
