@@ -114,7 +114,7 @@ try {
       async () => (await navigator.serviceWorker.getRegistration())?.scope,
     ),
   ).toBe(origin + base);
-  // A changed worker must wait for a player's explicit update action. The
+  // A changed worker must wait for an explicit action or a safe new-game boundary. The
   // harmless marker simulates a newly published build without cloud access.
   originalWorker = readFileSync(workerPath, "utf8");
   writeFileSync(

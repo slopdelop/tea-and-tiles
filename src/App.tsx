@@ -38,6 +38,7 @@ import { canPlaceDraftTile } from "./placementGuide";
 import { draftWordCells } from "./draftWordCells";
 import { formatTimeRemaining } from "./timerDisplay";
 import AppVersion from "./components/AppVersion";
+import Changelog from "./components/Changelog";
 import { readSignInLink } from "./signInLink";
 import { GameSummary, ScoreExplanation } from "./components/ScoreExplanation";
 import {
@@ -761,6 +762,12 @@ export default function App() {
       import.meta.env.DEV && localStorage.getItem("tea-tiles-debug") === "true",
   );
   const [debugWinner, setDebugWinner] = useState<Slot | "tie">("mom");
+  const [debugExchange, setDebugExchange] = useState<
+    "notice" | "handoff" | null
+  >(null);
+  const [debugStarter, setDebugStarter] = useState<Slot | null>(null);
+  const [debugUpdating, setDebugUpdating] = useState(false);
+  const [resultSeenGame, setResultSeenGame] = useState<string | null>(null);
   const [debugEnding, setDebugEnding] = useState<ReturnType<
     typeof debugEndingGame
   > | null>(null);
@@ -783,6 +790,25 @@ export default function App() {
     (pending?.kind === "play" && game?.lastMove?.id !== pending.id
       ? pending.id
       : null);
+  useEffect(() => {
+    if (!debugExchange) return;
+    const timer = setTimeout(
+      () => {
+        if (debugExchange === "notice") setDebugExchange("handoff");
+        else {
+          setDebugExchange(null);
+          setDebugStarter(slot === "mom" ? "aunt" : "mom");
+        }
+      },
+      debugExchange === "notice" ? 1800 : HANDOFF_MS,
+    );
+    return () => clearTimeout(timer);
+  }, [debugExchange, slot]);
+  useEffect(() => {
+    if (!debugUpdating) return;
+    const timer = setTimeout(() => setDebugUpdating(false), 1800);
+    return () => clearTimeout(timer);
+  }, [debugUpdating]);
   const submissionFeedback = useSubmissionFeedback(submissionKey);
   const submissionNoticeVisible =
     submissionFeedback.visible && !dialog && !hasSubmissionDecision();
@@ -827,6 +853,9 @@ export default function App() {
     if (import.meta.env.DEV)
       localStorage.setItem("tea-tiles-debug", String(debugEnabled));
     if (!debugEnabled) {
+      setDebugStarter(null);
+      setDebugUpdating(false);
+      setDebugExchange(null);
       setDebugBoardMove(null);
       setDebugEnding(null);
       setDebugSubmission(null);
@@ -835,6 +864,9 @@ export default function App() {
   }, [debugEnabled]);
   useEffect(() => {
     setDebugBoardMove(null);
+    setDebugStarter(null);
+    setDebugUpdating(false);
+    setDebugExchange(null);
     setDebugEnding(null);
     setDebugSubmission(null);
     setDebugFinishedBoard(null);
@@ -936,6 +968,10 @@ export default function App() {
     !pending &&
     !busy &&
     !debugBoardMove &&
+    !debugExchange &&
+    !debugUpdating &&
+    !appUpdate.applying &&
+    !debugStarter &&
     !debugFinishedBoard &&
     !debugSubmission &&
     !timedExpired &&
@@ -951,6 +987,10 @@ export default function App() {
     !timedExpired &&
     !sharedActionsPaused &&
     !debugBoardMove &&
+    !debugExchange &&
+    !debugUpdating &&
+    !appUpdate.applying &&
+    !debugStarter &&
     !debugFinishedBoard &&
     !debugSubmission &&
     !recallAnimation.active;
@@ -1424,7 +1464,8 @@ export default function App() {
     if (previous?.gameId === game.id && previous.turn === game.turn) return;
     observedTurn.current = { gameId: game.id, turn: game.turn };
     const afterPlay =
-      previous?.gameId === game.id && game.lastMove?.kind === "play";
+      previous?.gameId === game.id &&
+      (game.lastMove?.kind === "play" || game.lastMove?.kind === "exchange");
     setTurnAnnouncement(null);
     setQueuedTurn({
       id: `${game.id}:${game.revision}:${game.turn}`,
@@ -1441,6 +1482,10 @@ export default function App() {
 
   const turnAnnouncementBlocked =
     !!dialog ||
+    !!debugExchange ||
+    !!debugStarter ||
+    debugUpdating ||
+    appUpdate.applying ||
     !!debugFinishedBoard ||
     !!debugBoardMove ||
     !!debugSubmission ||
@@ -1567,7 +1612,7 @@ export default function App() {
     const finalPlay =
       previous?.gameId === game.id &&
       previous.lastMoveId !== game.lastMove?.id &&
-      game.lastMove?.kind === "play";
+      (game.lastMove?.kind === "play" || game.lastMove?.kind === "exchange");
     setQueuedResult({
       gameId: game.id,
       readyAt:
@@ -2059,6 +2104,74 @@ export default function App() {
     !!drag && !visibleRack.some((tile) => tile.id === drag.tile.id);
   if (!drag) centeredRackCount.current = visibleRack.length;
   const latest = game?.lastMove;
+  const observedUpdateGame = useRef<string | null>(null);
+  const [updateBoundary, setUpdateBoundary] = useState<string | null>(null);
+  const attemptedUpdateBoundary = useRef<string | null>(null);
+  const updateSafety = useRef({ id: game?.id, safe: false });
+  updateSafety.current = {
+    id: game?.id,
+    safe:
+      !!game &&
+      game.status === "active" &&
+      game.revision === 0 &&
+      Object.keys(game.board).length === 0 &&
+      !!slot &&
+      connected &&
+      !session.loading &&
+      !placements.length &&
+      !selected &&
+      !drag &&
+      !settling &&
+      !blank &&
+      !pending &&
+      !busy &&
+      !wordBusy &&
+      !newGameBusy &&
+      !endGameBusy &&
+      !dialog &&
+      !debugBoardMove &&
+      !debugFinishedBoard &&
+      !debugExchange &&
+      !debugUpdating &&
+      !debugStarter,
+  };
+  useEffect(() => {
+    if (!game) return;
+    const previous = observedUpdateGame.current;
+    observedUpdateGame.current = game.id;
+    if (previous && previous !== game.id) setUpdateBoundary(game.id);
+  }, [game?.id]);
+  useEffect(() => {
+    if (
+      !updateBoundary ||
+      attemptedUpdateBoundary.current === updateBoundary ||
+      !updateSafety.current.safe ||
+      updateSafety.current.id !== updateBoundary
+    )
+      return;
+    attemptedUpdateBoundary.current = updateBoundary;
+    void appUpdate.applyAtNewGame(
+      () =>
+        updateSafety.current.id === updateBoundary && updateSafety.current.safe,
+    );
+  }, [
+    updateBoundary,
+    game?.id,
+    game?.revision,
+    dialog,
+    busy,
+    newGameBusy,
+    pending,
+    connected,
+    session.loading,
+    placements.length,
+    selected,
+    drag,
+    settling,
+    blank,
+    wordBusy,
+    endGameBusy,
+  ]);
   const houseWords = useMemo(
     () => new Set(session.houseWords.map((entry) => entry.word)),
     [session.houseWords],
@@ -2358,6 +2471,11 @@ export default function App() {
   );
   const notice = sharedActionsPaused ? "" : message || session.error;
   const finishedOnBoard = !!debugFinishedBoard || game?.status === "finished";
+  const nextGameCue =
+    finishedOnBoard &&
+    (debugFinishedBoard
+      ? resultSeenGame === debugFinishedBoard.id
+      : resultSeenGame === game?.id);
   const boardGame = debugFinishedBoard || game;
   const status =
     pending || busy
@@ -2411,10 +2529,11 @@ export default function App() {
         )}
         {game && slot && (
           <button
-            className={`secondary-button header-new-game ${finishedOnBoard ? "new-game-next-action" : ""}`}
+            className={`secondary-button header-new-game ${nextGameCue ? "new-game-next-action" : ""}`}
             data-testid="new-game"
             disabled={
               !canUseNewGame ||
+              appUpdate.applying ||
               !!currentGameRequest ||
               waitingForNewGame ||
               !!debugBoardMove
@@ -2443,10 +2562,18 @@ export default function App() {
               setDebugBoardMove(null);
               setDebugSubmission(null);
               setDebugFinishedBoard(null);
+              setDebugExchange(null);
+              setDebugStarter(null);
+              setDebugUpdating(false);
               setDialog("debug-tools");
             }}
           >
-            {debugBoardMove || debugSubmission || debugFinishedBoard
+            {debugBoardMove ||
+            debugSubmission ||
+            debugFinishedBoard ||
+            debugExchange ||
+            debugStarter ||
+            debugUpdating
               ? "Stop preview"
               : "Debug"}
           </button>
@@ -2950,6 +3077,40 @@ export default function App() {
                           />
                         </motion.div>
                       )}
+                    {(debugExchange === "notice" ||
+                      (animatedMove && latest?.kind === "exchange")) && (
+                      <motion.div
+                        key={debugExchange ? "debug-exchange" : animatedMove}
+                        className="floating-points"
+                        style={{ left: "50%", top: "50%" }}
+                        initial={{
+                          opacity: 0,
+                          x: "-50%",
+                          y: "-50%",
+                          scale: reduced ? 1 : 0.95,
+                        }}
+                        animate={{ opacity: 1, x: "-50%", y: "-50%", scale: 1 }}
+                        exit={{ opacity: 0 }}
+                      >
+                        <div
+                          className="celebration-card exchange-celebration"
+                          role="status"
+                          data-testid="exchange-notice"
+                        >
+                          <div className="celebration-message">
+                            {names[debugExchange ? slot! : latest!.player]}{" "}
+                            exchanged{" "}
+                            {debugExchange
+                              ? 3
+                              : (latest?.exchangedCount ?? "some")}{" "}
+                            {!debugExchange && latest?.exchangedCount === 1
+                              ? "tile"
+                              : "tiles"}
+                          </div>
+                          <p>A fresh hand, ready for the next turn.</p>
+                        </div>
+                      </motion.div>
+                    )}
                     {animatedMove && latest?.kind === "play" && (
                       <motion.div
                         key={animatedMove}
@@ -2983,6 +3144,33 @@ export default function App() {
                       </motion.div>
                     )}
                   </AnimatePresence>
+                  {debugStarter && (
+                    <div
+                      className="turn-announcement-layer"
+                      data-testid="debug-starter"
+                    >
+                      <TurnAnnouncement
+                        name={names[debugStarter]}
+                        debug
+                        onComplete={() => setDebugStarter(null)}
+                      />
+                    </div>
+                  )}
+                  {(debugUpdating || appUpdate.applying) && (
+                    <div
+                      className="turn-announcement-layer"
+                      data-testid={
+                        debugUpdating ? "debug-updating" : "app-updating"
+                      }
+                    >
+                      <div className="celebration-card exchange-celebration">
+                        <div className="celebration-message">
+                          Updating Tea &amp; Tiles…
+                        </div>
+                        <p>Getting the latest version for your new game.</p>
+                      </div>
+                    </div>
+                  )}
                   {turnAnnouncement &&
                     !turnAnnouncementBlocked &&
                     game.status === "active" &&
@@ -3829,6 +4017,7 @@ export default function App() {
                   )
                     return;
                   setQueuedResult(null);
+                  setResultSeenGame(game.id);
                   setDialog(null);
                 }}
                 footer={
@@ -3843,6 +4032,7 @@ export default function App() {
                         )
                           return;
                         setQueuedResult(null);
+                        setResultSeenGame(game.id);
                         setDialog(null);
                       }}
                     >
@@ -3863,6 +4053,7 @@ export default function App() {
                         )
                           return;
                         setQueuedResult(null);
+                        setResultSeenGame(null);
                         setNewGameError("");
                         setDialog("new-game");
                       }}
@@ -3978,41 +4169,82 @@ export default function App() {
               </p>
               <h3>Scoring over the board</h3>
               <div className="debug-buttons">
-                {(["normal", "multiple-words", "high", "bingo"] as const).map(
-                  (kind) => (
-                    <button
-                      key={kind}
-                      className="secondary-button"
-                      data-testid={`debug-scene-${kind}`}
-                      disabled={
-                        !game ||
-                        !!pending ||
-                        busy ||
-                        !!drag ||
-                        !!settling ||
-                        !!animatedMove
-                      }
-                      onClick={() => {
-                        const move = debugMove(kind);
-                        setDebugBoardMove({
-                          move: { ...move, id: `preview:${Date.now()}` },
-                          board: debugMoveBoard(kind),
-                        });
-                        setDialog(null);
-                      }}
-                    >
-                      {kind === "normal"
-                        ? "Single word"
-                        : kind === "multiple-words"
-                          ? "Multiple words"
-                          : kind === "bingo"
-                            ? "Seven tiles"
-                            : "High score"}
-                    </button>
-                  ),
-                )}
+                {(
+                  [
+                    "normal",
+                    "multiple-words",
+                    "high",
+                    "bingo",
+                    "eight-letter",
+                    "fifteen-letter",
+                  ] as const
+                ).map((kind) => (
+                  <button
+                    key={kind}
+                    className="secondary-button"
+                    data-testid={`debug-scene-${kind}`}
+                    disabled={
+                      !game ||
+                      !!pending ||
+                      busy ||
+                      !!drag ||
+                      !!settling ||
+                      !!animatedMove
+                    }
+                    onClick={() => {
+                      const move = debugMove(kind);
+                      setDebugBoardMove({
+                        move: { ...move, id: `preview:${Date.now()}` },
+                        board: debugMoveBoard(kind),
+                      });
+                      setDialog(null);
+                    }}
+                  >
+                    {kind === "normal"
+                      ? "Single word"
+                      : kind === "multiple-words"
+                        ? "Multiple words"
+                        : kind === "bingo"
+                          ? "Seven tiles"
+                          : kind === "eight-letter"
+                            ? "Eight-letter word"
+                            : kind === "fifteen-letter"
+                              ? "Fifteen-letter word"
+                              : "High score"}
+                  </button>
+                ))}
               </div>
               <h3>Game endings</h3>
+              <button
+                className="secondary-button"
+                data-testid="debug-random-starter"
+                onClick={() => {
+                  setDebugStarter(Math.random() < 0.5 ? "mom" : "aunt");
+                  setDialog(null);
+                }}
+              >
+                Random starting player
+              </button>
+              <button
+                className="secondary-button"
+                data-testid="debug-new-game-update"
+                onClick={() => {
+                  setDebugUpdating(true);
+                  setDialog(null);
+                }}
+              >
+                New-game update
+              </button>
+              <button
+                className="secondary-button"
+                data-testid="debug-exchange"
+                onClick={() => {
+                  setDebugExchange("notice");
+                  setDialog(null);
+                }}
+              >
+                Exchange three tiles
+              </button>
               <div className="debug-buttons">
                 <button
                   className="secondary-button"
@@ -4065,7 +4297,9 @@ export default function App() {
                     );
                     setDebugBoardMove(null);
                     setDebugSubmission(null);
-                    setDialog(null);
+                    setResultSeenGame(null);
+                    setDebugEnding(debugEndingGame("agreed-end", debugWinner));
+                    setDialog("debug-result");
                   }}
                 >
                   Game over
@@ -4161,18 +4395,31 @@ export default function App() {
             <Modal
               title="Game complete"
               testId="debug-end-game-popup"
-              close={() => setDialog(null)}
+              close={() => {
+                if (debugFinishedBoard)
+                  setResultSeenGame(debugFinishedBoard.id);
+                setDialog(null);
+              }}
               footer={
                 <div className="dialog-actions">
                   <button
                     className="secondary-button"
-                    onClick={() => setDialog(null)}
+                    onClick={() => {
+                      if (debugFinishedBoard)
+                        setResultSeenGame(debugFinishedBoard.id);
+                      setDialog(null);
+                    }}
                   >
                     See the board
                   </button>
                   <button
                     className="primary-button"
-                    onClick={() => setDialog("debug-tools")}
+                    onClick={() => {
+                      setResultSeenGame(null);
+                      setDialog(
+                        debugFinishedBoard ? "new-game" : "debug-tools",
+                      );
+                    }}
                   >
                     Play a new game?
                   </button>
@@ -4871,6 +5118,7 @@ export default function App() {
                 <Icon name="check" />
               </button>
               <AppVersion />
+              <Changelog />
             </Modal>
           )}
           {dialog === "pass" && (

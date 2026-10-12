@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRegisterSW } from "virtual:pwa-register/react";
+import { applyNewGameUpdate } from "./newGameUpdate";
 
 export function useAppUpdate() {
   const registration = useRef<ServiceWorkerRegistration | undefined>(undefined);
   const [checking, setChecking] = useState(false);
+  const [applying, setApplying] = useState(false);
   const [status, setStatus] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const boundaryCheck = useRef(false);
   const {
     needRefresh: [available, setAvailable],
     updateServiceWorker,
@@ -25,7 +28,7 @@ export function useAppUpdate() {
           ? "Updates are available on the published app."
           : "The app is getting ready to check for updates.",
       );
-      return;
+      return false;
     }
     setChecking(true);
     setError(null);
@@ -58,8 +61,10 @@ export function useAppUpdate() {
             ? "The update is still downloading. Check again shortly."
             : "You’re up to date.",
       );
+      return !!current.waiting;
     } catch {
       setError("Could not check for updates. Try again when connected.");
+      return false;
     } finally {
       setChecking(false);
     }
@@ -79,11 +84,36 @@ export function useAppUpdate() {
   }, [check]);
   const apply = useCallback(async () => {
     setError(null);
+    setApplying(true);
     try {
       await updateServiceWorker(true);
+      return true;
     } catch {
+      setApplying(false);
       setError("Could not apply the update. Try checking again.");
+      return false;
     }
   }, [updateServiceWorker]);
-  return { available, checking, status, error, check, apply };
+  const applyAtNewGame = useCallback(
+    async (safeToReload: () => boolean) => {
+      if (boundaryCheck.current) return false;
+      boundaryCheck.current = true;
+      try {
+        return await applyNewGameUpdate(safeToReload, check, apply);
+      } finally {
+        boundaryCheck.current = false;
+      }
+    },
+    [check, apply],
+  );
+  return {
+    available,
+    checking,
+    applying,
+    status,
+    error,
+    check,
+    apply,
+    applyAtNewGame,
+  };
 }

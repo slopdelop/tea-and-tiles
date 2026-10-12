@@ -1,5 +1,8 @@
+import { useSyncExternalStore } from "react";
+import { getBuildTime, subscribeBuildTime } from "../buildTime";
+
 export default function AppVersion() {
-  const builtAt = import.meta.env.VITE_BUILD_TIME;
+  const builtAt = useSyncExternalStore(subscribeBuildTime, getBuildTime);
   const buildLabel = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/Los_Angeles",
     year: "numeric",

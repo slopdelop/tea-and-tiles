@@ -584,9 +584,11 @@
     inset 0 1px 0 #ffffff80,
     0 2px 0 var(--choice-line);
 }
-:root:where([data-theme]):not([data-theme="linen"])
-  :is(.hand-action-button, .board-zoom-button):hover:not(:disabled) {
-  background: var(--choice-line);
+@media (hover: hover) and (pointer: fine) {
+  :root:where([data-theme]):not([data-theme="linen"])
+    :is(.hand-action-button, .board-zoom-button):hover:not(:disabled) {
+    background: var(--choice-line);
+  }
 }
 :root:where([data-theme]):not([data-theme="linen"]) .avatar.mom {
   background: var(--avatar-first);
@@ -845,6 +847,24 @@ button {
   .header-new-game.new-game-next-action:not(:disabled)::after {
     animation: none;
   }
+}
+.help-changelog {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.help-changelog details {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+.help-changelog summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--ink);
+}
+.help-changelog li {
+  margin: 8px 0;
+  line-height: 1.5;
 }
 .icon-button {
   width: 44px;
@@ -1223,8 +1243,10 @@ button {
   width: 19px;
   height: 19px;
 }
-.hand-action-button:hover:not(:disabled) {
-  background: #dde6ce;
+@media (hover: hover) and (pointer: fine) {
+  .hand-action-button:hover:not(:disabled) {
+    background: #dde6ce;
+  }
 }
 .rack {
   --rack-gap: 8px;
@@ -3270,6 +3292,29 @@ button {
   line-height: 1;
   font-weight: 500;
 }
+.floating-points:has(.exchange-celebration) {
+  width: min(320px, calc(100% - 36px));
+  max-width: 320px;
+}
+.exchange-celebration {
+  padding: 20px 24px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 8px 24px #26302525;
+}
+.exchange-celebration .celebration-message {
+  font: 600 23px/1.25 var(--serif);
+  overflow-wrap: anywhere;
+}
+.exchange-celebration p {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font:
+    400 14px/1.4 "DM Sans",
+    sans-serif;
+}
 .celebration-card > span:not(.celebration-debug-label) {
   font-family: var(--serif);
   font-size: 15px;
@@ -4379,17 +4424,7 @@ button {
   font-size: 16px;
   color: var(--muted);
 }
-.score-progress-heading button {
-  font:
-    600 15px/1.2 "DM Sans",
-    sans-serif;
-  color: var(--ink);
-  border: 1px solid var(--line);
-  background: var(--soft);
-  min-height: 44px;
-  border-radius: 7px;
-  padding: 8px 12px;
-}
+
 .score-count-beat {
   display: flex;
   align-items: center;
@@ -4497,6 +4532,41 @@ button {
   .score-equation {
     font-size: 18px !important;
   }
+}
+/* Long words fit the same dialog. Container units include only the usable
+   row width, leaving the existing animated lift and premium headroom intact. */
+.score-explanation .scored-word-tiles.long-score-word {
+  container-type: inline-size;
+  gap: 4px;
+  overflow: visible;
+}
+.score-explanation .long-score-word .score-letter {
+  /* Descendant letter and badge sizes must resolve against the word row,
+     rather than the generic tile's own inline-size container. */
+  container-type: normal;
+  --score-tile-size: min(
+    52px,
+    calc((100cqw - (var(--word-length) - 1) * 4px) / var(--word-length))
+  );
+  flex: 0 0 var(--score-tile-size);
+  width: var(--score-tile-size);
+  height: calc(var(--score-tile-size) * 1.077);
+}
+.score-explanation .long-score-word .score-letter > .tile-letter {
+  font-size: calc(var(--score-tile-size) * 0.65);
+}
+.score-explanation .long-score-word .score-letter > small {
+  font-size: calc(var(--score-tile-size) * 0.27);
+  right: 1px;
+  bottom: 1px;
+}
+.score-explanation .long-score-word .letter-bonus .score-premium-badge {
+  width: min(36px, var(--score-tile-size));
+  height: min(32px, calc(var(--score-tile-size) * 0.9));
+  font-size: min(16px, calc(var(--score-tile-size) * 0.44));
+}
+.hand-action-button:active:not(:disabled) {
+  transform: translateY(1px);
 }
 /* Presence belongs to the partner, separate from whose turn it is. */
 .player-details > span:first-child {
@@ -4677,6 +4747,10 @@ html.tablet-page-fitted,
 .tablet-viewport-fit:not(.board-focus) .game-sidebar {
   max-height: var(--tablet-sidebar-height);
   min-height: 0;
+  /* Extend the scrollport into the column gap, keeping its contents in place.
+     This gives the next-game halo room without widening the table. */
+  margin-left: -28px;
+  padding-left: 28px;
   overflow-y: auto;
   overscroll-behavior-y: contain;
   -webkit-overflow-scrolling: touch;

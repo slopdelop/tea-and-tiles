@@ -19,7 +19,13 @@ export type DebugPublicGame = Omit<Game, "bag" | "racks"> & {
   bagCount: number;
   rackCounts: Record<Slot, number>;
 };
-export type DebugMoveKind = "normal" | "multiple-words" | "high" | "bingo";
+export type DebugMoveKind =
+  | "normal"
+  | "multiple-words"
+  | "high"
+  | "bingo"
+  | "eight-letter"
+  | "fifteen-letter";
 
 const scenarioTime = Date.UTC(2026, 9, 12, 12);
 
@@ -46,6 +52,14 @@ export function debugMove(kind: DebugMoveKind): MoveRecord {
   } else if (kind === "high") {
     board = { "1,0": tile("I", 1, 0) };
     placed = [..."QUARTZ"].map((letter, i) => tile(letter, 0, i));
+  } else if (kind === "eight-letter") {
+    board = { "7,3": tile("E", 7, 3) };
+    placed = [..."ARWORMS"].map((letter, i) => tile(letter, 7, 4 + i));
+  } else if (kind === "fifteen-letter") {
+    board = Object.fromEntries(
+      [..."STRAIGHT"].map((letter, col) => [key(7, col), tile(letter, 7, col)]),
+    );
+    placed = [..."FORWARD"].map((letter, i) => tile(letter, 7, 8 + i));
   } else {
     board = { "0,3": tile("A", 0, 3) };
     placed = [..."GARDENS"].map((letter, i) => tile(letter, 1, 3 + i));

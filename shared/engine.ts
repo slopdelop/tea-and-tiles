@@ -32,6 +32,8 @@ export interface MoveRecord {
   score: number;
   at: number;
   breakdown?: MoveBreakdown;
+  /** Public count only; exchanged tile identities stay private. */
+  exchangedCount?: number;
 }
 export interface Game {
   id: string;
@@ -212,6 +214,7 @@ export function createGame(
   winCondition: WinCondition = "classic",
   durationMinutes = 25,
   now = Date.now(),
+  startingPlayer?: Slot,
 ): Game {
   if (
     winCondition === "timed" &&
@@ -232,7 +235,7 @@ export function createGame(
     racks: { mom: bag.splice(0, 7), aunt: bag.splice(0, 7) },
     bag,
     scores: { mom: 0, aunt: 0 },
-    turn: "mom",
+    turn: startingPlayer ?? (rng() < 0.5 ? "aunt" : "mom"),
     status: "active",
     scorelessTurns: 0,
     lastMove: null,
@@ -495,6 +498,7 @@ export function applyCommand(
     words: string[] = [],
     placements: PlacedTile[] = [];
   let breakdown: MoveBreakdown | undefined;
+  let exchangedCount: number | undefined;
   if (command.kind === "play") {
     const result = previewMove(
       game,
@@ -531,6 +535,7 @@ export function applyCommand(
     game.racks[slot] = game.racks[slot].filter((t) => !ids.includes(t.id));
     game.racks[slot].push(...game.bag.splice(0, returned.length));
     game.bag = shuffle([...game.bag, ...returned], rng);
+    exchangedCount = returned.length;
   } else if (command.kind !== "pass") fail("command", "Unknown move.");
   game.revision++;
   game.turnsPlayed = (original.turnsPlayed ?? original.revision) + 1;
@@ -545,6 +550,7 @@ export function applyCommand(
     score,
     at: now,
     ...(breakdown ? { breakdown } : {}),
+    ...(exchangedCount !== undefined ? { exchangedCount } : {}),
   };
   const compact = (
     move: HistoryRecord & { breakdown?: MoveBreakdown },

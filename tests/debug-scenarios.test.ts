@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   debugEndingGame,
   debugMove,
@@ -98,6 +99,8 @@ describe("isolated local preview scenarios", () => {
       "multiple-words",
       "high",
       "bingo",
+      "eight-letter",
+      "fifteen-letter",
     ] as DebugMoveKind[]) {
       const move = debugMove(kind);
       expect(move.score).toBe(move.breakdown!.total);
@@ -136,6 +139,36 @@ describe("isolated local preview scenarios", () => {
     );
     for (const premium of ["DL", "TL", "DW", "TW"])
       expect(premiums).toContain(premium);
+  });
+
+  it("scores long dictionary words using no more than a seven-tile rack", () => {
+    const dictionary = new Set(
+      readFileSync(
+        new URL("../shared/words.txt", import.meta.url),
+        "utf8",
+      ).split(/\r?\n/),
+    );
+    for (const [kind, expectedWord, existingCount] of [
+      ["eight-letter", "EARWORMS", 1],
+      ["fifteen-letter", "STRAIGHTFORWARD", 8],
+    ] as const) {
+      const move = debugMove(kind);
+      expect(move.words).toEqual([expectedWord]);
+      expect(dictionary.has(expectedWord)).toBe(true);
+      expect(move.placements).toHaveLength(7);
+      const scored = move.breakdown!.words[0];
+      expect(scored.tiles.filter((tile) => !tile.isNew)).toHaveLength(
+        existingCount,
+      );
+      expect(scored.tiles.filter((tile) => tile.isNew)).toHaveLength(7);
+      expect(move.breakdown!.bingoBonus).toBe(50);
+      expect(
+        scored.tiles.every(
+          (tile) =>
+            tile.row >= 0 && tile.row < 15 && tile.col >= 0 && tile.col < 15,
+        ),
+      ).toBe(true);
+    }
   });
 
   it("creates fresh fixtures without changing the existing summary or subsequent previews", () => {

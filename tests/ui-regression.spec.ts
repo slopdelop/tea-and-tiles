@@ -70,6 +70,7 @@ test.beforeEach(async () => {
   ])
     await db.recursiveDelete(db.collection(collection));
   const game = createGame("ui-table", () => 0.42);
+  game.turn = "mom";
   const pool = [...game.bag, ...game.racks.mom, ...game.racks.aunt];
   const pick = (letters: string) =>
     [...letters].map(
@@ -5026,11 +5027,11 @@ test("a real blank crossing counts each word separately without charging the bla
       .getByTestId("move-celebration")
       .getByTestId("score-breakdown");
     await rememberScoreCard(skipped, 2, 5);
-    await skipped.getByTestId("score-show-total").click();
+    await expect(skipped.getByTestId("score-show-total")).toHaveCount(0);
     await expect(skipped).toHaveAttribute("data-score-phase", "move-total");
     await expect(skipped.getByTestId("running-score")).toHaveText("9");
     await expectSameScoreCard(skipped);
-    await other.waitForTimeout(2300);
+    await other.waitForTimeout(1000);
     await expectSameScoreCard(skipped);
     await expect(skipped.getByTestId("score-total")).toHaveText(
       /Move total\s*9$/,
@@ -8000,6 +8001,11 @@ test("local game-over board previews final controls and restores the live draft"
   await page.getByRole("button", { name: "Close dialog" }).click();
   await page.getByTestId("local-debug-tools").click();
   await page.getByTestId("debug-scene-game-over").click();
+  await expect(page.getByTestId("debug-end-game-popup")).toBeVisible();
+  await expect(page.getByTestId("new-game")).not.toHaveClass(
+    /new-game-next-action/,
+  );
+  await page.getByRole("button", { name: "See the board" }).click();
   await expect(page.getByTestId("view-result")).toBeVisible();
   await expect(page.getByTestId("new-game")).toHaveClass(
     /new-game-next-action/,
@@ -8022,4 +8028,166 @@ test("local game-over board previews final controls and restores the live draft"
     /new-game-next-action/,
   );
   expect(await authoritativeState()).toEqual(before);
+});
+
+test("round feedback previews long words, exchanges and post-results new-game cue safely", async ({
+  page,
+}, info) => {
+  await enroll(page);
+  const before = await authoritativeState();
+  await page.getByTestId("help-settings").click();
+  await page.getByTestId("debug-enabled").check();
+  await page.getByRole("button", { name: "Close dialog" }).click();
+  for (const [kind, length] of [
+    ["eight-letter", 8],
+    ["fifteen-letter", 15],
+  ] as const) {
+    for (const viewport of [
+      { width: 1024, height: 768 },
+      { width: 820, height: 1180 },
+      { width: 390, height: 844 },
+    ]) {
+      await page.setViewportSize(viewport);
+      await page.getByTestId("local-debug-tools").click();
+      await page.getByTestId(`debug-scene-${kind}`).click();
+      const score = page.getByTestId("celebration-preview");
+      await expect(score).toBeVisible();
+      await expect(score.getByTestId("score-show-total")).toHaveCount(0);
+      const row = score.locator(".scored-word-tiles").first();
+      await expect(row.locator(".score-letter")).toHaveCount(length);
+      const geometry = await row.evaluate((element) => {
+        const tiles = [
+          ...element.querySelectorAll<HTMLElement>(".score-letter"),
+        ];
+        const bounds = element.getBoundingClientRect();
+        return {
+          tops: tiles.map((tile) => tile.offsetTop),
+          fonts: tiles.map((tile) =>
+            parseFloat(
+              getComputedStyle(tile.querySelector(".tile-letter")!).fontSize,
+            ),
+          ),
+          right: Math.max(
+            ...tiles.map((tile) => tile.getBoundingClientRect().right),
+          ),
+          left: Math.min(
+            ...tiles.map((tile) => tile.getBoundingClientRect().left),
+          ),
+          bounds: { left: bounds.left, right: bounds.right },
+          scroll: element.scrollWidth,
+          width: element.clientWidth,
+        };
+      });
+      expect(new Set(geometry.tops).size).toBe(1);
+      expect(Math.min(...geometry.fonts)).toBeGreaterThanOrEqual(
+        viewport.width >= 800 ? 15 : 8,
+      );
+      expect(geometry.scroll).toBeLessThanOrEqual(geometry.width + 1);
+      expect(geometry.left).toBeGreaterThanOrEqual(geometry.bounds.left);
+      expect(geometry.right).toBeLessThanOrEqual(geometry.bounds.right);
+      if (viewport.width === 1024) {
+        await expect(score.locator(".counting-letter").first()).toBeVisible();
+        await page.waitForTimeout(400);
+        await page.screenshot({
+          path: info.outputPath(`${kind}-landscape.png`),
+        });
+      }
+      await page.getByTestId("local-debug-tools").click();
+      await page.getByRole("button", { name: "Close dialog" }).click();
+    }
+  }
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await page.getByTestId("local-debug-tools").click();
+  await page.getByTestId("debug-exchange").click();
+  await expect(page.getByTestId("exchange-notice")).toHaveText(
+    /Elizabeth exchanged 3 tiles/,
+  );
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: info.outputPath("exchange-preview.png") });
+  await expect(page.getByTestId("exchange-notice")).toHaveCount(0);
+  await expect(page.getByTestId("debug-starter")).toContainText("Rita");
+  await expect(page.getByTestId("debug-starter")).toHaveCount(0);
+  await page.getByTestId("local-debug-tools").click();
+  await page.getByTestId("debug-scene-game-over").click();
+  await expect(page.getByTestId("new-game")).not.toHaveClass(
+    /new-game-next-action/,
+  );
+  await page
+    .getByTestId("debug-end-game-popup")
+    .getByRole("button", { name: "Play a new game?" })
+    .click();
+  await expect(page.getByTestId("new-game-popup")).toBeVisible();
+  await expect(page.getByTestId("new-game")).not.toHaveClass(
+    /new-game-next-action/,
+  );
+  await page.getByTestId("request-new-game").click();
+  await expect(page.getByTestId("new-game-popup")).toHaveCount(0);
+  expect(await authoritativeState()).toEqual(before);
+  await page.getByTestId("local-debug-tools").click();
+  await page.getByTestId("debug-scene-game-over").click();
+  await page.getByRole("button", { name: "See the board" }).click();
+  await expect(page.getByTestId("new-game")).toHaveClass(
+    /new-game-next-action/,
+  );
+  await page.waitForTimeout(400);
+  const clear = await page.getByTestId("new-game").evaluate((button) => {
+    const panel = button.closest(".game-sidebar")!;
+    const b = button.getBoundingClientRect(),
+      p = panel.getBoundingClientRect();
+    return { left: b.left, clipLeft: p.left };
+  });
+  expect(clear.left - clear.clipLeft).toBeGreaterThanOrEqual(24);
+  await page.screenshot({
+    path: info.outputPath("new-game-halo-clearance.png"),
+  });
+  await page.getByTestId("local-debug-tools").click();
+  await page.getByTestId("debug-new-game-update").click();
+  await expect(page.getByTestId("debug-updating")).toBeVisible();
+  await expect(page.getByTestId("debug-updating")).toHaveCount(0);
+  await page.getByTestId("local-debug-tools").click();
+  await page.getByTestId("debug-random-starter").click();
+  await expect(page.getByTestId("debug-starter")).toContainText(
+    /Elizabeth|Rita/,
+  );
+  await expect(page.getByTestId("debug-starter")).toHaveCount(0);
+  expect(await authoritativeState()).toEqual(before);
+});
+
+test("both players see only the exchange count before the next turn", async ({
+  page,
+  browser,
+}) => {
+  await enroll(page);
+  const { aunt, auntContext } = await joinRita(browser, 7, "no-preference");
+  try {
+    await page.getByTestId("exchange-tiles").click();
+    const popup = page.getByRole("dialog", {
+      name: "A fresh handful of letters",
+    });
+    await popup.locator(".exchange-rack button").nth(0).click();
+    await popup.locator(".exchange-rack button").nth(1).click();
+    await page.getByTestId("confirm-exchange").click();
+    for (const player of [page, aunt]) {
+      await expect(player.getByTestId("exchange-notice")).toContainText(
+        "Elizabeth exchanged 2 tiles",
+      );
+      await expect(
+        player.getByTestId("exchange-notice").locator(".tile"),
+      ).toHaveCount(0);
+      await expect(player.getByTestId("turn-announcement")).toHaveCount(0);
+    }
+    for (const player of [page, aunt]) {
+      await expect(player.getByTestId("exchange-notice")).toHaveCount(0);
+      await expect(player.getByTestId("turn-announcement")).toContainText(
+        "Rita",
+      );
+    }
+    const saved = (await db.doc("games/ui-table").get()).data()!;
+    expect(saved.lastMove.exchangedCount).toBe(2);
+    expect(saved.lastMove.tileIds).toBeUndefined();
+    expectedRevision = 1;
+    expectedCommandCount = 1;
+  } finally {
+    await auntContext.close();
+  }
 });

@@ -49,6 +49,27 @@ const command = (
   kind,
 });
 describe("rules and scoring", () => {
+  it("randomly chooses either starter and retains that authoritative choice throughout a turn", () => {
+    for (const [random, starter] of [
+      [0.25, "aunt"],
+      [0.75, "mom"],
+    ] as const) {
+      const game = createGame("random-start", () => random);
+      expect(game.turn).toBe(starter);
+      const saved = structuredClone(game);
+      const next = applyCommand(game, starter, command(game), dict);
+      expect(next.turn).toBe(starter === "mom" ? "aunt" : "mom");
+      expect(game).toEqual(saved);
+      game.status = "finished";
+      expect(
+        applyCommand(game, "mom", command(game, "rematch"), dict, () => random)
+          .turn,
+      ).toBe(starter);
+    }
+    expect(
+      createGame("fixture", () => 0.25, "classic", 25, 1000, "mom").turn,
+    ).toBe("mom");
+  });
   it("deducts both racks without transferring points for an agreed empty-bag ending", () => {
     const scores = { mom: 20, aunt: 12 };
     const racks = { mom: 10, aunt: 2 };
@@ -79,7 +100,7 @@ describe("rules and scoring", () => {
     expect(racks).toEqual({ mom: 10, aunt: 2 });
   });
   it("has 100 unique standard tiles and exactly two blanks", () => {
-    const g = createGame("one");
+    const g = createGame("one", () => 0.5);
     const all = [...g.bag, ...g.racks.mom, ...g.racks.aunt];
     expect(all).toHaveLength(100);
     expect(new Set(all.map((t) => t.id)).size).toBe(100);
@@ -267,7 +288,7 @@ describe("rules and scoring", () => {
     });
   });
   it("records accepted turns exactly once in order and marks missing legacy or truncated history partial", () => {
-    let g = createGame("one");
+    let g = createGame("one", () => 0.5);
     const pass = command(g);
     g = applyCommand(g, "mom", pass, dict);
     g = applyCommand(
@@ -300,7 +321,7 @@ describe("rules and scoring", () => {
     expect(g.historyComplete).toBe(false);
   });
   it("preserves earned totals separately from final rack deductions and transfers", () => {
-    const g = createGame("one");
+    const g = createGame("one", () => 0.5);
     g.bag = [];
     g.racks = { mom: [tile("A"), tile("T")], aunt: [tile("Q")] };
     g.scores = { mom: 20, aunt: 25 };
@@ -336,7 +357,7 @@ describe("rules and scoring", () => {
       },
     });
     expect(ended.history?.[0].wordScores).toEqual([{ word: "AT", score: 4 }]);
-    let stalled = createGame("two");
+    let stalled = createGame("two", () => 0.5);
     stalled.racks = { mom: [tile("Q")], aunt: [tile("A")] };
     stalled.scores = { mom: 30, aunt: 20 };
     for (let turn = 0; turn < 6; turn++)
@@ -369,7 +390,7 @@ describe("rules and scoring", () => {
     expect(rematch.finalScoreAdjustments).toBeUndefined();
   });
   it("keeps600 worst-shaped compact history records below Firestore's document limit", () => {
-    const g = createGame("one");
+    const g = createGame("one", () => 0.5);
     const words = Array.from({ length: 14 }, () => "Q".repeat(15));
     const breakdown = {
       total: 999999,
@@ -439,7 +460,7 @@ describe("rules and scoring", () => {
     ).toEqual(["CAT"]);
   });
   it("rejects stale/out of turn/forged rack moves without mutation", () => {
-    const g = createGame("one");
+    const g = createGame("one", () => 0.5);
     expect(() => applyCommand(g, "aunt", command(g), dict)).toThrow(/opponent/);
     expect(() =>
       applyCommand(g, "mom", { ...command(g), expectedRevision: 3 }, dict),
@@ -458,7 +479,7 @@ describe("rules and scoring", () => {
     expect(g.revision).toBe(0);
   });
   it("exchanges without redrawing returned tiles and preserves accounting", () => {
-    const g = createGame("one", () => 0.1);
+    const g = createGame("one", () => 0.1, "classic", 25, 1000, "mom");
     const old = g.racks.mom[0];
     const next = applyCommand(
       g,
@@ -468,6 +489,12 @@ describe("rules and scoring", () => {
       () => 0.2,
     );
     expect(next.racks.mom).toHaveLength(7);
+    expect(next.lastMove).toMatchObject({
+      exchangedCount: 1,
+      placements: [],
+      words: [],
+    });
+    expect(next.lastMove).not.toHaveProperty("tileIds");
     expect(next.racks.mom.some((t) => t.id === old.id)).toBe(false);
     expect(next.bag.some((t) => t.id === old.id)).toBe(true);
     expect([...next.bag, ...next.racks.mom, ...next.racks.aunt]).toHaveLength(
@@ -484,7 +511,7 @@ describe("rules and scoring", () => {
     ).toThrow(/seven/);
   });
   it("ends after six scoreless turns, adjusts racks and starts a rematch", () => {
-    let g = createGame("one");
+    let g = createGame("one", () => 0.5);
     const deductions = {
       mom: g.racks.mom.reduce((s, t) => s + t.value, 0),
       aunt: g.racks.aunt.reduce((s, t) => s + t.value, 0),
@@ -498,7 +525,7 @@ describe("rules and scoring", () => {
     expect(g.bag).toHaveLength(86);
   });
   it("transfers remaining opponent tiles when a player goes out", () => {
-    const g = createGame("one");
+    const g = createGame("one", () => 0.5);
     g.bag = [];
     g.racks = { mom: [tile("A"), tile("T")], aunt: [tile("Q")] };
     const next = applyCommand(
@@ -638,7 +665,7 @@ describe("rules and scoring", () => {
     }
   });
   it("defaults new and legacy games to classic and counts only accepted turns", () => {
-    const g = createGame("one");
+    const g = createGame("one", () => 0.5);
     expect(g).toMatchObject({ winCondition: "classic", turnsPlayed: 0 });
     delete g.winCondition;
     delete g.turnsPlayed;
@@ -872,7 +899,7 @@ describe("rules and scoring", () => {
       expect(() => createGame("invalid", () => 0.5, "timed", duration)).toThrow(
         /whole number/,
       );
-    expect(createGame("classic")).not.toHaveProperty("deadlineAt");
+    expect(createGame("classic", () => 0.5)).not.toHaveProperty("deadlineAt");
   });
   it("accepts a timed turn strictly before its deadline and rejects at the exact deadline without mutation", () => {
     const g = createGame("one", () => 0.5, "timed", 1, 100000);

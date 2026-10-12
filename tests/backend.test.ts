@@ -1839,13 +1839,25 @@ describe.skipIf(!enabled)(
       expect(fresh).toMatchObject({
         revision: 0,
         status: "active",
-        turn: "mom",
         board: {},
         scores: { mom: 0, aunt: 0 },
         bagCount: 86,
         rackCounts: { mom: 7, aunt: 7 },
         winner: null,
       });
+      expect(["mom", "aunt"]).toContain(fresh.turn);
+      const [elizabethView, ritaView] = await Promise.all(
+        ["mom", "aunt"].map((slot) =>
+          getDoc(
+            doc(
+              env.authenticatedContext(uids[slot as Slot]).firestore(),
+              `games/${first.newGameId}`,
+            ),
+          ),
+        ),
+      );
+      expect(elizabethView.data()?.turn).toBe(fresh.turn);
+      expect(ritaView.data()?.turn).toBe(fresh.turn);
       const tiles = (
         await db.getAll(
           db.doc(`games/${first.newGameId}/racks/mom`),
@@ -1864,6 +1876,9 @@ describe.skipIf(!enabled)(
         true,
       );
       expect(await respondGameRestart(uids.aunt, answer)).toEqual(first);
+      expect(
+        (await db.doc(`games/${first.newGameId}`).get()).data()?.turn,
+      ).toBe(fresh.turn);
       expect(await requestGameRestart(uids.mom, proposal)).toEqual({
         id: proposal.id,
       });
@@ -2066,6 +2081,15 @@ describe.skipIf(!enabled)(
       });
       const rack = (await db.doc(`games/${game.id}/racks/aunt`).get()).data()!
         .tiles;
+      const exchangedMove = (await db.doc(`games/${game.id}`).get()).data()!
+        .lastMove;
+      expect(exchangedMove).toMatchObject({
+        exchangedCount: 1,
+        placements: [],
+        words: [],
+      });
+      expect(exchangedMove).not.toHaveProperty("tileIds");
+      expect(JSON.stringify(exchangedMove)).not.toContain(exchangedId);
       expect(rack).toHaveLength(7);
       expect(rack.some((tile: { id: string }) => tile.id === exchangedId)).toBe(
         false,
@@ -2157,9 +2181,16 @@ describe.skipIf(!enabled)(
           (await db.doc(`games/${result.newGameId}`).get()).data(),
         ).toMatchObject({ winCondition, turnsPlayed: 0, revision: 0 });
         game = createGame(result.newGameId!, () => 0.5, winCondition);
+        game.turn = (await db.doc(`games/${game.id}`).get()).data()!.turn;
         for (let revision = 0; revision < 6; revision++)
           await submit(
-            revision % 2 === 0 ? uids.mom : uids.aunt,
+            uids[
+              revision % 2 === 0
+                ? game.turn
+                : game.turn === "mom"
+                  ? "aunt"
+                  : "mom"
+            ],
             command("pass", revision),
           );
         const rematch = await submit(uids.aunt, command("rematch", 6));
@@ -2190,7 +2221,7 @@ describe.skipIf(!enabled)(
         requestId: proposal.id,
         approve: true,
       });
-      game = createGame(result.newGameId!);
+      game = createGame(result.newGameId!, () => 0.5);
       expect((await db.doc(`games/${game.id}`).get()).data()).toMatchObject({
         winCondition: "classic",
         turnsPlayed: 0,

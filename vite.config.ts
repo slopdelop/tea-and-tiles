@@ -4,7 +4,7 @@ import { VitePWA } from "vite-plugin-pwa";
 import packageInfo from "./package.json";
 import { execFileSync } from "node:child_process";
 const { version } = packageInfo;
-const builtAt = new Date().toISOString();
+let builtAt = new Date().toISOString();
 let revision = "local";
 try {
   revision = execFileSync("git", ["rev-parse", "--short=7", "HEAD"], {
@@ -35,6 +35,34 @@ export default defineConfig(({ mode }) => {
     },
     plugins: [
       react(),
+      {
+        name: "local-build-time",
+        apply: "serve",
+        transformIndexHtml() {
+          return [
+            {
+              tag: "script",
+              children: `window.__TEA_LOCAL_BUILD_TIME__ = ${JSON.stringify(builtAt)};`,
+              injectTo: "head-prepend",
+            },
+          ];
+        },
+        handleHotUpdate(context) {
+          const file = context.file.replaceAll("\\", "/");
+          const root = context.server.config.root.replaceAll("\\", "/");
+          if (
+            !file.startsWith(`${root}/src/`) &&
+            !file.startsWith(`${root}/shared/`)
+          )
+            return;
+          builtAt = new Date().toISOString();
+          context.server.ws.send({
+            type: "custom",
+            event: "tea-build-time",
+            data: builtAt,
+          });
+        },
+      },
       VitePWA({
         registerType: "prompt",
         scope: base,

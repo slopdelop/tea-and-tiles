@@ -1,8 +1,14 @@
 import { motion, useReducedMotion } from "motion/react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import type { Game, MoveRecord, Slot } from "../../shared/engine";
 import type { WordScore } from "../../shared/scoring";
-import { buildScoreTimeline, SCORE_FINAL_HOLD_MS } from "../scoreTimeline";
+import { buildScoreTimeline } from "../scoreTimeline";
 import { CELEBRATION_HOLD_MS } from "../celebrationTiming";
 import { topWordScores } from "./gameSummaryData";
 
@@ -52,7 +58,8 @@ function WordTiles({
   const reduced = useReducedMotion();
   return (
     <div
-      className={`scored-word-tiles ${word.tiles.length <= 7 ? "single-row-word" : ""}`}
+      className={`scored-word-tiles single-row-word ${word.tiles.length > 7 ? "long-score-word" : ""}`}
+      style={{ "--word-length": word.tiles.length } as CSSProperties}
       aria-label={word.word}
     >
       {word.tiles.map((tile, index) => (
@@ -156,16 +163,11 @@ export function ScoreExplanation({
     [move.id],
   );
   const [stepIndex, setStepIndex] = useState(0);
-  const [showTotal, setShowTotal] = useState(false);
   const wordList = useRef<HTMLDivElement>(null);
   const activeStep =
-    timeline?.steps[
-      showTotal
-        ? timeline.steps.length - 1
-        : Math.min(stepIndex, timeline.steps.length - 1)
-    ];
+    timeline?.steps[Math.min(stepIndex, timeline.steps.length - 1)];
   useEffect(() => {
-    if (!animated || reduced || !activeStep || showTotal) return;
+    if (!animated || reduced || !activeStep) return;
     const list = wordList.current;
     const row = list?.querySelector<HTMLElement>(
       `[data-score-word-index="${activeStep.wordIndex}"]`,
@@ -189,15 +191,11 @@ export function ScoreExplanation({
           });
       }
     }
-  }, [activeStep?.wordIndex, activeStep?.kind, animated, reduced, showTotal]);
+  }, [activeStep?.wordIndex, activeStep?.kind, animated, reduced]);
   useEffect(() => {
     if (!animated) return;
     if (!timeline || reduced) {
       const timer = setTimeout(() => onComplete?.(), CELEBRATION_HOLD_MS);
-      return () => clearTimeout(timer);
-    }
-    if (showTotal) {
-      const timer = setTimeout(() => onComplete?.(), SCORE_FINAL_HOLD_MS);
       return () => clearTimeout(timer);
     }
     const timers = timeline.steps.map((step, index) =>
@@ -205,7 +203,7 @@ export function ScoreExplanation({
     );
     timers.push(setTimeout(() => onComplete?.(), timeline.durationMs));
     return () => timers.forEach(clearTimeout);
-  }, [animated, timeline, reduced, showTotal]);
+  }, [animated, timeline, reduced]);
   if (!move.breakdown || !timeline)
     return (
       <div
@@ -217,12 +215,7 @@ export function ScoreExplanation({
       </div>
     );
   const breakdown = move.breakdown;
-  const step =
-    timeline.steps[
-      showTotal
-        ? timeline.steps.length - 1
-        : Math.min(stepIndex, timeline.steps.length - 1)
-    ];
+  const step = timeline.steps[Math.min(stepIndex, timeline.steps.length - 1)];
   const word = breakdown.words[step.wordIndex];
   const final = step.kind === "move-total" || step.kind === "bingo";
   const tile =
@@ -255,15 +248,6 @@ export function ScoreExplanation({
           <span>
             {breakdown.words.length > 1 ? "Played words" : "Played word"}
           </span>
-          <button
-            type="button"
-            data-testid="score-show-total"
-            style={{ visibility: final ? "hidden" : "visible" }}
-            disabled={final}
-            onClick={() => setShowTotal(true)}
-          >
-            Show total
-          </button>
         </div>
       )}
       <div

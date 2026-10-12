@@ -39,6 +39,7 @@ async function seedFixture() {
     await db.recursiveDelete(db.collection(collection));
   }
   fixture = createGame("e2e-table", () => 0.42);
+  fixture.turn = "mom";
   const allTiles = [
     ...fixture.bag,
     ...fixture.racks.mom,
