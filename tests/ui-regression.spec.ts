@@ -11,6 +11,7 @@ import { getFirestore, Timestamp } from "firebase-admin/firestore";
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createCredential } from "../functions/player-login";
+import { debugEndingGame } from "../src/debugScenarios";
 import {
   applyCommand,
   createGame,
@@ -4421,6 +4422,7 @@ test("empty-bag ENDGAME needs both players, preserves a declined game and ranks 
     await page.getByTestId("help-settings").click();
     await page.getByTestId("debug-enabled").check();
     await page.getByTestId("debug-end-game").click();
+    await page.getByTestId("debug-ending-agreed-end").click();
     const debug = page.getByTestId("debug-end-game-popup");
     await expect(debug).toBeVisible();
     await expect(debug).toHaveCSS("opacity", "1");
@@ -4546,6 +4548,9 @@ test("timer switches from minutes to seconds and local debug celebrations never 
     .doc("games/ui-table")
     .update({ deadlineAt: Date.now() + 25 * 60_000 });
   await expect(page.getByTestId("game-timer")).toHaveText("25 minutes left");
+  await rack(page, "A").tap();
+  await cell(page, 0, 1).tap();
+  await expect(cell(page, 0, 1)).toContainText("A");
   const authoritativeState = async () => ({
     game: (await db.doc("games/ui-table").get()).data(),
     mom: (await db.doc("games/ui-table/racks/mom").get()).data(),
@@ -4560,37 +4565,123 @@ test("timer switches from minutes to seconds and local debug celebrations never 
   await expect(page.getByTestId("debug-enabled")).not.toBeChecked();
   await expect(page.getByTestId("debug-panel")).toHaveCount(0);
   await page.getByTestId("debug-enabled").check();
-  for (const [band, score] of [
-    ["low", 8],
-    ["medium", 24],
-    ["high", 48],
-    ["bingo", 76],
-  ] as const) {
-    await page.getByTestId(`debug-celebration-${band}`).click();
+  await page.getByTestId("debug-end-game").click();
+  const tools = page.getByTestId("local-debug-popup");
+  await tools.getByTestId("debug-winner").selectOption("aunt");
+  await tools.getByTestId("debug-ending-rack-out").click();
+  const ending = page.getByTestId("debug-end-game-popup");
+  await expect(ending.getByTestId("game-ending-reason")).toContainText(
+    "Elizabeth used their last tile",
+  );
+  await expect(ending.locator(".ending-phase")).toHaveText(
+    "Counting points earned, including bonuses",
+  );
+  await expect(ending.getByTestId("result-score-aunt")).toHaveCount(0);
+  await expect(ending.locator(".ending-phase")).toHaveText(
+    "Applying remaining tiles",
+  );
+  await expect(ending.locator(".ending-phase")).toHaveText(
+    "Adding the remaining tile points",
+  );
+  await expect(ending.getByTestId("result-score-mom")).toHaveText("106");
+  await expect(ending.getByTestId("result-score-aunt")).toHaveText("144");
+  await expect(
+    ending.getByRole("heading", { name: "Rita wins!" }),
+  ).toBeVisible();
+  const verdictBox = await ending
+    .getByRole("heading", { name: "Rita wins!" })
+    .boundingBox();
+  const footerBox = await ending.locator(".modal-footer").boundingBox();
+  expect(verdictBox).not.toBeNull();
+  expect(footerBox).not.toBeNull();
+  expect(verdictBox!.y + verdictBox!.height).toBeLessThanOrEqual(footerBox!.y);
+  await expect(ending.locator(".ending-ledger dd")).toHaveText([
+    "100",
+    "−0",
+    "+6",
+    "150",
+    "−6",
+    "+0",
+  ]);
+  await page.screenshot({
+    path: info.outputPath("ending-rack-out-rita-wins.png"),
+    fullPage: false,
+  });
+  await ending.getByRole("button", { name: "More previews" }).click();
+  for (const [reason, text] of [
+    ["agreed-end", "both agreed"],
+    ["scoreless", "Six consecutive turns"],
+    ["timed", "Time is up"],
+    ["turn-limit", "Ten turns each"],
+    ["target-score", "150 points reached"],
+  ]) {
+    await tools.getByTestId(`debug-ending-${reason}`).click();
+    await expect(ending.getByTestId("game-ending-reason")).toContainText(text);
+    await ending.getByRole("button", { name: "Show final scores" }).click();
+    await expect(ending.getByTestId("result-score-aunt")).toHaveText(
+      String(
+        debugEndingGame(reason as Parameters<typeof debugEndingGame>[0], "aunt")
+          .scores.aunt,
+      ),
+    );
+    await ending.getByRole("button", { name: "More previews" }).click();
+  }
+  await tools.getByTestId("debug-winner").selectOption("tie");
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await tools.getByTestId("debug-ending-agreed-end").click();
+  await expect(ending.getByTestId("result-score-mom")).toHaveText("108");
+  await expect(
+    ending.getByRole("button", { name: "Show final scores" }),
+  ).toHaveCount(0);
+  await expect(
+    ending.getByRole("heading", { name: "An even match — a tie!" }),
+  ).toBeVisible();
+  await ending.getByRole("button", { name: "More previews" }).click();
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await tools.getByTestId("debug-end-request").click();
+  await expect(page.getByTestId("debug-end-request-popup")).toContainText(
+    "Nothing is sent",
+  );
+  await page.getByTestId("debug-agree-end").click();
+  await expect(ending).toBeVisible();
+  await ending.getByRole("button", { name: "Back to your game" }).click();
+  const boardState = () =>
+    page
+      .getByTestId("game-board")
+      .locator("button")
+      .evaluateAll((cells) =>
+        cells.map((cell) => ({
+          label: cell.getAttribute("aria-label"),
+          tentative: cell.classList.contains("has-tentative"),
+        })),
+      );
+  const boardBefore = await boardState();
+  for (const kind of ["multiple-words", "high", "bingo"]) {
+    await page.getByTestId("local-debug-tools").click();
+    await tools.getByTestId(`debug-scene-${kind}`).click();
+    await expect(tools).toHaveCount(0);
+    await expect(page.getByTestId("debug-board-scoring")).toBeVisible();
     const preview = page.getByTestId("celebration-preview");
-    await expect(preview).toHaveAttribute("data-band", band);
     await expect(preview).toHaveAttribute("data-debug", "true");
-    await expect(preview).toContainText(`+${score}`);
-    await expect(preview).toHaveCSS("opacity", "1");
-    await expect(preview).toHaveCSS("transform", "none");
-    if (band === "high" || band === "bingo") {
-      const stars = preview.getByTestId("celebration-starburst");
-      await expect(stars).toBeVisible();
-      expect(await stars.locator("path").count()).toBeGreaterThan(0);
-      expect(
-        await stars.evaluate((element) =>
-          parseFloat(getComputedStyle(element).animationDuration),
-        ),
-      ).toBeGreaterThan(0);
-      await preview.scrollIntoViewIfNeeded();
+    await expect(page.getByTestId("play-word")).toBeDisabled();
+    if (kind === "multiple-words") {
+      await expect(preview.getByTestId("score-word-row")).toHaveCount(2);
       await page.screenshot({
-        path: info.outputPath(`debug-celebration-${band}.png`),
-        fullPage: true,
+        path: info.outputPath("debug-scoring-on-board.png"),
+        fullPage: false,
       });
-    } else
-      await expect(preview.getByTestId("celebration-starburst")).toHaveCount(0);
+      await expect(page.getByTestId("debug-board-scoring")).toHaveCount(0, {
+        timeout: 20000,
+      });
+    } else {
+      await page.getByTestId("local-debug-tools").click();
+      await tools.getByRole("button", { name: "Close dialog" }).click();
+    }
+    await expect(page.getByTestId("debug-board-scoring")).toHaveCount(0);
+    expect(await boardState()).toEqual(boardBefore);
     expect(await authoritativeState()).toEqual(before);
   }
+  await page.getByTestId("help-settings").click();
   expect(
     await page.evaluate(() => localStorage.getItem("tea-tiles-debug")),
   ).toBe("true");
@@ -4598,6 +4689,19 @@ test("timer switches from minutes to seconds and local debug celebrations never 
   await page.reload();
   await page.getByTestId("help-settings").click();
   await expect(page.getByTestId("debug-enabled")).toBeChecked();
+  await page.getByTestId("theme-ink").check();
+  await page.setViewportSize({ width: 820, height: 1180 });
+  await page.getByTestId("debug-end-game").click();
+  await page.getByTestId("debug-ending-agreed-end").click();
+  await page.getByRole("button", { name: "Show final scores" }).click();
+  await expect(page.getByTestId("result-score-mom")).toBeVisible();
+  await page.screenshot({
+    path: info.outputPath("ending-dark-portrait.png"),
+    fullPage: false,
+  });
+  await page.getByRole("button", { name: "Back to your game" }).click();
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await page.getByTestId("help-settings").click();
   const secondDevice = await browser.newContext({
     baseURL: "http://127.0.0.1:5183",
   });

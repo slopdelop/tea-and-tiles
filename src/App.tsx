@@ -46,7 +46,8 @@ import {
   handoffDelay,
 } from "./celebrationTiming";
 import { useTabletViewport } from "./hooks/useTabletViewport";
-import { previewSummary } from "./components/gameSummaryData";
+import { EndingPresentation } from "./components/EndingPresentation";
+import { debugEndingGame, debugMove, debugMoveBoard } from "./debugScenarios";
 import "./styles.css";
 
 type Dialog =
@@ -63,6 +64,8 @@ type Dialog =
   | "end-game"
   | "incoming-end-game"
   | "debug-result"
+  | "debug-tools"
+  | "debug-end-request"
   | null;
 type Draft = { key: string; revision: number; placements: Placement[] };
 const themeChoices = [
@@ -757,16 +760,38 @@ export default function App() {
     null,
   );
   const [debugEnabled, setDebugEnabled] = useState(
-    () => localStorage.getItem("tea-tiles-debug") === "true",
+    () =>
+      import.meta.env.DEV && localStorage.getItem("tea-tiles-debug") === "true",
   );
-  const [debugCelebration, setDebugCelebration] = useState<{
-    band: CelebrationBand;
-    id: number;
+  const [debugWinner, setDebugWinner] = useState<Slot | "tie">("mom");
+  const [debugEnding, setDebugEnding] = useState<ReturnType<
+    typeof debugEndingGame
+  > | null>(null);
+  const [debugBoardMove, setDebugBoardMove] = useState<{
+    move: MoveRecord;
+    board: ReturnType<typeof debugMoveBoard>;
   } | null>(null);
   useEffect(() => {
-    localStorage.setItem("tea-tiles-debug", String(debugEnabled));
-    if (!debugEnabled) setDebugCelebration(null);
+    if (import.meta.env.DEV)
+      localStorage.setItem("tea-tiles-debug", String(debugEnabled));
+    if (!debugEnabled) {
+      setDebugBoardMove(null);
+      setDebugEnding(null);
+    }
   }, [debugEnabled]);
+  useEffect(() => {
+    setDebugBoardMove(null);
+    setDebugEnding(null);
+    setDialog((current) => (current?.startsWith("debug-") ? null : current));
+  }, [game?.id, game?.revision]);
+  useEffect(() => {
+    if (!debugBoardMove) return;
+    const stop = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setDebugBoardMove(null);
+    };
+    window.addEventListener("keydown", stop);
+    return () => window.removeEventListener("keydown", stop);
+  }, [debugBoardMove]);
   const [clockNow, setClockNow] = useState(Date.now);
   useEffect(() => {
     if (game?.winCondition !== "timed" || game.status !== "active") return;
@@ -843,6 +868,7 @@ export default function App() {
     game.status === "active" &&
     !pending &&
     !busy &&
+    !debugBoardMove &&
     !timedExpired &&
     !recallAnimation.active;
   const canSubmit =
@@ -855,6 +881,7 @@ export default function App() {
     !currentEndRequest &&
     !timedExpired &&
     !sharedActionsPaused &&
+    !debugBoardMove &&
     !recallAnimation.active;
   const [finePointer, setFinePointer] = useState(false);
   const [zoomed, setZoomed] = useState(false);
@@ -1938,45 +1965,6 @@ export default function App() {
     !!drag && !visibleRack.some((tile) => tile.id === drag.tile.id);
   if (!drag) centeredRackCount.current = visibleRack.length;
   const latest = game?.lastMove;
-  const emptiedRack =
-    game?.bagCount === 0
-      ? latest?.kind === "play" && game.rackCounts[latest.player] === 0
-        ? latest.player
-        : (["mom", "aunt"] as const).find(
-            (player) =>
-              game.rackCounts[player] === 0 &&
-              game.rackCounts[other(player)] > 0,
-          )
-      : undefined;
-  const endingReason =
-    game?.endedReason ||
-    (emptiedRack
-      ? "rack-out"
-      : game && game.scorelessTurns >= 6
-        ? "scoreless"
-        : undefined);
-  const endingDescription =
-    endingReason === "agreed-end"
-      ? "You both agreed to finish with the bag empty. Each player’s remaining tile values were deducted; no tiles were transferred."
-      : endingReason === "turn-limit"
-        ? "Ten turns each, all played. The highest score wins."
-        : endingReason === "target-score"
-          ? "150 points reached."
-          : endingReason === "timed"
-            ? "Time is up. The highest score wins."
-            : endingReason === "scoreless"
-              ? "Six consecutive turns without points ended the game. Each player’s remaining tile values were deducted."
-              : endingReason === "rack-out"
-                ? emptiedRack
-                  ? `${names[emptiedRack]} used their last tile with the bag empty. ${names[other(emptiedRack)]}’s remaining tile values were deducted and added to ${names[emptiedRack]}’s score.`
-                  : "A player used their last tile with the bag empty. The remaining tile values were deducted from their partner and added to their score."
-                : "The game is complete. Final scores are shown above.";
-  const resultTitle =
-    game?.winner === "tie"
-      ? "An even match — a tie!"
-      : game?.winner
-        ? `${names[game.winner]} wins!`
-        : "Game complete";
   const houseWords = useMemo(
     () => new Set(session.houseWords.map((entry) => entry.word)),
     [session.houseWords],
@@ -2330,7 +2318,10 @@ export default function App() {
             className={`secondary-button header-new-game ${game.status === "finished" ? "new-game-next-action" : ""}`}
             data-testid="new-game"
             disabled={
-              !canUseNewGame || !!currentGameRequest || waitingForNewGame
+              !canUseNewGame ||
+              !!currentGameRequest ||
+              waitingForNewGame ||
+              !!debugBoardMove
             }
             title={
               waitingForNewGame
@@ -2346,6 +2337,18 @@ export default function App() {
             }}
           >
             New game
+          </button>
+        )}
+        {import.meta.env.DEV && debugEnabled && game && (
+          <button
+            className="secondary-button"
+            data-testid="local-debug-tools"
+            onClick={() => {
+              setDebugBoardMove(null);
+              setDialog("debug-tools");
+            }}
+          >
+            {debugBoardMove ? "Stop preview" : "Debug"}
           </button>
         )}
         {appUpdate.available && (
@@ -2640,10 +2643,14 @@ export default function App() {
                         const row = Math.floor(index / 15),
                           col = index % 15,
                           key = `${row},${col}`;
-                        const committed = game.board[key],
-                          tentative = placements.find(
-                            (p) => p.row === row && p.col === col,
-                          ),
+                        const committed = debugBoardMove
+                            ? debugBoardMove.board[key]
+                            : game.board[key],
+                          tentative = !debugBoardMove
+                            ? placements.find(
+                                (p) => p.row === row && p.col === col,
+                              )
+                            : undefined,
                           rackTile =
                             tentative &&
                             rack.find((t) => t.id === tentative.tileId);
@@ -2656,7 +2663,11 @@ export default function App() {
                               }
                             : null);
                         const premium = premiumAt(row, col),
-                          isLatest = lastCells.has(key),
+                          isLatest = debugBoardMove
+                            ? debugBoardMove.move.placements.some(
+                                (p) => p.row === row && p.col === col,
+                              )
+                            : lastCells.has(key),
                           isFresh = isLatest && freshMove === latest?.id,
                           isFading = isFresh && fadingMove === latest?.id,
                           isDraftWord = draftWordMembers.has(key);
@@ -2784,6 +2795,30 @@ export default function App() {
                         setFadingMove(freshMove);
                     }}
                   >
+                    {import.meta.env.DEV && debugEnabled && debugBoardMove && (
+                      <motion.div
+                        key={debugBoardMove.move.id}
+                        className="floating-points"
+                        style={{
+                          left: "50%",
+                          top: "50%",
+                          x: "-50%",
+                          y: "-50%",
+                        }}
+                        data-testid="debug-board-scoring"
+                      >
+                        <Celebration
+                          debug
+                          score={debugBoardMove.move.score}
+                          bingo={
+                            (debugBoardMove.move.breakdown?.bingoBonus ?? 0) > 0
+                          }
+                          variant={0}
+                          move={debugBoardMove.move}
+                          onComplete={() => setDebugBoardMove(null)}
+                        />
+                      </motion.div>
+                    )}
                     {animatedMove && latest?.kind === "play" && (
                       <motion.div
                         key={animatedMove}
@@ -3598,7 +3633,7 @@ export default function App() {
             game?.status === "finished" &&
             game.endedReason !== "new-game" && (
               <Modal
-                title={resultTitle}
+                title="Game complete"
                 testId="end-game-popup"
                 close={() => {
                   if (
@@ -3651,60 +3686,7 @@ export default function App() {
                   </div>
                 }
               >
-                <div className="end-game-result" data-testid="game-result">
-                  <motion.svg
-                    className="result-fanfare"
-                    viewBox="0 0 180 80"
-                    fill="none"
-                    aria-hidden="true"
-                    initial={{
-                      opacity: 0,
-                      scale: reduced ? 1 : 0.82,
-                      rotate: reduced ? 0 : -8,
-                    }}
-                    animate={{ opacity: 1, scale: 1, rotate: 0 }}
-                    transition={{
-                      duration: reduced ? 0 : 0.65,
-                      ease: [0.2, 0.8, 0.2, 1],
-                    }}
-                  >
-                    <path
-                      d="M90 9v62M59 40h62M68 18l44 44M68 62l44-44"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                    />
-                    <path
-                      d="M34 31v18M25 40h18M146 31v18M137 40h18"
-                      stroke="currentColor"
-                      strokeWidth="1.4"
-                      strokeLinecap="round"
-                    />
-                    <circle cx="52" cy="18" r="2" fill="currentColor" />
-                    <circle cx="128" cy="62" r="2" fill="currentColor" />
-                  </motion.svg>
-                  <p className="result-kicker">A game well played, together.</p>
-                  <div className="final-scores">
-                    {(["mom", "aunt"] as Slot[]).map((player) => (
-                      <div
-                        key={player}
-                        className={`final-score ${game.winner === player ? "winner" : ""}`}
-                      >
-                        <span>{names[player]}</span>
-                        <strong data-testid={`result-score-${player}`}>
-                          {game.scores[player]}
-                        </strong>
-                        <small>points</small>
-                      </div>
-                    ))}
-                  </div>
-                  <p
-                    className="game-ending-reason"
-                    data-testid="game-ending-reason"
-                  >
-                    {endingDescription}
-                  </p>
-                </div>
+                <EndingPresentation game={game} names={names} />
                 <GameSummary game={game} names={names} />
                 {(waitingForNewGame || currentGameRequest) && (
                   <p className="dictionary-reassurance">
@@ -3797,42 +3779,188 @@ export default function App() {
               )}
             </Modal>
           )}
-          {dialog === "debug-result" && (
+          {import.meta.env.DEV && debugEnabled && dialog === "debug-tools" && (
             <Modal
-              title="End-game preview"
+              title="Local preview tools"
+              testId="local-debug-popup"
+              close={() => setDialog(null)}
+            >
+              <p>
+                Sample scenes on your board. These previews do not save moves or
+                send requests.
+              </p>
+              <h3>Scoring over the board</h3>
+              <div className="debug-buttons">
+                {(["multiple-words", "high", "bingo"] as const).map((kind) => (
+                  <button
+                    key={kind}
+                    className="secondary-button"
+                    data-testid={`debug-scene-${kind}`}
+                    disabled={
+                      !game ||
+                      !!pending ||
+                      busy ||
+                      !!drag ||
+                      !!settling ||
+                      !!animatedMove
+                    }
+                    onClick={() => {
+                      const move = debugMove(kind);
+                      setDebugBoardMove({
+                        move: { ...move, id: `preview:${Date.now()}` },
+                        board: debugMoveBoard(kind),
+                      });
+                      setDialog(null);
+                    }}
+                  >
+                    {kind === "multiple-words"
+                      ? "Multiple words"
+                      : kind === "bingo"
+                        ? "Seven tiles"
+                        : "High score"}
+                  </button>
+                ))}
+              </div>
+              <h3>Game endings</h3>
+              <label>
+                Preview outcome{" "}
+                <select
+                  data-testid="debug-winner"
+                  value={debugWinner}
+                  onChange={(event) =>
+                    setDebugWinner(event.target.value as Slot | "tie")
+                  }
+                >
+                  <option value="mom">{names.mom} wins</option>
+                  <option value="aunt">{names.aunt} wins</option>
+                  <option value="tie">Tie</option>
+                </select>
+              </label>
+              <div className="debug-buttons">
+                {(
+                  [
+                    ["rack-out", "Last tile played"],
+                    ["agreed-end", "Mutual decision"],
+                    ["scoreless", "Six scoreless turns"],
+                    ["timed", "Time is up"],
+                    ["turn-limit", "Turn limit"],
+                    ["target-score", "Target reached"],
+                  ] as const
+                ).map(([reason, label]) => (
+                  <button
+                    className="secondary-button"
+                    key={reason}
+                    data-testid={`debug-ending-${reason}`}
+                    onClick={() => {
+                      setDebugEnding(debugEndingGame(reason, debugWinner));
+                      setDialog("debug-result");
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <button
+                className="secondary-button"
+                data-testid="debug-end-request"
+                onClick={() => setDialog("debug-end-request")}
+              >
+                Preview end-game agreement
+              </button>
+              <button
+                className="secondary-button"
+                data-testid="debug-turn-announcement"
+                disabled={!game || game.status !== "active"}
+                onClick={() => {
+                  if (!game) return;
+                  setDialog(null);
+                  setQueuedTurn({
+                    id: `debug-turn:${Date.now()}`,
+                    gameId: game.id,
+                    turn: game.turn,
+                    readyAt: Date.now(),
+                    afterPlay: false,
+                    debug: true,
+                  });
+                }}
+              >
+                Preview turn announcement
+              </button>
+            </Modal>
+          )}
+          {import.meta.env.DEV &&
+            debugEnabled &&
+            dialog === "debug-end-request" && (
+              <Modal
+                title="Finish this game together?"
+                testId="debug-end-request-popup"
+                close={() => setDialog(null)}
+                footer={
+                  <div className="dialog-actions">
+                    <button
+                      className="secondary-button"
+                      onClick={() => setDialog("debug-tools")}
+                    >
+                      Decline preview
+                    </button>
+                    <button
+                      className="primary-button"
+                      data-testid="debug-agree-end"
+                      onClick={() => {
+                        setDebugEnding(
+                          debugEndingGame("agreed-end", debugWinner),
+                        );
+                        setDialog("debug-result");
+                      }}
+                    >
+                      Agree in preview
+                    </button>
+                  </div>
+                }
+              >
+                <p className="dictionary-reassurance">
+                  Local sample request. Nothing is sent to your partner.
+                </p>
+                <p>
+                  The bag is empty. Agreeing finishes the game and subtracts
+                  each player’s remaining tile values.
+                </p>
+              </Modal>
+            )}
+          {import.meta.env.DEV && debugEnabled && dialog === "debug-result" && (
+            <Modal
+              title="Game complete"
               testId="debug-end-game-popup"
               close={() => setDialog(null)}
               footer={
                 <div className="dialog-actions">
                   <button
                     className="secondary-button"
-                    onClick={() => setDialog("help")}
+                    onClick={() => setDialog("debug-tools")}
                   >
-                    Back to Help
+                    More previews
                   </button>
-                  <button className="primary-button" disabled>
-                    Preview only
+                  <button
+                    className="primary-button"
+                    onClick={() => setDialog(null)}
+                  >
+                    Back to your game
                   </button>
                 </div>
               }
             >
               <p className="dictionary-reassurance">
-                Sample scores only. This preview does not change your game.
+                Local sample scores. Your game is unchanged.
               </p>
-              <div className="final-scores">
-                {(["mom", "aunt"] as const).map((player) => (
-                  <div className="final-score" key={player}>
-                    <span>{names[player]}</span>
-                    <strong>{previewSummary.scores[player]}</strong>
-                    <small>points</small>
-                  </div>
-                ))}
-              </div>
-              <p>
-                You both agreed to finish with the bag empty. Remaining tile
-                values were deducted.
-              </p>
-              <GameSummary game={previewSummary} names={names} />
+              <EndingPresentation
+                key={debugEnding?.id}
+                game={debugEnding || debugEndingGame("agreed-end")}
+                names={names}
+              />
+              <GameSummary
+                game={debugEnding || debugEndingGame("agreed-end")}
+                names={names}
+              />
             </Modal>
           )}
           {dialog === "new-game" && (
@@ -4345,88 +4473,36 @@ export default function App() {
                   </label>
                 ))}
               </fieldset>
-              <section className="debug-settings">
-                <label className="debug-toggle">
-                  <input
-                    type="checkbox"
-                    checked={debugEnabled}
-                    onChange={(event) => setDebugEnabled(event.target.checked)}
-                    data-testid="debug-enabled"
-                  />{" "}
-                  Show debug previews on this device
-                </label>
-                {debugEnabled && (
-                  <div className="debug-panel" data-testid="debug-panel">
-                    <h3>Celebration previews</h3>
-                    <p>
-                      Try the effects here. These sample points do not change
-                      your game.
-                    </p>
-                    <button
-                      className="secondary-button"
-                      data-testid="debug-end-game"
-                      onClick={() => setDialog("debug-result")}
-                    >
-                      Preview final results
-                    </button>
-                    <div className="debug-buttons">
-                      {(["low", "medium", "high", "bingo"] as const).map(
-                        (band) => (
-                          <button
-                            key={band}
-                            className="secondary-button"
-                            data-testid={`debug-celebration-${band}`}
-                            onClick={() =>
-                              setDebugCelebration({
-                                band,
-                                id: (debugCelebration?.id || 0) + 1,
-                              })
-                            }
-                          >
-                            {band === "bingo"
-                              ? "Seven tiles"
-                              : `${band[0].toUpperCase()}${band.slice(1)} score`}
-                          </button>
-                        ),
-                      )}
+              {import.meta.env.DEV && (
+                <section className="debug-settings">
+                  <label className="debug-toggle">
+                    <input
+                      type="checkbox"
+                      checked={debugEnabled}
+                      onChange={(event) =>
+                        setDebugEnabled(event.target.checked)
+                      }
+                      data-testid="debug-enabled"
+                    />{" "}
+                    Enable local preview tools
+                  </label>
+                  {debugEnabled && (
+                    <div className="debug-panel" data-testid="debug-panel">
+                      <p>
+                        Preview scoring, game endings and turn announcements
+                        over the board. Sample data never changes your game.
+                      </p>
+                      <button
+                        className="secondary-button"
+                        data-testid="debug-end-game"
+                        onClick={() => setDialog("debug-tools")}
+                      >
+                        Open preview tools
+                      </button>
                     </div>
-                    <button
-                      className="secondary-button"
-                      data-testid="debug-turn-announcement"
-                      disabled={!game || game.status !== "active"}
-                      onClick={() => {
-                        if (!game || game.status !== "active") return;
-                        setDialog(null);
-                        setQueuedTurn({
-                          id: `debug-turn:${Date.now()}`,
-                          gameId: game.id,
-                          turn: game.turn,
-                          readyAt: Date.now(),
-                          afterPlay: false,
-                          debug: true,
-                        });
-                      }}
-                    >
-                      Preview turn announcement
-                    </button>
-                    <div className="debug-celebration-stage">
-                      {debugCelebration && (
-                        <Celebration
-                          key={debugCelebration.id}
-                          debug
-                          score={
-                            { low: 8, medium: 24, high: 48, bingo: 76 }[
-                              debugCelebration.band
-                            ]
-                          }
-                          bingo={debugCelebration.band === "bingo"}
-                          variant={debugCelebration.id}
-                        />
-                      )}
-                    </div>
-                  </div>
-                )}
-              </section>
+                  )}
+                </section>
+              )}
               <h3 className="help-section-title">Playing together</h3>
               <ol className="help-steps">
                 <li>

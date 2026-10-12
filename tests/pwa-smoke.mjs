@@ -67,6 +67,18 @@ try {
   });
   await page.goto(origin + base);
   await expect(page.locator(".brand")).toContainText("Tea");
+  await page.evaluate(() => localStorage.setItem("tea-tiles-debug", "true"));
+  await page.reload();
+  await expect(
+    page.locator('[data-testid^="debug-"], [data-testid^="local-debug-"]'),
+  ).toHaveCount(0);
+  await page.getByTestId("help-settings").click();
+  await expect(page.getByTestId("debug-enabled")).toHaveCount(0);
+  await expect(page.getByTestId("debug-panel")).toHaveCount(0);
+  await page.getByRole("button", { name: "Close dialog" }).click();
+  await expect(
+    page.getByRole("dialog", { name: "Help & settings" }),
+  ).toHaveCount(0);
   const buildTime = page.getByTestId("build-time");
   await expect(buildTime).toHaveAttribute("datetime", /^\d{4}-\d{2}-\d{2}T/);
   await expect(buildTime).toHaveText(/\d{4}.*\d{1,2}:\d{2} [AP]M P[DS]T/);

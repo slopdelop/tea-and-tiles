@@ -280,3 +280,11 @@ Release 1.1.4 allows selecting a tentative board tile and tapping the wooden hol
 
 Validation: TypeScript/Vite/Functions build passed. Two isolated touch UI checks passed on and off turn, verifying single-tile return preserves another placement, normal rack selection, keyboard return, seven tiles restored and unchanged authoritative game state.
 
+# Animated game endings and local scene previews — 2026-10-12
+
+Release 1.2.0 integrates an ending presentation into the existing final-results dialog. The ending reason appears immediately; a short tally counts earned points including bonuses, applies recorded remaining-tile deductions and transfers, then reveals saved final scores and a larger winner/tie announcement with CSS fanfare. Show final scores skips the tally, and reduced motion shows a static final result. Missing older breakdowns display saved totals without invented adjustments. The existing best words, full history, board inspection and consent-based new-game actions remain in the same dialog.
+
+Local development alone exposes Help’s preview toggle and the main Debug launcher. It previews all six ending reasons, either winner/ties, an end-game agreement, turn announcements, and engine-scored multiple-word/high/seven-tile moves over a temporary rendered board. Closing/finishing previews restores the real board and private draft; no commands or shared requests are sent. Production ignores saved debug flags and exposes no preview controls.
+
+Validation: 119 unit tests and TypeScript checks passed. Isolated UI checks passed for real rack-out/transfer and mutually agreed endings on both devices, all ending previews, animated tally stages, skip/reduced motion, natural and stopped scoring-preview completion, preservation of all board-cell labels/private draft and unchanged authoritative game/racks/bag/receipts. Production PWA checks passed for hidden debug controls, explicit update/reload, offline shell and stable build timestamp. Astra reviewed Blue & Ink and dark portrait screenshots and enlarged ledger text; the short-screen fanfare is compact to keep the winner visible above the fixed footer. Physical iPad validation remains a device check.
+
