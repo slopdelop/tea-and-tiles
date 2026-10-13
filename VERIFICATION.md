@@ -370,3 +370,13 @@ No commit, push, Pages publication, Firebase Functions deployment or index deplo
 # Release 1.5.0 — 2026-10-12
 
 User approved publication following independent UI, networking and backend review. Quick final review reran all 158 unit tests, the rendering/presence/pass-to-play browser regression and both TypeScript checks successfully. Release includes the eight audited performance/network optimizations, the compact Astra texture and the scoring flash correction. Deployment build generates the date/time automatically. Firebase publication includes the eight affected command/consent/timer Functions and six unused-field index exemptions; authentication Functions and security rules are unchanged.
+
+# Local draft replacement — 2026-10-12
+
+Dragging onto another private draft tile replaces it and returns the displaced tile to the hand. Dragging an already placed tile leaves its source square empty; committed tiles remain protected. Tap selection behavior is unchanged. A new blank replaces the destination only after a letter is selected; canceling its picker or the drag preserves the previous draft. No backend/schema/network changes.
+
+Validation: 159 unit tests, TypeScript and rendering/presence smoke checks passed. Isolated browser checks passed for existing mouse/touch dragging and the new rack-to-draft/board-to-draft replacement flow, committed-square rejection, blank selection/cancellation/displacement, touch cancellation/replacement, reload persistence, inventory conservation and arranging while waiting. The mouse test now cancels an occupied-draft hover rather than expecting that square to reject a drop. The new blank test waits for the picker to close before starting raw touch input. No publication, commit or deployment performed; active local games preserved.
+
+# Release 1.5.1 — 2026-10-12
+
+User approved publishing draft-tile replacement. Version and Help changelog updated; deployment generates the build date/time. Frontend-only change; Firebase Functions, rules and indexes remain as deployed for 1.5.0.

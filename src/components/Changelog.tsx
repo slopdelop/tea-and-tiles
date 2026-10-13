@@ -1,5 +1,11 @@
 const releases = [
   {
+    version: "1.5.1",
+    items: [
+      "Drag onto another unplayed tile to replace it and return that tile to your hand.",
+    ],
+  },
+  {
     version: "1.5.0",
     items: [
       "Smoother tile interaction with less repeated board rendering.",

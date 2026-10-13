@@ -1,11 +1,13 @@
 import type { Board, Placement } from "../shared/engine";
 
 // Draft freely in any order. Full move legality belongs to previewMove and
-// server validation; only bounds and occupied squares prevent a local drop.
+// server validation. Dragging may replace a private draft tile, but never a
+// committed tile. Tapping keeps its existing selection behavior.
 export function canPlaceDraftTile(
   board: Board,
   placements: Placement[],
   candidate: Pick<Placement, "tileId" | "row" | "col">,
+  replaceDraft = false,
 ): boolean {
   const { row, col, tileId } = candidate;
   if (
@@ -19,7 +21,10 @@ export function canPlaceDraftTile(
   )
     return false;
   const remaining = placements.filter((tile) => tile.tileId !== tileId);
-  if (remaining.some((tile) => tile.row === row && tile.col === col))
+  if (
+    !replaceDraft &&
+    remaining.some((tile) => tile.row === row && tile.col === col)
+  )
     return false;
   return true;
 }

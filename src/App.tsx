@@ -714,6 +714,7 @@ export default function App() {
     tileId: string;
     row: number;
     col: number;
+    replaceDraft?: boolean;
   } | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [exchange, setExchange] = useState<string[]>([]);
@@ -1041,11 +1042,12 @@ export default function App() {
       if (target.kind === "rack") return true;
       return (
         !!game &&
-        canPlaceDraftTile(game.board, placements, {
-          tileId,
-          row: target.row,
-          col: target.col,
-        })
+        canPlaceDraftTile(
+          game.board,
+          placements,
+          { tileId, row: target.row, col: target.col },
+          true,
+        )
       );
     },
     onDrop: (tileId, target) => {
@@ -1062,8 +1064,13 @@ export default function App() {
       const tile = rack.find((t) => t.id === tileId);
       const previous = placements.find((p) => p.tileId === tileId);
       if (tile?.letter === "?" && !previous?.letter) {
-        setBlank({ tileId, row: target.row, col: target.col });
-      } else place(tileId, target.row, target.col, previous?.letter);
+        setBlank({
+          tileId,
+          row: target.row,
+          col: target.col,
+          replaceDraft: true,
+        });
+      } else place(tileId, target.row, target.col, previous?.letter, true);
     },
   });
 
@@ -1776,14 +1783,31 @@ export default function App() {
     setSelected(null);
     tick();
   }
-  function place(tileId: string, row: number, col: number, letter?: string) {
+  function place(
+    tileId: string,
+    row: number,
+    col: number,
+    letter?: string,
+    replaceDraft = false,
+  ) {
     if (!canEdit || !game || !rack.some((t) => t.id === tileId)) return;
-    if (!canPlaceDraftTile(game.board, placements, { tileId, row, col })) {
+    if (
+      !canPlaceDraftTile(
+        game.board,
+        placements,
+        { tileId, row, col },
+        replaceDraft,
+      )
+    ) {
       setMessage("Choose an empty square on the board.");
       return;
     }
     edit([
-      ...placements.filter((p) => p.tileId !== tileId),
+      ...placements.filter(
+        (p) =>
+          p.tileId !== tileId &&
+          (!replaceDraft || p.row !== row || p.col !== col),
+      ),
       { tileId, row, col, ...(letter ? { letter } : {}) },
     ]);
     setSelected(null);
@@ -5234,7 +5258,13 @@ export default function App() {
                     data-testid={`blank-${letter}`}
                     onClick={() => {
                       if (latestGameContext.current !== gameContext) return;
-                      place(blank.tileId, blank.row, blank.col, letter);
+                      place(
+                        blank.tileId,
+                        blank.row,
+                        blank.col,
+                        letter,
+                        blank.replaceDraft,
+                      );
                       setBlank(null);
                     }}
                   >

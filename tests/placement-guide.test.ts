@@ -87,6 +87,16 @@ describe("free draft placement", () => {
     expect(canPlaceDraftTile(oldA, line, placed("o", 7, 5))).toBe(false);
     expect(canPlaceDraftTile(oldA, line, placed("o", 7, 7))).toBe(false);
   });
+  it("allows drag replacement only on private draft squares", () => {
+    const draft = [placed("d", 7, 8), placed("r", 7, 5)];
+    expect(canPlaceDraftTile(oldA, draft, placed("o", 7, 8), true)).toBe(true);
+    expect(canPlaceDraftTile(oldA, draft, placed("r", 7, 8), true)).toBe(true);
+    expect(canPlaceDraftTile(oldA, draft, placed("o", 7, 7), true)).toBe(false);
+    expect(canPlaceDraftTile(oldA, draft, placed("o", -1, 8), true)).toBe(
+      false,
+    );
+    expect(canPlaceDraftTile(oldA, draft, placed("o", 7, 8))).toBe(false);
+  });
   it("permits D then R before O, while scoring stays blocked until the gap is filled", () => {
     const game = createGame("free-draft");
     game.board = oldA;

@@ -488,6 +488,7 @@ async function beginMouseDrag(
   source: Locator,
   destination: Locator,
 ) {
+  const destinationTiles = await destination.locator(".board-tile").count();
   const innerTile = source.locator(":scope > .board-tile");
   const activeSource = (await innerTile.count()) ? innerTile : source;
   await activeSource.click({ trial: true }); // Wait for the tile's placement spring to settle.
@@ -540,7 +541,9 @@ async function beginMouseDrag(
     ).toBeGreaterThanOrEqual(2);
     await expect(destination).toHaveCSS("outline-style", "solid");
     await expect(page.getByTestId("landing-preview")).toHaveCount(0);
-    await expect(destination.locator(".board-tile")).toHaveCount(0);
+    await expect(destination.locator(".board-tile")).toHaveCount(
+      destinationTiles,
+    );
   }
 }
 async function finishDrag(
@@ -2035,7 +2038,14 @@ test("fine-pointer hover stays steady and drag follows cursor for move, return, 
     await page.mouse.up();
     await expect(cell(page, 7, 8)).toContainText("M");
     await expect(cell(page, 8, 8)).not.toHaveClass(/has-tentative/);
-    await dragMouse(page, rack(page, "W"), cell(page, 7, 8), rack(page, "W"));
+    await beginMouseDrag(page, rack(page, "W"), cell(page, 7, 8));
+    await finishDrag(
+      page,
+      () => page.keyboard.press("Escape"),
+      rack(page, "W"),
+      "returning",
+    );
+    await page.mouse.up();
     await expect(cell(page, 7, 8)).toContainText("M");
     await expect(rack(page, "W")).toBeVisible();
     await dragMouse(page, rack(page, "W"), cell(page, 0, 0), rack(page, "W"));
@@ -2164,6 +2174,91 @@ test("touch drag follows finger, cancels safely, returns to rack and keeps tap p
   await cell(page, 7, 7).tap();
   await expect(cell(page, 7, 7)).toContainText("T");
   await checkTypography(page);
+});
+
+test("drag replacement returns draft tiles to the hand and protects committed tiles", async ({
+  page,
+  context,
+}) => {
+  await enroll(page);
+  const before = await authoritativeState();
+  const tileId = (letter: string, index = 0) =>
+    tiles.filter((tile) => tile.letter === letter)[index].id;
+  const face = (row: number, col: number) =>
+    cell(page, row, col).locator(".tile-letter");
+  const inventory = async () => {
+    const ids = await page.evaluate(() => {
+      const placements =
+        JSON.parse(localStorage.getItem("tea-tiles-draft:ui-table:mom") || "{}")
+          .placements || [];
+      return [
+        ...Array.from(
+          document.querySelectorAll<HTMLElement>("[data-rack-tile-id]"),
+        ).map((element) => element.dataset.rackTileId!),
+        ...placements.map((placement: { tileId: string }) => placement.tileId),
+      ];
+    });
+    expect(ids.sort()).toEqual(tiles.map((tile) => tile.id).sort());
+  };
+  await rack(page, "A").tap();
+  await cell(page, 7, 7).tap();
+  await rack(page, "T").tap();
+  await cell(page, 7, 8).tap();
+  await dragMouse(page, rack(page, "Q"), cell(page, 7, 7));
+  await expect(face(7, 7)).toHaveText("Q");
+  await expect(rack(page, "A")).toBeVisible();
+  await expect(page.locator(".has-tentative")).toHaveCount(2);
+  await inventory();
+  await dragMouse(page, cell(page, 7, 8), cell(page, 7, 7));
+  await expect(face(7, 7)).toHaveText("T");
+  await expect(cell(page, 7, 8)).not.toHaveClass(/has-tentative/);
+  await expect(rack(page, "Q")).toBeVisible();
+  await inventory();
+  await dragMouse(page, rack(page, "A"), cell(page, 0, 0), rack(page, "A"));
+  await expect(face(0, 0)).toHaveText("R");
+  await expect(rack(page, "A")).toBeVisible();
+  await expect(face(7, 7)).toHaveText("T");
+  await beginMouseDrag(page, rack(page, "?"), cell(page, 7, 7));
+  await page.mouse.up();
+  await expect(page.getByTestId("blank-B")).toBeVisible();
+  await page.getByRole("button", { name: "Close dialog", exact: true }).click();
+  await expect(face(7, 7)).toHaveText("T");
+  await expect(rack(page, "?", 0)).toBeVisible();
+  await inventory();
+  await beginMouseDrag(page, rack(page, "?"), cell(page, 7, 7));
+  await page.mouse.up();
+  await page.getByTestId("blank-B").click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(face(7, 7)).toHaveText("B");
+  await expect(cell(page, 7, 7).locator(".board-tile small")).toHaveText("0");
+  await expect(rack(page, "T")).toBeVisible();
+  await inventory();
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const touchSession = await context.newCDPSession(page);
+  await rack(page, "W").click({ trial: true });
+  await touch(touchSession, "touchStart", await point(rack(page, "W")));
+  await touch(touchSession, "touchMove", await point(cell(page, 7, 7)));
+  await expect(cell(page, 7, 7)).toHaveClass(/drag-over-square/);
+  await touch(touchSession, "touchCancel");
+  await expect(face(7, 7)).toHaveText("B");
+  await touch(touchSession, "touchStart", await point(rack(page, "W")));
+  await touch(touchSession, "touchMove", await point(cell(page, 7, 7)));
+  await touch(touchSession, "touchEnd");
+  await expect(face(7, 7)).toHaveText("W");
+  await expect(page.getByTestId(`rack-tile-${tileId("?", 0)}`)).toBeVisible();
+  await inventory();
+  await page.reload();
+  await expect(face(7, 7)).toHaveText("W");
+  await inventory();
+  await db.doc("games/ui-table").update({ turn: "aunt" });
+  await expect(page.getByTestId("turn-status")).toContainText("Rita");
+  await touch(touchSession, "touchStart", await point(rack(page, "A")));
+  await touch(touchSession, "touchMove", await point(cell(page, 7, 7)));
+  await touch(touchSession, "touchEnd");
+  await expect(face(7, 7)).toHaveText("A");
+  await inventory();
+  const after = await authoritativeState();
+  expect(after).toEqual([{ ...before[0], turn: "aunt" }, ...before.slice(1)]);
 });
 
 test("explicit zoom keeps actions accessible, drag targets accurate and scroll steady without score bubbles", async ({
