@@ -10,7 +10,8 @@ import {
 import type { Slot } from "../../shared/engine";
 import {
   PRESENCE_HEARTBEAT_MS,
-  presenceByPlayer,
+  presenceUpdate,
+  UNKNOWN_PRESENCE,
   type PresenceDevice,
 } from "../presence";
 export function usePlayerPresence(
@@ -20,15 +21,18 @@ export function usePlayerPresence(
   enabled: boolean,
   connected: boolean,
 ) {
-  const [devices, setDevices] = useState<PresenceDevice[] | null>(null);
-  const [now, setNow] = useState(Date.now);
+  const [status, setStatus] = useState(UNKNOWN_PRESENCE);
+  const publishedStatus = useRef(status);
   const inFlight = useRef(false);
   const lastAttempt = useRef(0);
   const serverOffset = useRef(0);
   const pendingOwnWrite = useRef(false);
   const sentAt = useRef(0);
   useEffect(() => {
-    setDevices(null);
+    if (publishedStatus.current !== UNKNOWN_PRESENCE) {
+      publishedStatus.current = UNKNOWN_PRESENCE;
+      setStatus(UNKNOWN_PRESENCE);
+    }
     if (!uid || !slot || !enabled || !connected) return;
     const storageKey = `tea-presence:${db.app.options.projectId}:${uid}`;
     try {
@@ -37,6 +41,26 @@ export function usePlayerPresence(
       /* Storage is optional. */
     }
     let disposed = false;
+    let devices: PresenceDevice[] | null = null;
+    let expiryTimer: ReturnType<typeof setTimeout> | undefined;
+    const refreshPresence = () => {
+      clearTimeout(expiryTimer);
+      if (disposed) return;
+      const now = Date.now() + serverOffset.current;
+      const update = presenceUpdate(devices, now, publishedStatus.current);
+      if (update.status !== publishedStatus.current) {
+        publishedStatus.current = update.status;
+        setStatus(update.status);
+      }
+      if (
+        document.visibilityState === "visible" &&
+        update.nextChangeAt !== null
+      )
+        expiryTimer = setTimeout(
+          refreshPresence,
+          Math.min(2_147_483_647, Math.max(1, update.nextChangeAt - now)),
+        );
+    };
     const stop = onSnapshot(
       collection(db, "pairs", "family", "presence"),
       { includeMetadataChanges: true },
@@ -54,22 +78,24 @@ export function usePlayerPresence(
           pendingOwnWrite.current = false;
         }
         if (snapshot.metadata.fromCache) {
-          setDevices(null);
+          devices = null;
+          refreshPresence();
           return;
         }
-        setDevices(
-          snapshot.docs.flatMap((device) => {
-            const data = device.data();
-            const lastSeen = data.lastSeen?.toMillis?.();
-            return (data.slot === "mom" || data.slot === "aunt") &&
-              typeof lastSeen === "number"
-              ? [{ slot: data.slot as Slot, lastSeen }]
-              : [];
-          }),
-        );
-        setNow(Date.now() + serverOffset.current);
+        devices = snapshot.docs.flatMap((device) => {
+          const data = device.data();
+          const lastSeen = data.lastSeen?.toMillis?.();
+          return (data.slot === "mom" || data.slot === "aunt") &&
+            typeof lastSeen === "number"
+            ? [{ slot: data.slot as Slot, lastSeen }]
+            : [];
+        });
+        refreshPresence();
       },
-      () => setDevices(null),
+      () => {
+        devices = null;
+        refreshPresence();
+      },
     );
     const heartbeat = () => {
       if (
@@ -120,16 +146,14 @@ export function usePlayerPresence(
     let heartbeatTimer: ReturnType<typeof setTimeout>;
     const cycle = () => {
       clearTimeout(heartbeatTimer);
+      // No React clock tick: check for clock corrections alongside the existing
+      // heartbeat, and schedule one local timeout for the next label change.
+      refreshPresence();
       heartbeatTimer = setTimeout(cycle, heartbeat());
     };
     const wake = () => {
-      setNow(Date.now() + serverOffset.current);
       cycle();
     };
-    const expiryTimer = setInterval(() => {
-      if (document.visibilityState === "visible")
-        setNow(Date.now() + serverOffset.current);
-    }, 5_000);
     document.addEventListener("visibilitychange", wake);
     window.addEventListener("pageshow", wake);
     window.addEventListener("online", wake);
@@ -138,11 +162,11 @@ export function usePlayerPresence(
       disposed = true;
       stop();
       clearTimeout(heartbeatTimer);
-      clearInterval(expiryTimer);
+      clearTimeout(expiryTimer);
       document.removeEventListener("visibilitychange", wake);
       window.removeEventListener("pageshow", wake);
       window.removeEventListener("online", wake);
     };
   }, [db, uid, slot, enabled, connected]);
-  return presenceByPlayer(connected && enabled ? devices : null, now);
+  return connected && enabled ? status : UNKNOWN_PRESENCE;
 }

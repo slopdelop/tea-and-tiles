@@ -1,5 +1,13 @@
 const releases = [
   {
+    version: "1.5.0",
+    items: [
+      "Smoother tile interaction with less repeated board rendering.",
+      "Reduced unnecessary database writes, historical request reads and duplicate checks.",
+      "A smaller wooden-rack texture keeps the subtle grain with less to download.",
+    ],
+  },
+  {
     version: "1.4.1",
     items: [
       "Changed how iPad and Safari receive game updates to address occasional delayed turns.",

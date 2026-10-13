@@ -16,6 +16,7 @@ import {
   type CommandResult,
   type Game,
   type Slot,
+  type Tile,
   type WinCondition,
 } from "../shared/engine.js";
 import type { WordRequest, HouseWord } from "../shared/dictionary.js";
@@ -169,6 +170,36 @@ function writeGame(tx: FirebaseFirestore.Transaction, game: Game) {
   tx.set(ref.collection("racks").doc("mom"), { tiles: game.racks.mom });
   tx.set(ref.collection("racks").doc("aunt"), { tiles: game.racks.aunt });
   tx.set(ref.collection("private").doc("state"), { bag: game.bag });
+}
+function sameTiles(before: readonly Tile[], after: readonly Tile[]) {
+  return (
+    before.length === after.length &&
+    before.every(
+      (tile, index) =>
+        tile.id === after[index].id &&
+        tile.letter === after[index].letter &&
+        tile.value === after[index].value,
+    )
+  );
+}
+/** Preserve private documents that did not change, including their draw order. */
+function writeGameChanges(
+  tx: FirebaseFirestore.Transaction,
+  before: Game,
+  after: Game,
+) {
+  if (before.id !== after.id) {
+    writeGame(tx, after);
+    return;
+  }
+  const ref = db.doc(`games/${after.id}`);
+  tx.set(ref, publicGame(after));
+  for (const slot of slots) {
+    if (!sameTiles(before.racks[slot], after.racks[slot]))
+      tx.set(ref.collection("racks").doc(slot), { tiles: after.racks[slot] });
+  }
+  if (!sameTiles(before.bag, after.bag))
+    tx.set(ref.collection("private").doc("state"), { bag: after.bag });
 }
 function currentBinding(
   binding: FirebaseFirestore.DocumentData | undefined,
@@ -401,7 +432,7 @@ export async function enroll(
 async function requireMember(
   tx: FirebaseFirestore.Transaction,
   uid: string,
-): Promise<Slot> {
+): Promise<{ slot: Slot; pair: FirebaseFirestore.DocumentSnapshot }> {
   const binding = await tx.get(db.doc(`bindings/${uid}`));
   const slot = binding.data()?.slot as Slot;
   if (!slots.includes(slot))
@@ -423,7 +454,7 @@ async function requireMember(
       "failed-precondition",
       "The family game has not been prepared yet.",
     );
-  return slot;
+  return { slot, pair };
 }
 
 function normalizeWord(value: unknown): string {
@@ -451,7 +482,7 @@ export async function requestHouseWord(
   onlyKeys(d, ["word"]);
   const word = normalizeWord(d.word);
   return db.runTransaction(async (tx) => {
-    const slot = await requireMember(tx, uid);
+    const { slot } = await requireMember(tx, uid);
     if (dictionary.has(word))
       throw new HttpsError(
         "failed-precondition",
@@ -512,7 +543,7 @@ export async function respondHouseWord(
   const approve = d.approve;
   const expectedRequestedAt = d.expectedRequestedAt;
   return db.runTransaction(async (tx) => {
-    const slot = await requireMember(tx, uid);
+    const { slot } = await requireMember(tx, uid);
     const ref = db.doc(`pairs/family/wordRequests/${requestId}`);
     const saved = await tx.get(ref);
     if (!saved.exists)
@@ -546,10 +577,10 @@ export async function respondHouseWord(
       );
     }
     const houseRef = db.doc(`pairs/family/houseWords/${request.word}`);
-    const house = await tx.get(houseRef);
+    const house = approve ? await tx.get(houseRef) : null;
     const at = Date.now();
     tx.update(ref, { status, respondedBy: slot, respondedAt: at });
-    if (approve && !house.exists) {
+    if (approve && !house?.exists) {
       const accepted: HouseWord = {
         word: request.word,
         requestedBy: request.requestedBy,
@@ -604,14 +635,10 @@ export async function requestGameRestart(
       ? ((d.durationMinutes ?? 25) as number)
       : undefined;
   return db.runTransaction(async (tx) => {
-    const slot = await requireMember(tx, uid);
+    const { slot, pair } = await requireMember(tx, uid);
     const pairRef = db.doc("pairs/family");
     const ref = db.doc(`pairs/family/gameRequests/${id}`);
-    const [pair, saved, current] = await tx.getAll(
-      pairRef,
-      ref,
-      db.doc(`games/${gameId}`),
-    );
+    const [saved, current] = await tx.getAll(ref, db.doc(`games/${gameId}`));
     if (saved.exists) {
       const previous = saved.data() as NewGameRequest;
       if (
@@ -681,10 +708,10 @@ export async function respondGameRestart(
   const { requestId, approve } = d;
   const newGameId = randomUUID();
   return db.runTransaction(async (tx) => {
-    const slot = await requireMember(tx, uid);
+    const { slot, pair } = await requireMember(tx, uid);
     const pairRef = db.doc("pairs/family");
     const ref = db.doc(`pairs/family/gameRequests/${requestId}`);
-    const [pair, saved] = await tx.getAll(pairRef, ref);
+    const saved = await tx.get(ref);
     if (!saved.exists)
       throw new HttpsError(
         "not-found",
@@ -815,12 +842,11 @@ export async function requestGameEnd(
   const { id, gameId } = d;
   const expectedRevision = d.expectedRevision as number;
   return db.runTransaction(async (tx) => {
-    const slot = await requireMember(tx, uid);
+    const { slot, pair } = await requireMember(tx, uid);
     const pairRef = db.doc("pairs/family");
     const ref = db.doc(`pairs/family/endGameRequests/${id}`);
     const retryRef = db.doc(`endGameRequestReceipts/${id}`);
-    const [pair, saved, current, secret, retry] = await tx.getAll(
-      pairRef,
+    const [saved, current, secret, retry] = await tx.getAll(
       ref,
       db.doc(`games/${gameId}`),
       db.doc(`games/${gameId}/private/state`),
@@ -933,10 +959,10 @@ export async function respondGameEnd(
     );
   const { requestId, approve } = d;
   return db.runTransaction(async (tx) => {
-    const slot = await requireMember(tx, uid);
+    const { slot, pair } = await requireMember(tx, uid);
     const ref = db.doc(`pairs/family/endGameRequests/${requestId}`);
     const pairRef = db.doc("pairs/family");
-    const [pair, saved] = await tx.getAll(pairRef, ref);
+    const saved = await tx.get(ref);
     if (!saved.exists)
       throw new HttpsError(
         "not-found",
@@ -1152,9 +1178,9 @@ export async function finishGameTimer(
     throw new HttpsError("invalid-argument", "Choose the current timed game.");
   const gameId = d.gameId;
   return db.runTransaction(async (tx) => {
-    await requireMember(tx, uid);
+    const { pair } = await requireMember(tx, uid);
     const ref = db.doc(`games/${gameId}`);
-    const [pair, saved] = await tx.getAll(db.doc("pairs/family"), ref);
+    const saved = await tx.get(ref);
     if (!saved.exists)
       throw new HttpsError("not-found", "This timed game no longer exists.");
     const game = saved.data()!;
@@ -1362,7 +1388,7 @@ export async function submit(
           revision: next.revision,
           score: command.kind === "play" ? (next.lastMove?.score ?? 0) : 0,
         };
-        writeGame(tx, next);
+        writeGameChanges(tx, game, next);
         if (command.kind === "rematch")
           tx.update(pair.ref, {
             activeGameId: next.id,

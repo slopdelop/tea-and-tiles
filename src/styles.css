@@ -3810,7 +3810,7 @@ button {
   inset: 0;
   z-index: -1;
   border-radius: inherit;
-  background: url("/textures/maple-grain.png") center / cover;
+  background: url("/textures/maple-grain.svg") center / cover;
   mix-blend-mode: luminosity;
   opacity: 0.24;
   pointer-events: none;

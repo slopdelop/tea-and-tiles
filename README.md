@@ -58,6 +58,7 @@ node scripts/admin.mjs names --project demo-tea-and-tiles --mom-name Elizabeth -
 
 ```powershell
 npm test
+npm run test:performance
 npm run build
 ```
 

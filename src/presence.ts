@@ -3,6 +3,10 @@ export const PRESENCE_HEARTBEAT_MS = 60_000;
 export const PRESENCE_FRESH_MS = 120_000;
 export type PresenceStatus = "present" | "away" | "unknown";
 export type PresenceDevice = { slot: Slot; lastSeen: number };
+export const UNKNOWN_PRESENCE: Record<Slot, PresenceStatus> = {
+  mom: "unknown",
+  aunt: "unknown",
+};
 export function presenceByPlayer(
   devices: PresenceDevice[] | null,
   now: number,
@@ -17,4 +21,30 @@ export function presenceByPlayer(
       result[device.slot] = "present";
   }
   return result;
+}
+
+/** A label changes only when the player's newest valid device expires. */
+export function presenceUpdate(
+  devices: PresenceDevice[] | null,
+  now: number,
+  previous: Record<Slot, PresenceStatus>,
+) {
+  const next = presenceByPlayer(devices, now);
+  const status =
+    next.mom === previous.mom && next.aunt === previous.aunt ? previous : next;
+  let nextChangeAt: number | null = null;
+  for (const slot of ["mom", "aunt"] as const) {
+    if (status[slot] !== "present") continue;
+    const latestSeen = Math.max(
+      ...(devices ?? [])
+        .filter(
+          (device) => device.slot === slot && Number.isFinite(device.lastSeen),
+        )
+        .map((device) => device.lastSeen),
+    );
+    const expiry = latestSeen + PRESENCE_FRESH_MS;
+    nextChangeAt =
+      nextChangeAt === null ? expiry : Math.min(nextChangeAt, expiry);
+  }
+  return { status, nextChangeAt };
 }

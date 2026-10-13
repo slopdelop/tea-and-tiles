@@ -96,10 +96,10 @@ try {
     expect(response.headers()["content-type"]).toContain("image/png");
   }
   const grain = await page.request.get(
-    origin + base + "textures/maple-grain.png",
+    origin + base + "textures/maple-grain.svg",
   );
   expect(grain.ok()).toBe(true);
-  expect(grain.headers()["content-type"]).toContain("image/png");
+  expect(grain.headers()["content-type"]).toContain("image/svg+xml");
   await page.evaluate(async () => {
     await navigator.serviceWorker.ready;
   });
@@ -173,7 +173,7 @@ try {
   expect(cacheURLs.length).toBeGreaterThan(10);
   expect(
     cacheURLs.some((url) =>
-      new URL(url).pathname.endsWith("/textures/maple-grain.png"),
+      new URL(url).pathname.endsWith("/textures/maple-grain.svg"),
     ),
   ).toBe(true);
   expect(cacheURLs.every((url) => url.startsWith(origin + base))).toBe(true);

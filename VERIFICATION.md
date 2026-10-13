@@ -350,3 +350,23 @@ All 25 transport tests passed, covering mobile/standalone/desktop-mode iPad, iPh
 User approved publication of the Apple transport experiment. Version and Help changelog updated to 1.4.1; the build date/time is generated during deployment. This is a frontend-only transport fix; no Firebase Functions or database rules changes are required. Real-iPad testing is still needed to confirm whether it resolves the intermittent delay.
 
 Release validation: all 143 unit tests, client/Functions build and production PWA smoke checks passed, including explicit update/reload behavior and offline app shell. The prior isolated browser test confirmed a real opponent move arrives through XHR with zero fetch-channel requests for an iPad identity.
+
+# Local 1.5.0 performance/network candidate — 2026-10-12
+
+Implemented the eight approved audit recommendations locally. Existing-game commands now persist only changed ordered private tile arrays while public state and receipts remain atomic; membership workflows reuse their pair snapshot and word declines skip the house-word lookup. Added narrow index exemptions for unused board/history/last-move/score-adjustment/rack/bag fields. Current-game request queries retain all statuses but exclude older games; update checks share an in-flight promise and timed-game resume bursts coalesce without suppressing initial synchronization, deadline checks or retries.
+
+Memoized board cells preserve DOM, accessibility, keys and Motion/CSS behavior, with stable committed action handlers and cached lookup maps. Local preview scoring is memoized. Presence emits only changes in displayed status and schedules the newest device's expiry, preserving the sixty-second visible heartbeat and server/cache trust behavior. A reproducible in-memory browser regression is available through npm run test:performance; it makes no Firebase calls.
+
+Astra created and visually reviewed a static 512×128 SVG maple texture (2,952 bytes) replacing the 2,095,909-byte PNG, a 99.86% reduction. No filters or dynamic noise; rack dimensions/colors/blending/opacity remain unchanged. The old PNG is removed, and PWA cached-asset assertions use the SVG. Production precache size fell from approximately 4,539 KiB to 2,502 KiB.
+
+Production-profile comparison of the same canceled sixty-target drag: roughly 14,175–14,400 full cell constructions before, 114 actual memoized cell renders afterward, with zero repeated preview calls. Normal median subtree render fell from 0.9 ms to 0.4 ms; four-times CPU-throttled medians fell from 3.8–4.1 ms to 1.5–1.9 ms. These are isolated Chrome measurements, not real-iPad input-latency guarantees.
+
+Verification passed: 158 unit tests, 75 isolated backend tests, 23 distinct targeted browser scenarios, production build, production PWA/offline/update smoke test and in-memory rendering/presence checks. Browser coverage includes request scoping/decisions, touch/mouse/reorder/recall/shuffle, private drafts, word consent, real presence heartbeats/expiry/multi-device/offline, timed/six-pass/rack-out endings, all themes, latest-word highlight timing, scoring/turn handoff, delayed acceptance and actual iPad-identity XHR delivery. One older highlight assertion now waits for the short arrival tint to finish before inspecting the persistent edge.
+
+Expanded animation checks exposed an existing pass-to-play race: a hidden pass presentation timer could mount a new score card briefly under the previous move ID. Actual play/exchange cards now require their animation ID to match the current move. The retained mock regression fails with the old guard (two card mounts) and passes with the fix (one); both-device turn and delayed-reply checks pass. Presentation timings remain unchanged.
+
+No commit, push, Pages publication, Firebase Functions deployment or index deployment performed. Published version remains 1.4.1; local candidate is 1.5.0. Future publication must include the affected backend Functions and index configuration. Normal local games and services were preserved.
+
+# Release 1.5.0 — 2026-10-12
+
+User approved publication following independent UI, networking and backend review. Quick final review reran all 158 unit tests, the rendering/presence/pass-to-play browser regression and both TypeScript checks successfully. Release includes the eight audited performance/network optimizations, the compact Astra texture and the scoring flash correction. Deployment build generates the date/time automatically. Firebase publication includes the eight affected command/consent/timer Functions and six unused-field index exemptions; authentication Functions and security rules are unchanged.

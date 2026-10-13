@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRegisterSW } from "virtual:pwa-register/react";
 import { applyNewGameUpdate } from "./newGameUpdate";
+import { sharePendingCheck } from "./sharedCheck";
 
 export function useAppUpdate() {
   const registration = useRef<ServiceWorkerRegistration | undefined>(undefined);
@@ -9,6 +10,7 @@ export function useAppUpdate() {
   const [status, setStatus] = useState("");
   const [error, setError] = useState<string | null>(null);
   const boundaryCheck = useRef(false);
+  const pendingCheck = useRef<Promise<boolean> | null>(null);
   const {
     needRefresh: [available, setAvailable],
     updateServiceWorker,
@@ -20,55 +22,59 @@ export function useAppUpdate() {
       setError("Could not check for updates. Try again when connected.");
     },
   });
-  const check = useCallback(async () => {
-    const current = registration.current;
-    if (!current) {
-      setStatus(
-        import.meta.env.DEV
-          ? "Updates are available on the published app."
-          : "The app is getting ready to check for updates.",
-      );
-      return false;
-    }
-    setChecking(true);
-    setError(null);
-    try {
-      await current.update();
-      const installing = current.installing;
-      if (installing)
-        await new Promise<void>((resolve) => {
-          const finish = () => {
-            clearTimeout(timer);
-            installing.removeEventListener("statechange", changed);
-            resolve();
-          };
-          const changed = () => {
-            if (
-              installing.state === "installed" ||
-              installing.state === "redundant"
-            )
-              finish();
-          };
-          const timer = window.setTimeout(finish, 15000);
-          installing.addEventListener("statechange", changed);
-          changed();
-        });
-      if (current.waiting) setAvailable(true);
-      setStatus(
-        current.waiting
-          ? "An update is ready."
-          : current.installing
-            ? "The update is still downloading. Check again shortly."
-            : "You’re up to date.",
-      );
-      return !!current.waiting;
-    } catch {
-      setError("Could not check for updates. Try again when connected.");
-      return false;
-    } finally {
-      setChecking(false);
-    }
-  }, [setAvailable]);
+  const check = useCallback(
+    () =>
+      sharePendingCheck(pendingCheck, async () => {
+        const current = registration.current;
+        if (!current) {
+          setStatus(
+            import.meta.env.DEV
+              ? "Updates are available on the published app."
+              : "The app is getting ready to check for updates.",
+          );
+          return false;
+        }
+        setChecking(true);
+        setError(null);
+        try {
+          await current.update();
+          const installing = current.installing;
+          if (installing)
+            await new Promise<void>((resolve) => {
+              const finish = () => {
+                clearTimeout(timer);
+                installing.removeEventListener("statechange", changed);
+                resolve();
+              };
+              const changed = () => {
+                if (
+                  installing.state === "installed" ||
+                  installing.state === "redundant"
+                )
+                  finish();
+              };
+              const timer = window.setTimeout(finish, 15000);
+              installing.addEventListener("statechange", changed);
+              changed();
+            });
+          if (current.waiting) setAvailable(true);
+          setStatus(
+            current.waiting
+              ? "An update is ready."
+              : current.installing
+                ? "The update is still downloading. Check again shortly."
+                : "You’re up to date.",
+          );
+          return !!current.waiting;
+        } catch {
+          setError("Could not check for updates. Try again when connected.");
+          return false;
+        } finally {
+          setChecking(false);
+        }
+      }),
+    [setAvailable],
+  );
   useEffect(() => {
     const foreground = () => {
       if (!document.hidden && navigator.onLine) void check();

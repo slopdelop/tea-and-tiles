@@ -1,1 +1,15 @@
-{ "indexes": [], "fieldOverrides": [] }
+{
+  "indexes": [],
+  "fieldOverrides": [
+    { "collectionGroup": "games", "fieldPath": "board", "indexes": [] },
+    { "collectionGroup": "games", "fieldPath": "history", "indexes": [] },
+    { "collectionGroup": "games", "fieldPath": "lastMove", "indexes": [] },
+    {
+      "collectionGroup": "games",
+      "fieldPath": "finalScoreAdjustments",
+      "indexes": []
+    },
+    { "collectionGroup": "racks", "fieldPath": "tiles", "indexes": [] },
+    { "collectionGroup": "private", "fieldPath": "bag", "indexes": [] }
+  ]
+}

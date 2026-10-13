@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useId,
   useLayoutEffect,
@@ -7,6 +8,7 @@ import {
   useState,
   type ReactNode,
   type CSSProperties,
+  type PointerEvent,
 } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -16,7 +18,6 @@ import {
   useReducedMotion,
 } from "motion/react";
 import {
-  premiumAt,
   previewMove,
   RuleError,
   type Command,
@@ -24,9 +25,11 @@ import {
   type Slot,
   type WinCondition,
   type MoveRecord,
+  type Board,
 } from "../shared/engine";
 import { useGameSession } from "./firebase";
-import { useTileDrag } from "./components/useTileDrag";
+import { useTileDrag, type DragTile } from "./components/useTileDrag";
+import { BOARD_CELLS, BoardCell } from "./components/BoardCell";
 import {
   useRecallAnimation,
   type RecallSource,
@@ -236,12 +239,13 @@ const gameModes: Record<WinCondition, { title: string; description: string }> =
       description: "A shared countdown, at your pace.",
     },
   };
-const premiumNames = {
-  TW: "Triple word",
-  DW: "Double word",
-  TL: "Triple letter",
-  DL: "Double letter",
-};
+const EMPTY_PLACEMENTS: Placement[] = [];
+const EMPTY_IDS: string[] = [];
+const EMPTY_BOARD: Board = {};
+const EMPTY_DRAFT_CELLS = new Map<
+  string,
+  { placement: Placement; tile: DragTile | null }
+>();
 const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
 const other = (slot: Slot): Slot => (slot === "mom" ? "aunt" : "mom");
 const newId = () => crypto.randomUUID();
@@ -941,11 +945,17 @@ export default function App() {
   } | null>(null);
   const draftKey = game && slot ? `tea-tiles-draft:${game.id}:${slot}` : "";
   const rackOrderKey = draftKey ? `${draftKey}:rack-order` : "";
-  const orderedIds = rackOrder.key === rackOrderKey ? rackOrder.ids : [];
+  const orderedIds = rackOrder.key === rackOrderKey ? rackOrder.ids : EMPTY_IDS;
   const placements =
-    game?.status === "active" && draft.key === draftKey ? draft.placements : [];
+    game?.status === "active" && draft.key === draftKey
+      ? draft.placements
+      : EMPTY_PLACEMENTS;
+  const rackById = useMemo(
+    () => new Map(rack.map((tile) => [tile.id, tile])),
+    [rack],
+  );
   const draftWordMembers = useMemo(
-    () => draftWordCells(game?.board ?? {}, placements),
+    () => draftWordCells(game?.board ?? EMPTY_BOARD, placements),
     [game?.board, placements],
   );
   const draftPulseKey = `${game?.id}:${game?.revision}:${placements.map((p) => `${p.tileId}:${p.row}:${p.col}`).join("|")}`;
@@ -1056,6 +1066,22 @@ export default function App() {
       } else place(tileId, target.row, target.col, previous?.letter);
     },
   });
+
+  // Stable cell handlers read the latest committed actions. Memoized cells
+  // must not retain an earlier rack, selection or turn in an event closure.
+  const boardActions = useRef({ tapSquare, startDrag });
+  useLayoutEffect(() => {
+    boardActions.current = { tapSquare, startDrag };
+  });
+  const tapBoardCell = useCallback((row: number, col: number) => {
+    boardActions.current.tapSquare(row, col);
+  }, []);
+  const startBoardDrag = useCallback(
+    (event: PointerEvent<HTMLElement>, tile: DragTile) => {
+      boardActions.current.startDrag(event, tile);
+    },
+    [],
+  );
 
   const draftPulsePaused = !!drag || !!settling || recallAnimation.active;
   const syncedDraftPulseKey = useRef("");
@@ -2070,33 +2096,44 @@ export default function App() {
     ids.splice(index < 0 ? ids.length : index, 0, tileId);
     setRackOrder({ key: rackOrderKey, ids });
   }
-  let preview: ReturnType<typeof previewMove> | null = null,
-    previewError = "",
-    draftErrorCode = "";
-  if (game && placements.length) {
-    try {
-      preview = previewMove(game, rack, placements);
-    } catch (error) {
-      previewError =
-        error instanceof Error ? error.message : "Keep building your word.";
-      if (
-        error instanceof RuleError &&
-        ["line", "gap", "center", "connection", "word"].includes(error.code)
-      ) {
-        draftErrorCode = error.code;
+  const { preview, previewError, draftErrorCode } = useMemo(() => {
+    let preview: ReturnType<typeof previewMove> | null = null;
+    let previewError = "";
+    let draftErrorCode = "";
+    if (game?.board && placements.length) {
+      try {
+        preview = previewMove({ board: game.board }, rack, placements);
+      } catch (error) {
+        previewError =
+          error instanceof Error ? error.message : "Keep building your word.";
+        if (
+          error instanceof RuleError &&
+          ["line", "gap", "center", "connection", "word"].includes(error.code)
+        ) {
+          draftErrorCode = error.code;
+        }
       }
     }
-  }
-  const orderedRack = [...rack].sort((a, b) => {
-    const ai = orderedIds.indexOf(a.id),
-      bi = orderedIds.indexOf(b.id);
-    return (
-      (ai < 0 ? 100 + rack.indexOf(a) : ai) -
-      (bi < 0 ? 100 + rack.indexOf(b) : bi)
-    );
-  });
-  const visibleRack = orderedRack.filter(
-    (tile) => !placements.some((placement) => placement.tileId === tile.id),
+    return { preview, previewError, draftErrorCode };
+  }, [game?.board, rack, placements]);
+  const orderedRack = useMemo(
+    () =>
+      [...rack].sort((a, b) => {
+        const ai = orderedIds.indexOf(a.id);
+        const bi = orderedIds.indexOf(b.id);
+        return (
+          (ai < 0 ? 100 + rack.indexOf(a) : ai) -
+          (bi < 0 ? 100 + rack.indexOf(b) : bi)
+        );
+      }),
+    [rack, orderedIds],
+  );
+  const visibleRack = useMemo(
+    () =>
+      orderedRack.filter(
+        (tile) => !placements.some((placement) => placement.tileId === tile.id),
+      ),
+    [orderedRack, placements],
   );
   // Reserve the returning tile's space once at pickup. Entering and leaving the
   // rack then keeps the tray and its logical drop positions stationary.
@@ -2464,10 +2501,14 @@ export default function App() {
         : current,
     );
   };
-  const lastCells = new Set(
-    latest?.kind === "play"
-      ? latest.placements.map((p) => `${p.row},${p.col}`)
-      : [],
+  const lastCells = useMemo(
+    () =>
+      new Set(
+        latest?.kind === "play"
+          ? latest.placements.map((p) => `${p.row},${p.col}`)
+          : [],
+      ),
+    [latest],
   );
   const notice = sharedActionsPaused ? "" : message || session.error;
   const finishedOnBoard = !!debugFinishedBoard || game?.status === "finished";
@@ -2477,6 +2518,40 @@ export default function App() {
       ? resultSeenGame === debugFinishedBoard.id
       : resultSeenGame === game?.id);
   const boardGame = debugFinishedBoard || game;
+  const displayBoard = debugBoardMove?.board ?? boardGame?.board ?? EMPTY_BOARD;
+  const hideDraft = !!debugBoardMove || !!debugFinishedBoard;
+  const draftCells = useMemo(() => {
+    if (hideDraft) return EMPTY_DRAFT_CELLS;
+    return new Map(
+      placements.map((placement) => {
+        const rackTile = rackById.get(placement.tileId);
+        return [
+          `${placement.row},${placement.col}`,
+          {
+            placement,
+            tile: rackTile
+              ? {
+                  ...rackTile,
+                  letter: placement.letter || rackTile.letter,
+                }
+              : null,
+          },
+        ];
+      }),
+    );
+  }, [hideDraft, placements, rackById]);
+  const arrivalPlacements =
+    debugBoardMove?.move.placements ?? latest?.placements;
+  const arrivalIndices = useMemo(
+    () =>
+      new Map(
+        arrivalPlacements?.map((placement, index) => [
+          `${placement.row},${placement.col}`,
+          index,
+        ]),
+      ),
+    [arrivalPlacements],
+  );
   const status =
     pending || busy
       ? "Saving your move…"
@@ -2873,45 +2948,18 @@ export default function App() {
                         !!drag || !!settling || recallAnimation.active
                       }
                     >
-                      {Array.from({ length: 225 }, (_, index) => {
-                        const row = Math.floor(index / 15),
-                          col = index % 15,
-                          key = `${row},${col}`;
-                        const committed = debugBoardMove
-                            ? debugBoardMove.board[key]
-                            : boardGame!.board[key],
-                          tentative =
-                            !debugBoardMove && !debugFinishedBoard
-                              ? placements.find(
-                                  (p) => p.row === row && p.col === col,
-                                )
-                              : undefined,
-                          rackTile =
-                            tentative &&
-                            rack.find((t) => t.id === tentative.tileId);
-                        const tile =
-                          committed ||
-                          (rackTile
-                            ? {
-                                ...rackTile,
-                                letter: tentative?.letter || rackTile.letter,
-                              }
-                            : null);
-                        const premium = premiumAt(row, col),
-                          isLatest = debugBoardMove
-                            ? debugBoardMove.move.placements.some(
-                                (p) => p.row === row && p.col === col,
-                              )
-                            : lastCells.has(key),
-                          isFresh = isLatest && freshMove === latest?.id,
-                          isFading = isFresh && fadingMove === latest?.id,
-                          isDraftWord = draftWordMembers.has(key);
-                        const arrivalIndex =
-                          (
-                            debugBoardMove?.move || latest
-                          )?.placements.findIndex(
-                            (p) => p.row === row && p.col === col,
-                          ) ?? -1;
+                      {BOARD_CELLS.map(({ row, col, key, premium }) => {
+                        const committed = displayBoard[key];
+                        const draftCell = draftCells.get(key);
+                        const tentative = !!draftCell;
+                        const tile = committed || draftCell?.tile || null;
+                        const isLatest = debugBoardMove
+                          ? arrivalIndices.has(key)
+                          : lastCells.has(key);
+                        const isFresh = isLatest && freshMove === latest?.id;
+                        const isFading = isFresh && fadingMove === latest?.id;
+                        const isDraftWord = draftWordMembers.has(key);
+                        const arrivalIndex = arrivalIndices.get(key) ?? -1;
                         const arriving =
                           arrivalIndex >= 0 &&
                           !!committed &&
@@ -2922,42 +2970,32 @@ export default function App() {
                           drag?.target?.kind === "board" &&
                           drag.target.row === row &&
                           drag.target.col === col;
-                        const label = tile
-                          ? `${tile.letter}, ${tile.value} points${tentative ? ", tentative" : ""}`
-                          : row === 7 && col === 7
-                            ? "Centre star, double word"
-                            : premium
-                              ? premiumNames[premium]
-                              : "Empty";
                         return (
-                          <button
+                          <BoardCell
                             key={key}
-                            data-testid={`board-cell-${row}-${col}`}
-                            data-drop-row={row}
-                            data-drop-col={col}
-                            data-draft-word={isDraftWord || undefined}
-                            className={`square ${premium?.toLowerCase() || ""} ${openingBoard && !tile && row === 7 && col === 7 ? "opening-centre" : ""} ${tentative ? "has-tentative" : ""} ${committed ? "has-committed" : ""} ${selected === tentative?.tileId && tentative ? "selected-square" : ""} ${isLatest && committed ? "latest-square" : ""} ${isFading && committed ? "fresh-play-square" : ""} ${landing ? "drag-over-square" : ""}`}
-                            data-latest-play={
-                              isLatest && committed
-                                ? isFresh
-                                  ? "fresh"
-                                  : "settled"
-                                : undefined
+                            row={row}
+                            col={col}
+                            premium={premium}
+                            tile={tile}
+                            committed={!!committed}
+                            tentative={tentative}
+                            openingCentre={
+                              openingBoard && !tile && row === 7 && col === 7
                             }
-                            data-highlight-phase={
-                              isLatest && committed
-                                ? isFading
-                                  ? "fading"
-                                  : isFresh
-                                    ? "held"
-                                    : "settled"
-                                : undefined
+                            selected={!!tile && selected === tile.id}
+                            selectedSquare={
+                              tentative &&
+                              selected === draftCell.placement.tileId
                             }
-                            aria-label={`Row ${row + 1}, column ${col + 1}: ${label}`}
-                            aria-invalid={
-                              tentative && draftErrorCode ? true : undefined
+                            latest={isLatest}
+                            fresh={isFresh}
+                            fading={isFading}
+                            draftWord={isDraftWord}
+                            draftPulseKey={
+                              isDraftWord ? draftPulseKey : undefined
                             }
-                            aria-describedby={
+                            invalid={tentative && !!draftErrorCode}
+                            describedBy={
                               tentative && draftErrorCode
                                 ? "draft-arrangement-error"
                                 : openingBoard &&
@@ -2967,75 +3005,20 @@ export default function App() {
                                   ? "first-word-hint"
                                   : undefined
                             }
-                            onClick={() => tapSquare(row, col)}
-                            disabled={!canEdit || !!committed}
-                          >
-                            {tile ? (
-                              <motion.span
-                                className={`tile board-tile ${arriving ? "arriving-play-tile" : ""} ${tentative ? "tentative" : ""} ${isDraftWord ? "draft-word-tile" : ""} ${tentative && draftErrorCode ? "invalid-arrangement" : ""} ${tentative && canEdit ? "draggable-tile" : ""} ${drag?.tile.id === tile.id ? "drag-source" : ""} ${settling?.tile.id === tile.id ? "settling-target" : ""} ${isLatest && committed ? "latest-play-tile" : ""} ${isFresh && committed ? "held-play-tile" : ""} ${isFading && committed ? "fresh-play-tile" : ""}`}
-                                style={
-                                  arriving
-                                    ? ({
-                                        "--arrival-delay": `${Math.min(300, arrivalIndex * 45)}ms`,
-                                      } as CSSProperties)
-                                    : undefined
-                                }
-                                key={tile.id}
-                                onPointerDown={
-                                  tentative
-                                    ? (event) => startDrag(event, tile)
-                                    : undefined
-                                }
-                                onDragStart={(event) => event.preventDefault()}
-                                initial={
-                                  tentative && settling?.tile.id !== tile.id
-                                    ? { scale: 0.86, y: -5 }
-                                    : false
-                                }
-                                animate={{
-                                  scale: 1,
-                                  y: selected === tile.id ? -3 : 0,
-                                }}
-                                whileHover={
-                                  tentative && canEdit && finePointer && !drag
-                                    ? {
-                                        boxShadow:
-                                          "inset 0 0 0 2px var(--tile-hover, #7a8b63), 0 3px 5px #514d3529",
-                                      }
-                                    : undefined
-                                }
-                                transition={{
-                                  type: "spring",
-                                  stiffness: 450,
-                                  damping: 23,
-                                }}
-                              >
-                                {isDraftWord && (
-                                  <span
-                                    key={draftPulseKey}
-                                    className="draft-word-pulse"
-                                    data-testid="draft-word-pulse"
-                                    aria-hidden="true"
-                                  />
-                                )}
-                                <TileLetter letter={tile.letter} />
-                                <small>{tile.value}</small>
-                                {tile.value === 0 && (
-                                  <i className="blank-mark" />
-                                )}
-                              </motion.span>
-                            ) : row === 7 && col === 7 ? (
-                              <svg
-                                className="centre-star"
-                                viewBox="0 0 24 24"
-                                aria-hidden="true"
-                              >
-                                <path d="m12 2.5 2.9 5.9 6.5.9-4.7 4.6 1.1 6.5-5.8-3.1-5.8 3.1 1.1-6.5-4.7-4.6 6.5-.9Z" />
-                              </svg>
-                            ) : premium ? (
-                              <span className="premium-label">{premium}</span>
-                            ) : null}
-                          </button>
+                            arriving={arriving}
+                            arrivalIndex={arriving ? arrivalIndex : -1}
+                            landing={!!landing}
+                            dragSource={!!tile && drag?.tile.id === tile.id}
+                            settlingTarget={
+                              !!tile && settling?.tile.id === tile.id
+                            }
+                            canEdit={canEdit}
+                            hoverEnabled={
+                              tentative && canEdit && finePointer && !drag
+                            }
+                            onTap={tapBoardCell}
+                            onStartDrag={startBoardDrag}
+                          />
                         );
                       })}
                     </div>
@@ -3078,7 +3061,8 @@ export default function App() {
                         </motion.div>
                       )}
                     {(debugExchange === "notice" ||
-                      (animatedMove && latest?.kind === "exchange")) && (
+                      (animatedMove === latest?.id &&
+                        latest?.kind === "exchange")) && (
                       <motion.div
                         key={debugExchange ? "debug-exchange" : animatedMove}
                         className="floating-points"
@@ -3111,7 +3095,7 @@ export default function App() {
                         </div>
                       </motion.div>
                     )}
-                    {animatedMove && latest?.kind === "play" && (
+                    {animatedMove === latest?.id && latest?.kind === "play" && (
                       <motion.div
                         key={animatedMove}
                         className="floating-points"

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { initializeApp } from "firebase/app";
 import { firestoreTransport } from "./firestoreTransport";
 import { usePlayerPresence } from "./hooks/usePlayerPresence";
+import { createTimedGameSync } from "./hooks/timedGameSync";
 import {
   initializeAppCheck,
   ReCaptchaEnterpriseProvider,
@@ -24,6 +25,8 @@ import {
   doc,
   collection,
   onSnapshot,
+  query,
+  where,
 } from "firebase/firestore";
 import {
   getFunctions,
@@ -135,8 +138,14 @@ export function useGameSession() {
     [dictionaryReady, setDictionaryReady] = useState(false),
     [dictionaryError, setDictionaryError] = useState<string | null>(null),
     [newGameRequests, setNewGameRequests] = useState<NewGameRequest[]>([]),
+    [newGameRequestsForGame, setNewGameRequestsForGame] = useState<
+      string | null
+    >(null),
     [newGameRequestsReady, setNewGameRequestsReady] = useState(false),
     [endGameRequests, setEndGameRequests] = useState<EndGameRequest[]>([]),
+    [endGameRequestsForGame, setEndGameRequestsForGame] = useState<
+      string | null
+    >(null),
     [endGameRequestsReady, setEndGameRequestsReady] = useState(false),
     [endGameRequestsError, setEndGameRequestsError] = useState<string | null>(
       null,
@@ -336,12 +345,16 @@ export function useGameSession() {
   }, [slot]);
   useEffect(() => {
     setEndGameRequests([]);
+    setEndGameRequestsForGame(null);
     setEndGameRequestsReady(false);
     setEndGameRequestsError(null);
-    if (!slot) return;
+    if (!slot || !game?.id) return;
     let knownRequests = false;
     return onSnapshot(
-      collection(db, "pairs", "family", "endGameRequests"),
+      query(
+        collection(db, "pairs", "family", "endGameRequests"),
+        where("gameId", "==", game.id),
+      ),
       { includeMetadataChanges: true },
       (snapshot) => {
         setEndGameRequests(
@@ -350,6 +363,7 @@ export function useGameSession() {
           ),
         );
         knownRequests ||= !snapshot.metadata.fromCache;
+        setEndGameRequestsForGame(game.id);
         setEndGameRequestsReady(knownRequests);
         setEndGameRequestsError(null);
       },
@@ -360,15 +374,19 @@ export function useGameSession() {
         );
       },
     );
-  }, [slot]);
+  }, [slot, game?.id]);
   useEffect(() => {
     setNewGameRequests([]);
+    setNewGameRequestsForGame(null);
     setNewGameRequestsReady(false);
     setNewGameRequestsError(null);
-    if (!slot) return;
+    if (!slot || !game?.id) return;
     let knownRequests = false;
     return onSnapshot(
-      collection(db, "pairs", "family", "gameRequests"),
+      query(
+        collection(db, "pairs", "family", "gameRequests"),
+        where("gameId", "==", game.id),
+      ),
       { includeMetadataChanges: true },
       (snapshot) => {
         setNewGameRequests(
@@ -377,6 +395,7 @@ export function useGameSession() {
           ),
         );
         knownRequests ||= !snapshot.metadata.fromCache;
+        setNewGameRequestsForGame(game.id);
         setNewGameRequestsReady(knownRequests);
         setNewGameRequestsError(null);
       },
@@ -387,7 +406,7 @@ export function useGameSession() {
         );
       },
     );
-  }, [slot]);
+  }, [slot, game?.id]);
   useEffect(() => {
     setHouseWords([]);
     setWordRequests([]);
@@ -655,55 +674,22 @@ export function useGameSession() {
       !game.deadlineAt
     )
       return;
-    const gameId = game.id,
-      deadline = game.deadlineAt;
-    let stopped = false,
-      inFlight = false,
-      retryDelay = 1000;
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    const schedule = (delay: number) => {
-      clearTimeout(timeout);
-      if (!stopped) timeout = setTimeout(check, delay);
-    };
-    const check = async () => {
-      if (stopped || inFlight || !navigator.onLine) return;
-      inFlight = true;
-      const started = Date.now();
-      try {
-        const result = await finishTimedGame(gameId);
-        if (stopped) return;
-        const offset = result.serverNow - (started + Date.now()) / 2;
-        setTimedClock({ gameId, offset });
-        retryDelay = 1000;
-        if (result.status === "active") {
-          // Server time, not the device clock, determines expiry. A minimum
-          // retry delay avoids a hot loop if a request reaches it just early.
-          schedule(Math.max(1000, deadline - (Date.now() + offset) + 50));
-        }
-      } catch {
-        // Expiration is idempotent. Recover quietly after a lost reply or
-        // temporary disconnect; the game listener remains authoritative.
-        if (!stopped && !sharedPauseRef.current) {
-          schedule(retryDelay);
-          retryDelay = Math.min(retryDelay * 2, 30000);
-        }
-      } finally {
-        inFlight = false;
-      }
-    };
-    const resume = () => {
-      if (document.visibilityState === "hidden") return;
-      retryDelay = 1000;
-      clearTimeout(timeout);
-      void check();
-    };
-    void check();
+    const gameId = game.id;
+    const sync = createTimedGameSync({
+      deadlineAt: game.deadlineAt,
+      request: () => finishTimedGame(gameId),
+      online: () => navigator.onLine,
+      visible: () => document.visibilityState !== "hidden",
+      paused: () => !!sharedPauseRef.current,
+      onClock: (offset) => setTimedClock({ gameId, offset }),
+    });
+    const resume = sync.resume;
+    sync.start();
     document.addEventListener("visibilitychange", resume);
     window.addEventListener("focus", resume);
     window.addEventListener("pageshow", resume);
     return () => {
-      stopped = true;
-      clearTimeout(timeout);
+      sync.dispose();
       document.removeEventListener("visibilitychange", resume);
       window.removeEventListener("focus", resume);
       window.removeEventListener("pageshow", resume);
@@ -730,12 +716,14 @@ export function useGameSession() {
     requestWord,
     respondToWord,
     newGameRequests,
-    newGameRequestsReady,
+    newGameRequestsReady:
+      newGameRequestsReady && newGameRequestsForGame === game?.id,
     newGameRequestsError,
     requestNewGame,
     respondToNewGame,
     endGameRequests,
-    endGameRequestsReady,
+    endGameRequestsReady:
+      endGameRequestsReady && endGameRequestsForGame === game?.id,
     endGameRequestsError,
     requestEndGame,
     respondToEndGame,

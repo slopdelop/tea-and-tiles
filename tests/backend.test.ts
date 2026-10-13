@@ -1,4 +1,12 @@
-import { beforeAll, beforeEach, afterAll, describe, it, expect } from "vitest";
+import {
+  beforeAll,
+  beforeEach,
+  afterAll,
+  describe,
+  it,
+  expect,
+  vi,
+} from "vitest";
 import { readFileSync } from "node:fs";
 import { createHash, randomBytes, randomUUID, randomInt } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -24,6 +32,7 @@ import {
 import {
   getFirestore,
   Timestamp as AdminTimestamp,
+  Transaction,
 } from "firebase-admin/firestore";
 import {
   createGame,
@@ -150,6 +159,27 @@ const command = (kind: Command["kind"] = "pass", revision = 0): Command => ({
   expectedRevision: revision,
   kind,
 });
+async function captureTransactionReads<T>(action: () => Promise<T>) {
+  const single = vi.spyOn(Transaction.prototype, "get");
+  const batch = vi.spyOn(Transaction.prototype, "getAll");
+  try {
+    const result = await action();
+    const paths = [...single.mock.calls, ...batch.mock.calls].flatMap((args) =>
+      args.flatMap((value) =>
+        value &&
+        typeof value === "object" &&
+        "path" in value &&
+        typeof value.path === "string"
+          ? [value.path]
+          : [],
+      ),
+    );
+    return { result, paths };
+  } finally {
+    single.mockRestore();
+    batch.mockRestore();
+  }
+}
 
 describe.skipIf(!enabled)(
   "authoritative backend and Firestore privacy (emulators)",
@@ -1227,6 +1257,12 @@ describe.skipIf(!enabled)(
     it("finishes after six passes and creates exactly one rematch on retry", async () => {
       const db = getFirestore();
       const ref = db.doc(`games/${game.id}`);
+      const privateRefs = [
+        ref.collection("racks").doc("mom"),
+        ref.collection("racks").doc("aunt"),
+        ref.collection("private").doc("state"),
+      ];
+      const privateBefore = await db.getAll(...privateRefs);
       const deductions = {
         mom: game.racks.mom.reduce((sum, tile) => sum + tile.value, 0),
         aunt: game.racks.aunt.reduce((sum, tile) => sum + tile.value, 0),
@@ -1278,6 +1314,13 @@ describe.skipIf(!enabled)(
         },
       });
       expect(finished.history).toHaveLength(6);
+      const privateAfter = await db.getAll(...privateRefs);
+      privateAfter.forEach((snapshot, index) => {
+        expect(snapshot.data()).toEqual(privateBefore[index].data());
+        expect(
+          snapshot.updateTime!.isEqual(privateBefore[index].updateTime!),
+        ).toBe(true);
+      });
       const replay = await submit(uids.aunt, finalPass);
       expect(replay.revision).toBe(6);
       await expect(submit(uids.mom, command("pass", 6))).rejects.toMatchObject({
@@ -1296,6 +1339,24 @@ describe.skipIf(!enabled)(
         (await getFirestore().doc(`games/${result.gameId}`).get()).data()
           ?.rackCounts,
       ).toEqual({ mom: 7, aunt: 7 });
+      const freshRef = db.doc(`games/${result.gameId}`);
+      const freshPrivate = await db.getAll(
+        freshRef.collection("racks").doc("mom"),
+        freshRef.collection("racks").doc("aunt"),
+        freshRef.collection("private").doc("state"),
+      );
+      expect(freshPrivate.map((snapshot) => snapshot.exists)).toEqual([
+        true,
+        true,
+        true,
+      ]);
+      expect(
+        freshPrivate.map((snapshot, index) =>
+          index === 2
+            ? snapshot.data()!.bag.length
+            : snapshot.data()!.tiles.length,
+        ),
+      ).toEqual([7, 7, 86]);
       expect(await submit(uids.aunt, finalPass)).toEqual(replay);
       expect((await ref.get()).data()).toEqual(finished);
     }, 15000);
@@ -1313,6 +1374,11 @@ describe.skipIf(!enabled)(
       game.bag = [];
       game.scores = { mom: 20, aunt: 25 };
       await writeGame(game);
+      const untouchedRefs = [
+        db.doc(`games/${game.id}/racks/aunt`),
+        db.doc(`games/${game.id}/private/state`),
+      ];
+      const untouchedBefore = await db.getAll(...untouchedRefs);
       const lastTile = {
         ...command("play"),
         placements: [{ tileId: game.racks.mom[0].id, row: 7, col: 8 }],
@@ -1320,6 +1386,13 @@ describe.skipIf(!enabled)(
       const before = Date.now();
       const result = await submit(uids.mom, lastTile);
       expect(result).toMatchObject({ revision: 1, score: 2 });
+      const untouchedAfter = await db.getAll(...untouchedRefs);
+      untouchedAfter.forEach((snapshot, index) => {
+        expect(snapshot.data()).toEqual(untouchedBefore[index].data());
+        expect(
+          snapshot.updateTime!.isEqual(untouchedBefore[index].updateTime!),
+        ).toBe(true);
+      });
       const ref = db.doc(`games/${game.id}`);
       const finished = (await ref.get()).data()!;
       expect(finished).toMatchObject({
@@ -1413,6 +1486,28 @@ describe.skipIf(!enabled)(
         words: [],
       });
       expect(updated.history[0]).not.toHaveProperty("placements");
+    });
+    it("declines a word without reading or changing its house-dictionary entry", async () => {
+      const db = getFirestore();
+      const request = await requestHouseWord(uids.mom, { word: "MW" });
+      const { result, paths } = await captureTransactionReads(() =>
+        respondCurrentHouseWord(uids.aunt, {
+          requestId: request.id,
+          approve: false,
+        }),
+      );
+      expect(result).toEqual({ status: "declined" });
+      expect(paths).not.toContain("pairs/family/houseWords/MW");
+      expect(paths).toHaveLength(4);
+      expect((await db.doc("pairs/family/houseWords/MW").get()).exists).toBe(
+        false,
+      );
+      expect(
+        await respondCurrentHouseWord(uids.aunt, {
+          requestId: request.id,
+          approve: false,
+        }),
+      ).toEqual(result);
     });
     it("validates house proposals and requires the other player to decide", async () => {
       await expect(
@@ -2063,6 +2158,40 @@ describe.skipIf(!enabled)(
         game.id,
       );
     });
+    it("refills a played rack and advances the bag without rewriting the opponent's private rack", async () => {
+      const db = getFirestore();
+      await prepareHouseWordRack("CAT");
+      const opponentRef = db.doc(`games/${game.id}/racks/aunt`);
+      const opponentBefore = await opponentRef.get();
+      const used = game.racks.mom.slice(0, 3);
+      const play: Command = {
+        ...command("play"),
+        placements: used.map((tile, index) => ({
+          tileId: tile.id,
+          row: 7,
+          col: 7 + index,
+        })),
+      };
+      const result = await submit(uids.mom, play);
+      expect(result).toMatchObject({ revision: 1, score: 10 });
+      expect(
+        (await db.doc(`games/${game.id}/racks/mom`).get()).data()!.tiles,
+      ).toEqual([...game.racks.mom.slice(3), ...game.bag.slice(0, 3)]);
+      expect(
+        (await db.doc(`games/${game.id}/private/state`).get()).data()!.bag,
+      ).toEqual(game.bag.slice(3));
+      const opponentAfter = await opponentRef.get();
+      expect(opponentAfter.data()).toEqual(opponentBefore.data());
+      expect(
+        opponentAfter.updateTime!.isEqual(opponentBefore.updateTime!),
+      ).toBe(true);
+      expect(await submit(uids.mom, play)).toEqual(result);
+      expect((await db.doc(`games/${game.id}`).get()).data()).toMatchObject({
+        history: [{ id: play.id, words: ["CAT"], score: 10 }],
+        rackCounts: { mom: 7, aunt: 7 },
+        bagCount: game.bag.length - 3,
+      });
+    });
     it("allows own-turn pass and exchange without a board word and rejects only the documented bag and turn restrictions", async () => {
       const db = getFirestore();
       const pass = command();
@@ -2074,6 +2203,8 @@ describe.skipIf(!enabled)(
         (await db.doc(`games/${game.id}/racks/mom`).get()).data()?.tiles,
       ).toEqual(game.racks.mom);
       const exchangedId = game.racks.aunt[0].id;
+      const momRef = db.doc(`games/${game.id}/racks/mom`);
+      const momBeforeExchange = await momRef.get();
       const exchange = { ...command("exchange", 1), tileIds: [exchangedId] };
       expect(await submit(uids.aunt, exchange)).toMatchObject({
         revision: 2,
@@ -2094,6 +2225,20 @@ describe.skipIf(!enabled)(
       expect(rack.some((tile: { id: string }) => tile.id === exchangedId)).toBe(
         false,
       );
+      const momAfterExchange = await momRef.get();
+      expect(momAfterExchange.data()).toEqual(momBeforeExchange.data());
+      expect(
+        momAfterExchange.updateTime!.isEqual(momBeforeExchange.updateTime!),
+      ).toBe(true);
+      const bagAfterExchange = (
+        await db.doc(`games/${game.id}/private/state`).get()
+      ).data()!.bag;
+      expect(bagAfterExchange).toHaveLength(game.bag.length);
+      expect(
+        bagAfterExchange.some(
+          (tile: { id: string }) => tile.id === exchangedId,
+        ),
+      ).toBe(true);
       expect((await db.doc(`games/${game.id}`).get()).data()).toMatchObject({
         turn: "mom",
         board: {},
@@ -2336,6 +2481,54 @@ describe.skipIf(!enabled)(
         );
       }
     }, 15000);
+    it("reads the membership pair only once in restart, timer and end-game transactions", async () => {
+      const db = getFirestore();
+      game = createGame(game.id, () => 0.5, "timed");
+      await writeGame(game);
+      const checkPairRead = async <T>(action: () => Promise<T>) => {
+        const { result, paths } = await captureTransactionReads(action);
+        expect(paths.filter((path) => path === "pairs/family")).toHaveLength(1);
+        return result;
+      };
+      const proposal = await checkPairRead(() =>
+        requestGameRestart(uids.mom, {
+          id: randomUUID(),
+          gameId: game.id,
+        }),
+      );
+      expect(
+        await checkPairRead(() =>
+          respondGameRestart(uids.aunt, {
+            requestId: proposal.id,
+            approve: false,
+          }),
+        ),
+      ).toEqual({ status: "declined" });
+      expect(
+        await checkPairRead(() =>
+          finishGameTimer(uids.mom, {
+            gameId: game.id,
+          }),
+        ),
+      ).toMatchObject({ status: "active", revision: 0 });
+      game.bag = [];
+      await writeGame(game);
+      const ending = await checkPairRead(() =>
+        requestGameEnd(uids.mom, {
+          id: randomUUID(),
+          gameId: game.id,
+          expectedRevision: 0,
+        }),
+      );
+      expect(
+        await checkPairRead(() =>
+          respondGameEnd(uids.aunt, {
+            requestId: ending.id,
+            approve: false,
+          }),
+        ),
+      ).toMatchObject({ status: "declined", gameId: game.id, revision: 0 });
+    });
     it("uses server time for an early timer call and leaves every game field untouched", async () => {
       const db = getFirestore();
       game = createGame(game.id, () => 0.5, "timed");

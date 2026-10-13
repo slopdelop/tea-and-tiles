@@ -172,6 +172,89 @@ async function joinRita(
     throw error;
   }
 }
+
+test("request listeners exclude older games and retain current-game decisions", async ({
+  page,
+}) => {
+  const batch = db.batch();
+  for (const collection of ["gameRequests", "endGameRequests"]) {
+    for (let index = 0; index < 12; index++) {
+      const id = `old-${collection}-${index}`;
+      batch.set(db.doc(`pairs/family/${collection}/${id}`), {
+        id,
+        gameId: "older-game",
+        requestedBy: "aunt",
+        status: "pending",
+        requestedAt: Date.now() - 10_000,
+        expectedRevision: 0,
+      });
+    }
+  }
+  const requestId = "current-restart-proposal";
+  batch.set(db.doc(`pairs/family/gameRequests/${requestId}`), {
+    id: requestId,
+    gameId: "ui-table",
+    requestedBy: "aunt",
+    status: "pending",
+    requestedAt: Date.now(),
+    winCondition: "classic",
+  });
+  batch.update(db.doc("pairs/family"), {
+    pendingNewGameRequestId: requestId,
+  });
+  await batch.commit();
+
+  const queries: { collection: string; gameId?: string }[] = [];
+  page.on("request", (request) => {
+    if (!request.url().includes("/Listen/channel")) return;
+    for (const [key, value] of new URLSearchParams(request.postData() || "")) {
+      if (!key.endsWith("___data__")) continue;
+      try {
+        const target = JSON.parse(value).addTarget?.query?.structuredQuery;
+        const collection = target?.from?.[0]?.collectionId;
+        if (collection === "gameRequests" || collection === "endGameRequests") {
+          const filter = target.where?.fieldFilter;
+          queries.push({
+            collection,
+            gameId:
+              filter?.field?.fieldPath === "gameId" && filter?.op === "EQUAL"
+                ? filter.value?.stringValue
+                : undefined,
+          });
+        }
+      } catch {
+        // Listen handshake and acknowledgement frames are not query targets.
+      }
+    }
+  });
+  await enroll(page);
+  await expect(page.getByTestId("incoming-new-game-popup")).toBeVisible();
+  await expect
+    .poll(
+      () =>
+        queries.filter((query) => query.collection === "gameRequests").length,
+    )
+    .toBeGreaterThan(0);
+  await expect
+    .poll(
+      () =>
+        queries.filter((query) => query.collection === "endGameRequests")
+          .length,
+    )
+    .toBeGreaterThan(0);
+  expect(queries.every((query) => query.gameId === "ui-table")).toBe(true);
+  await page.getByTestId("decline-new-game").click();
+  await expect(page.getByTestId("incoming-new-game-popup")).not.toBeVisible();
+  await expect
+    .poll(
+      async () =>
+        (await db.doc(`pairs/family/gameRequests/${requestId}`).get()).data()
+          ?.status,
+    )
+    .toBe("declined");
+  await expect(page.getByTestId("new-game")).toBeEnabled();
+  await expect(page.getByTestId("exchange-tiles")).toBeEnabled();
+});
 async function openTableAction(
   page: Page,
   id: "new-game" | "review-words" | "rematch",
@@ -1366,6 +1449,9 @@ test("latest plays stay strong until the actual turn announcement exits, fade fo
   const played = cell(page, 0, 1).locator(".board-tile");
   await expect(played).toHaveClass(/latest-play-tile/);
   await expect(played).toHaveClass(/held-play-tile/);
+  // The arrival marker intentionally has a faint fill. Inspect the persistent
+  // edge highlight after that short phase, before the turn announcement.
+  await expect(played).not.toHaveClass(/arriving-play-tile/);
   await expect(
     page.getByText("The latest tiles have a green edge.", { exact: true }),
   ).toHaveCount(0);
@@ -7396,7 +7482,7 @@ test("opponent presence follows foreground heartbeats, expiry, extra devices and
       })
       .toBeGreaterThan(momInitial);
     // Start just inside the fresh window. No further snapshot is sent; the
-    // five-second local clock must switch this badge to Away after expiry.
+    // local expiry timeout must switch this badge to Away after expiry.
     await otherRef.update({
       lastSeen: Timestamp.fromMillis(Date.now() - 118_000),
     });
