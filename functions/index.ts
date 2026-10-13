@@ -1,6 +1,12 @@
 import { initializeApp } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 import { onCall, HttpsError } from "firebase-functions/v2/https";
+import { info, warn } from "firebase-functions/logger";
+import {
+  diagnosticsEnabled,
+  validateDiagnosticReport,
+} from "./move-diagnostics.js";
+import { MOVE_DIAGNOSTICS } from "../shared/move-diagnostics.js";
 import { createHash, randomInt, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { WORD_FAILURE_BUCKET } from "./setup-words.js";
@@ -1213,11 +1219,18 @@ export async function submit(
   const command = validateCommand(data);
   const payloadHash = hash(JSON.stringify(command));
   const newGameId = randomUUID();
+  const serverReceivedAt = Date.now();
+  let transactionAttempts = 0;
+  let diagnosticSlot: Slot | undefined;
+  let replayed = false;
   try {
     const outcome = await db.runTransaction<CommandResult | ExpiredSubmission>(
       async (tx) => {
+        transactionAttempts++;
+        replayed = false;
         const binding = await tx.get(db.doc(`bindings/${uid}`));
         const slot = binding.data()?.slot as Slot;
+        diagnosticSlot = slot;
         if (!slots.includes(slot))
           throw new HttpsError(
             "permission-denied",
@@ -1238,6 +1251,7 @@ export async function submit(
           );
         // This check deliberately precedes revision, active-game and turn validation.
         if (recorded.exists) {
+          replayed = true;
           const previous = recorded.data()!;
           if (previous.uid !== uid || previous.payloadHash !== payloadHash)
             throw new HttpsError(
@@ -1406,6 +1420,24 @@ export async function submit(
         "Time is up. This game has finished.",
         { rule: "timed", gameId: outcome.gameId, revision: outcome.revision },
       );
+    if (diagnosticsEnabled())
+      try {
+        info("Tea & Tiles move accepted", {
+          event: "move-accepted",
+          gameId: outcome.gameId,
+          moveId: command.id,
+          revision: outcome.revision,
+          player: diagnosticSlot,
+          kind: command.kind,
+          serverReceivedAt,
+          serverCommittedAt: Date.now(),
+          durationMs: Date.now() - serverReceivedAt,
+          transactionAttempts,
+          replayed,
+        });
+      } catch {
+        /* Logging must never change an accepted command's outcome. */
+      }
     return outcome;
   } catch (error) {
     if (error instanceof HttpsError) throw error;
@@ -1421,7 +1453,61 @@ export async function submit(
   }
 }
 
+/** Diagnostics have their own path: failure never participates in a game command. */
+export async function receiveMoveDiagnostics(
+  uidInput: string | undefined,
+  input: unknown,
+) {
+  const uid = uidRequired(uidInput);
+  if (!diagnosticsEnabled())
+    return { enabled: false, serverNow: Date.now(), accepted: false };
+  const data = object(input);
+  onlyKeys(data, data.action === "clock" ? ["action"] : ["action", "report"]);
+  if (data.action !== "clock" && data.action !== "report")
+    throw new HttpsError("invalid-argument", "Invalid diagnostic action.");
+  const report =
+    data.action === "report" ? validateDiagnosticReport(data.report) : null;
+  const result = await db.runTransaction(async (tx) => {
+    const { slot } = await requireMember(tx, uid);
+    if (!report) return { slot, accepted: false };
+    const day = new Date().toISOString().slice(0, 10);
+    const limitRef = db.doc(`diagnosticLimits/${hash(uid)}`);
+    const [limit, saved] = await tx.getAll(
+      limitRef,
+      db.doc(`games/${report.gameId}`),
+    );
+    if (!saved.exists)
+      throw new HttpsError("not-found", "Unknown diagnostic game.");
+    const ids: string[] =
+      limit.data()?.day === day ? limit.data()?.ids || [] : [];
+    if (ids.includes(report.id) || ids.length >= MOVE_DIAGNOSTICS.dailyReports)
+      return { slot, accepted: false };
+    tx.set(limitRef, { day, ids: [...ids, report.id] });
+    const game = saved.data()!;
+    return {
+      slot,
+      accepted: true,
+      currentRevision: game.revision,
+      currentMoveId: game.lastMove?.id ?? null,
+    };
+  });
+  if (report && result.accepted)
+    warn("Tea & Tiles move delay", {
+      event: "move-delay",
+      player: result.slot,
+      device: hash(uid).slice(0, 16),
+      currentRevision: result.currentRevision,
+      currentMoveId: result.currentMoveId,
+      serverReportAt: Date.now(),
+      report,
+    });
+  return { enabled: true, serverNow: Date.now(), accepted: result.accepted };
+}
+
 const options = callablePolicy();
+export const reportMoveDiagnostics = onCall(options, (request) =>
+  receiveMoveDiagnostics(request.auth?.uid, request.data),
+);
 export const enrollPlayer = onCall(options, (request) =>
   enroll(request.auth?.uid, request.data),
 );

@@ -244,10 +244,10 @@ export function createGame(
     historyComplete: true,
     winCondition,
     turnsPlayed: 0,
+    startedAt: now,
     ...(winCondition === "timed"
       ? {
           durationMinutes,
-          startedAt: now,
           deadlineAt: now + durationMinutes * 60000,
         }
       : {}),

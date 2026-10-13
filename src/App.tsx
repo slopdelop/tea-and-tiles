@@ -588,6 +588,19 @@ export default function App() {
   const session = useGameSession();
   const wordDictionary = useWordDictionary();
   const { game, rack, slot, names, connected, pending } = session;
+  useLayoutEffect(() => {
+    if (!game) return;
+    let second = 0;
+    const first = requestAnimationFrame(() => {
+      second = requestAnimationFrame(() =>
+        session.noteMoveDisplayed?.(game.id, game.revision),
+      );
+    });
+    return () => {
+      cancelAnimationFrame(first);
+      cancelAnimationFrame(second);
+    };
+  }, [game?.id, game?.revision, session.noteMoveDisplayed]);
   const appUpdate = useAppUpdate();
   const screenAwake = useScreenAwake(game?.status === "active" && !!slot);
   const sharedActionsPaused = session.sharedActionsPaused;
@@ -1457,6 +1470,7 @@ export default function App() {
       setAnimatedMove(null);
       if (arrival) setArrivingMove(accepted.id);
       const reveal = setTimeout(() => {
+        session.noteMovePresentation?.("scoring-start", game.id, accepted.id);
         setArrivingMove(null);
         setAnimatedMove(accepted.id);
       }, arrival);
@@ -1531,6 +1545,13 @@ export default function App() {
     !!wordBusy ||
     newGameBusy;
   useEffect(() => {
+    if (drag || selected) {
+      // Starting to arrange tiles acknowledges this turn; never replay its banner.
+      setQueuedTurn(null);
+      setTurnAnnouncement(null);
+      if (freshMove) setFadingMove(freshMove);
+      return;
+    }
     if (turnAnnouncementBlocked) {
       // Resume the actual notice after interaction, keeping its play highlighted.
       if (turnAnnouncement && !turnAnnouncement.debug)
@@ -1567,6 +1588,7 @@ export default function App() {
         return;
       }
       setTurnAnnouncement(queuedTurn);
+      session.noteMovePresentation?.("turn-banner", game.id, game.lastMove?.id);
       setQueuedTurn(null);
     };
     timer = setTimeout(present, delay);
@@ -1574,7 +1596,14 @@ export default function App() {
       clearTimeout(timer);
       clearTimeout(yieldCelebration);
     };
-  }, [queuedTurn, turnAnnouncementBlocked, game?.id, game?.turn, game?.status]);
+  }, [
+    queuedTurn,
+    turnAnnouncementBlocked,
+    selected,
+    game?.id,
+    game?.turn,
+    game?.status,
+  ]);
   useEffect(() => {
     const visible =
       turnAnnouncement &&
@@ -2200,23 +2229,36 @@ export default function App() {
     if (!game) return;
     const previous = observedUpdateGame.current;
     observedUpdateGame.current = game.id;
-    if (previous && previous !== game.id) setUpdateBoundary(game.id);
+    if (
+      (previous && previous !== game.id) ||
+      (!previous && game.revision === 0)
+    )
+      setUpdateBoundary(game.id);
   }, [game?.id]);
   useEffect(() => {
     if (
       !updateBoundary ||
-      attemptedUpdateBoundary.current === updateBoundary ||
+      !appUpdate.ready ||
+      appUpdate.checking ||
+      appUpdate.applying ||
+      attemptedUpdateBoundary.current ===
+        `${updateBoundary}:${appUpdate.available}` ||
       !updateSafety.current.safe ||
       updateSafety.current.id !== updateBoundary
     )
       return;
-    attemptedUpdateBoundary.current = updateBoundary;
+    // A worker found/downloading after the first check gets a fresh safe attempt.
+    attemptedUpdateBoundary.current = `${updateBoundary}:${appUpdate.available}`;
     void appUpdate.applyAtNewGame(
       () =>
         updateSafety.current.id === updateBoundary && updateSafety.current.safe,
     );
   }, [
     updateBoundary,
+    appUpdate.ready,
+    appUpdate.available,
+    appUpdate.checking,
+    appUpdate.applying,
     game?.id,
     game?.revision,
     dialog,
@@ -3793,7 +3835,7 @@ export default function App() {
                       disabled={!connected || sharedActionsPaused}
                       data-testid="retry-pending"
                     >
-                      Try again
+                      Check my move
                     </button>
                   )}
                   {pauseNotice()}
@@ -3964,8 +4006,8 @@ export default function App() {
             <Modal
               title={
                 debugSubmission?.uncertain || (!busy && !!pending)
-                  ? "We couldn’t confirm your move"
-                  : "Your move hasn’t been confirmed yet"
+                  ? "Your move is taking a little longer"
+                  : "Sending your move"
               }
               testId="slow-submit-popup"
               close={() => {
@@ -3990,7 +4032,7 @@ export default function App() {
                         }
                       }}
                     >
-                      Try again
+                      Check my move
                     </button>
                   )}
                   <button

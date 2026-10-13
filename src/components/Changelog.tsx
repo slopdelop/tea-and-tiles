@@ -1,5 +1,15 @@
 const releases = [
   {
+    version: "1.6.0",
+    items: [
+      "More reliable automatic updates between games, while keeping unfinished moves safe.",
+      "Friendlier messages when sending a move takes longer, with fewer unnecessary popups.",
+      "Game length is included in the final report, with minutes, hours and days as needed.",
+      "Arranging a tile dismisses the turn announcement without replaying it.",
+      "Temporary, limited diagnostics help investigate occasional delayed updates between devices.",
+    ],
+  },
+  {
     version: "1.5.1",
     items: [
       "Drag onto another unplayed tile to replace it and return that tile to your hand.",

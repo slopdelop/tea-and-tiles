@@ -22,8 +22,8 @@ export function SubmissionNotice({
         </span>
         <p>
           {uncertain
-            ? "Your letters are still here. Tap Try again to send your move again."
-            : "We’re waiting to hear from the game. Please wait a moment."}
+            ? "We haven’t heard back from the game server yet. Your letters are safe here. Tap Check my move to find out whether it went through."
+            : "We’re waiting for the game server to reply. Please wait a moment — play will continue once your move is confirmed."}
         </p>
       </div>
     </div>

@@ -15,6 +15,8 @@ const browserClock: SubmissionFeedbackClock = {
   clearTimeout: (timer) => window.clearTimeout(timer as number),
 };
 
+export const SUBMISSION_NOTICE_DELAY_MS = 4000;
+
 /** Notice lifecycle only: this never cancels or changes the pending command. */
 export function createSubmissionFeedback(
   clock: SubmissionFeedbackClock,
@@ -34,7 +36,7 @@ export function createSubmissionFeedback(
     onChange(next);
   };
   return {
-    setCommand(commandId: string | null, delayMs = 1500) {
+    setCommand(commandId: string | null, delayMs = SUBMISSION_NOTICE_DELAY_MS) {
       if (disposed || state.commandId === commandId) return;
       clearTimer();
       publish({ commandId, visible: false });
@@ -61,7 +63,7 @@ export function createSubmissionFeedback(
 /** Opens only for a slow command; clearing its receipt immediately hides it. */
 export function useSubmissionFeedback(
   commandId: string | null,
-  delayMs = 1500,
+  delayMs = SUBMISSION_NOTICE_DELAY_MS,
 ): { visible: boolean; dismiss: () => void } {
   const [state, setState] = useState<FeedbackState>({
     commandId: null,

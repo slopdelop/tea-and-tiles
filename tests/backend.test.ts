@@ -66,6 +66,7 @@ let respondGameRestart: typeof import("../functions/index").respondGameRestart;
 let finishGameTimer: typeof import("../functions/index").finishGameTimer;
 let requestGameEnd: typeof import("../functions/index").requestGameEnd;
 let respondGameEnd: typeof import("../functions/index").respondGameEnd;
+let receiveMoveDiagnostics: typeof import("../functions/index").receiveMoveDiagnostics;
 const codeHash = (code: string) =>
   createHash("sha256").update(code).digest("hex");
 const codeAlphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
@@ -209,6 +210,7 @@ describe.skipIf(!enabled)(
         finishGameTimer,
         requestGameEnd,
         respondGameEnd,
+        receiveMoveDiagnostics,
       } = await import(/* @vite-ignore */ modulePath));
     });
     beforeEach(async () => {
@@ -227,6 +229,87 @@ describe.skipIf(!enabled)(
     });
     afterAll(async () => {
       await env?.cleanup();
+    });
+
+    it("authorizes diagnostic clocks without writes and keeps diagnostic budgets private", async () => {
+      const db = getFirestore();
+      const before = (await db.doc(`games/${game.id}`).get()).data();
+      await expect(
+        receiveMoveDiagnostics(undefined, { action: "clock" }),
+      ).rejects.toMatchObject({ code: "unauthenticated" });
+      await expect(
+        receiveMoveDiagnostics("unbound", { action: "clock" }),
+      ).rejects.toMatchObject({ code: "permission-denied" });
+      expect(
+        await receiveMoveDiagnostics(uids.mom, { action: "clock" }),
+      ).toMatchObject({ enabled: true, accepted: false });
+      expect((await db.collection("diagnosticLimits").get()).size).toBe(0);
+      expect((await db.doc(`games/${game.id}`).get()).data()).toEqual(before);
+      await assertFails(
+        getDoc(
+          doc(
+            env.authenticatedContext(uids.mom).firestore(),
+            "diagnosticLimits/anything",
+          ),
+        ),
+      );
+    });
+    it("deduplicates diagnostic reports and enforces the daily cap across concurrent calls", async () => {
+      const report = {
+        id: "incident-first",
+        reason: "delivery-delay",
+        gameId: game.id,
+        moveId: "move-test",
+        revision: 1,
+        version: "local",
+        browser: "iPad",
+        standalone: true,
+        transport: "xhr",
+        longTaskSupport: false,
+        delayMs: 20000,
+        uncertaintyMs: 100,
+        clockAgeMs: 1000,
+        events: [{ name: "snapshot", ms: 20000, revision: 1 }],
+      };
+      expect(
+        await receiveMoveDiagnostics(uids.mom, { action: "report", report }),
+      ).toMatchObject({ accepted: true });
+      expect(
+        await receiveMoveDiagnostics(uids.mom, { action: "report", report }),
+      ).toMatchObject({ accepted: false });
+      const results = await Promise.all(
+        Array.from({ length: 6 }, (_, index) =>
+          receiveMoveDiagnostics(uids.mom, {
+            action: "report",
+            report: { ...report, id: `incident-${index}` },
+          }),
+        ),
+      );
+      expect(results.filter((result) => result.accepted)).toHaveLength(4);
+      const limits = await getFirestore().collection("diagnosticLimits").get();
+      expect(limits.docs[0].data().ids).toHaveLength(5);
+      await expect(
+        receiveMoveDiagnostics(uids.mom, {
+          action: "report",
+          report: { ...report, passphrase: "secret" },
+        }),
+      ).rejects.toMatchObject({ code: "invalid-argument" });
+    }, 20000);
+    it("stops diagnostic logging remotely without writes when its kill switch is off", async () => {
+      const previous = process.env.TEA_MOVE_DIAGNOSTICS_ENABLED;
+      process.env.TEA_MOVE_DIAGNOSTICS_ENABLED = "false";
+      try {
+        expect(
+          await receiveMoveDiagnostics(uids.mom, { action: "clock" }),
+        ).toMatchObject({ enabled: false });
+        expect(
+          (await getFirestore().collection("diagnosticLimits").get()).size,
+        ).toBe(0);
+      } finally {
+        if (previous === undefined)
+          delete process.env.TEA_MOVE_DIAGNOSTICS_ENABLED;
+        else process.env.TEA_MOVE_DIAGNOSTICS_ENABLED = previous;
+      }
     });
 
     it("signs in the same player on multiple devices while preserving legacy membership and private racks", async () => {

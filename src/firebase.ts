@@ -3,6 +3,12 @@ import { initializeApp } from "firebase/app";
 import { firestoreTransport } from "./firestoreTransport";
 import { usePlayerPresence } from "./hooks/usePlayerPresence";
 import { createTimedGameSync } from "./hooks/timedGameSync";
+import { startBrowserDiagnostics } from "./diagnostics/browserDiagnostics";
+import type {
+  DiagnosticReply,
+  MoveDiagnosticReport,
+  DiagnosticEventName,
+} from "../shared/move-diagnostics";
 import {
   initializeAppCheck,
   ReCaptchaEnterpriseProvider,
@@ -161,6 +167,37 @@ export function useGameSession() {
   const pendingRef = useRef<Command | null>(null),
     busy = useRef(false);
   const confirmedRef = useRef<CommandResult | null>(null);
+  const diagnostics = useRef<ReturnType<typeof startBrowserDiagnostics>>(null);
+  useEffect(() => {
+    if (!uid || !slot) return;
+    const active = startBrowserDiagnostics(
+      `${projectId}:${uid}`,
+      async (input) => {
+        const reply = await httpsCallable<
+          | { action: "clock" }
+          | { action: "report"; report: MoveDiagnosticReport },
+          DiagnosticReply
+        >(functions, "reportMoveDiagnostics", { timeout: 15000 })(input);
+        return reply.data;
+      },
+      JSON.stringify(firestoreTransport(emulator, navigator)),
+    );
+    diagnostics.current = active;
+    return () => {
+      active?.dispose();
+      diagnostics.current = null;
+    };
+  }, [uid, slot]);
+  const noteMoveDisplayed = useCallback(
+    (gameId: string, revision: number) =>
+      diagnostics.current?.recorder.displayed(gameId, revision),
+    [],
+  );
+  const noteMovePresentation = useCallback(
+    (name: DiagnosticEventName, gameId: string, moveId?: string) =>
+      diagnostics.current?.recorder.record(name, { gameId, moveId }),
+    [],
+  );
   const presenceStatus = usePlayerPresence(db, uid, slot, !!game, connected);
   const [sharedPause, setSharedPause] = useState<SharedActionPause | null>(
     null,
@@ -306,7 +343,12 @@ export function useGameSession() {
         if (!pair) return;
         setNames(pair.names || { mom: "Elizabeth", aunt: "Rita" });
         if (pair.activeGameId !== activeId) {
+          if (activeId)
+            diagnostics.current?.recorder.record("listener-stop", {
+              gameId: activeId,
+            });
           activeId = pair.activeGameId;
+          diagnostics.current?.recorder.listenerStart(pair.activeGameId);
           gameStop();
           rackStop();
           setGame(null);
@@ -316,6 +358,10 @@ export function useGameSession() {
             { includeMetadataChanges: true },
             (s) => {
               if (s.exists()) {
+                diagnostics.current?.recorder.snapshot(
+                  s.data() as PublicGame,
+                  s.metadata.fromCache,
+                );
                 setGame(s.data() as PublicGame);
                 if (!s.metadata.fromCache) {
                   setConnected(navigator.onLine);
@@ -324,13 +370,22 @@ export function useGameSession() {
               }
             },
             (e) => {
+              diagnostics.current?.recorder.record("listener-error", {
+                gameId: pair.activeGameId,
+                detail: e.code,
+              });
               setError(message(e));
               setConnected(false);
             },
           );
           rackStop = onSnapshot(
             doc(db, "games", pair.activeGameId, "racks", slot),
-            (s) => setRack(s.data()?.tiles || []),
+            (s) => {
+              diagnostics.current?.recorder.record("rack-snapshot", {
+                gameId: pair.activeGameId,
+              });
+              setRack(s.data()?.tiles || []);
+            },
             (e) => setError(message(e)),
           );
         }
@@ -338,6 +393,10 @@ export function useGameSession() {
       (e) => setError(message(e)),
     );
     return () => {
+      if (activeId)
+        diagnostics.current?.recorder.record("listener-stop", {
+          gameId: activeId,
+        });
       pairStop();
       gameStop();
       rackStop();
@@ -459,6 +518,11 @@ export function useGameSession() {
     return onSnapshot(
       doc(db, "games", pending.gameId, "commands", pending.id),
       (s) => {
+        diagnostics.current?.recorder.record("receipt", {
+          gameId: pending.gameId,
+          moveId: pending.id,
+          detail: s.exists() ? "confirmed" : "waiting",
+        });
         if (s.exists() && s.data()?.uid === uid) {
           confirmedRef.current = s.data()?.result as CommandResult;
           savePending(null);
@@ -502,6 +566,11 @@ export function useGameSession() {
       if (!navigator.onLine)
         throw new Error("Reconnect before saving your move.");
       savePending(command);
+      diagnostics.current?.recorder.submitStart(
+        command.gameId,
+        command.id,
+        command.expectedRevision,
+      );
       busy.current = true;
       confirmedRef.current = null;
       setError(null);
@@ -511,8 +580,13 @@ export function useGameSession() {
           command,
         );
         savePending(null);
+        diagnostics.current?.recorder.submitEnd(command.id);
         return result;
       } catch (e) {
+        diagnostics.current?.recorder.submitEnd(
+          command.id,
+          (e as { code?: string }).code || "unknown",
+        );
         const confirmed = confirmedRef.current as CommandResult | null;
         if (confirmed?.commandId === command.id) {
           resumeSharedActions();
@@ -529,7 +603,7 @@ export function useGameSession() {
           explainedRejection
             ? null
             : retryable(e)
-              ? "We couldn’t confirm your move. Your letters are still here. Tap Try again to send your move again."
+              ? "Your move is taking a little longer. We haven’t heard back from the game server yet. Your letters are safe here. Tap Check my move to see whether it went through."
               : message(e),
         );
         throw e;
@@ -705,6 +779,8 @@ export function useGameSession() {
     finishTimedGame,
   ]);
   return {
+    noteMoveDisplayed,
+    noteMovePresentation,
     slot,
     names,
     game,

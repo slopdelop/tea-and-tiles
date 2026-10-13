@@ -5,6 +5,7 @@ import { sharePendingCheck } from "./sharedCheck";
 
 export function useAppUpdate() {
   const registration = useRef<ServiceWorkerRegistration | undefined>(undefined);
+  const [ready, setReady] = useState(false);
   const [checking, setChecking] = useState(false);
   const [applying, setApplying] = useState(false);
   const [status, setStatus] = useState("");
@@ -17,6 +18,7 @@ export function useAppUpdate() {
   } = useRegisterSW({
     onRegisteredSW(_url, value) {
       registration.current = value;
+      setReady(!!value);
     },
     onRegisterError() {
       setError("Could not check for updates. Try again when connected.");
@@ -113,6 +115,7 @@ export function useAppUpdate() {
     [check, apply],
   );
   return {
+    ready,
     available,
     checking,
     applying,

@@ -10,7 +10,7 @@ import type { Game, MoveRecord, Slot } from "../../shared/engine";
 import type { WordScore } from "../../shared/scoring";
 import { buildScoreTimeline } from "../scoreTimeline";
 import { CELEBRATION_HOLD_MS } from "../celebrationTiming";
-import { topWordScores } from "./gameSummaryData";
+import { gameDuration, topWordScores } from "./gameSummaryData";
 
 function PremiumBadge({ premium }: { premium: "DL" | "TL" | "DW" | "TW" }) {
   const names = {
@@ -328,7 +328,12 @@ export function ScoreExplanation({
 
 type SummaryGame = Pick<
   Game,
-  "history" | "historyComplete" | "finalScoreAdjustments" | "scores"
+  | "history"
+  | "historyComplete"
+  | "finalScoreAdjustments"
+  | "scores"
+  | "startedAt"
+  | "endedAt"
 >;
 export function GameSummary({
   game,
@@ -338,8 +343,14 @@ export function GameSummary({
   names: Record<Slot, string>;
 }) {
   const history = game.history ?? [];
+  const duration = gameDuration(game);
   return (
     <section className="game-summary" data-testid="game-summary">
+      {duration && (
+        <p className="history-note" data-testid="game-duration">
+          {duration.label}: <strong>{duration.text}</strong>
+        </p>
+      )}
       <h3 className="help-section-title">Best words at the table</h3>
       <div className="top-word-columns">
         {(["mom", "aunt"] as const).map((player) => {

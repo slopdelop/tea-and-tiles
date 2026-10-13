@@ -1,5 +1,45 @@
 import type { HistoryRecord } from "../../shared/scoring";
-import type { Slot } from "../../shared/engine";
+import type { Game, Slot } from "../../shared/engine";
+
+export function gameDuration(
+  game: Pick<Game, "startedAt" | "endedAt" | "history" | "historyComplete">,
+) {
+  const startedAt =
+    game.startedAt ??
+    (game.historyComplete
+      ? game.history?.reduce<number | undefined>(
+          (first, move) =>
+            first === undefined ? move.at : Math.min(first, move.at),
+          undefined,
+        )
+      : undefined);
+  if (
+    startedAt === undefined ||
+    game.endedAt === undefined ||
+    !Number.isFinite(startedAt) ||
+    !Number.isFinite(game.endedAt) ||
+    game.endedAt < startedAt
+  )
+    return null;
+  const minutes = Math.floor((game.endedAt - startedAt) / 60_000);
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor((minutes % 1440) / 60);
+  const remainingMinutes = minutes % 60;
+  const parts = [
+    [days, "day"],
+    [hours, "hour"],
+    [remainingMinutes, "minute"],
+  ] as const;
+  return {
+    label:
+      game.startedAt === undefined ? "Time since first turn" : "Game length",
+    text:
+      parts
+        .filter(([count]) => count > 0)
+        .map(([count, unit]) => `${count} ${unit}${count === 1 ? "" : "s"}`)
+        .join(" ") || "Less than a minute",
+  };
+}
 
 export function topWordScores(history: HistoryRecord[], player: Slot) {
   return history

@@ -48,7 +48,7 @@ describe("delayed submission feedback", () => {
   it("never opens for a fast acknowledgement", () => {
     const s = setup();
     s.feedback.setCommand("play-a");
-    s.advance(1499);
+    s.advance(3999);
     expect(s.state().visible).toBe(false);
     s.feedback.setCommand(null);
     s.advance(5000);
@@ -59,7 +59,7 @@ describe("delayed submission feedback", () => {
   it("opens for a slow acknowledgement and closes as soon as the command clears", () => {
     const s = setup();
     s.feedback.setCommand("play-a");
-    s.advance(1500);
+    s.advance(4000);
     expect(s.state()).toEqual({ commandId: "play-a", visible: true });
     s.feedback.setCommand(null);
     expect(s.state()).toEqual({ commandId: null, visible: false });
@@ -72,7 +72,7 @@ describe("delayed submission feedback", () => {
     s.feedback.setCommand("play-b");
     s.callbacks[0]();
     expect(s.state()).toEqual({ commandId: "play-b", visible: false });
-    s.advance(1499);
+    s.advance(3999);
     expect(s.state().visible).toBe(false);
     s.advance(1);
     expect(s.state()).toEqual({ commandId: "play-b", visible: true });
@@ -81,13 +81,13 @@ describe("delayed submission feedback", () => {
   it("dismisses the notice without reopening it for the same pending command", () => {
     const s = setup();
     s.feedback.setCommand("play-a");
-    s.advance(1500);
+    s.advance(4000);
     s.feedback.dismiss();
     s.feedback.setCommand("play-a");
     s.advance(5000);
     expect(s.state()).toEqual({ commandId: "play-a", visible: false });
     s.feedback.setCommand("play-b");
-    s.advance(1500);
+    s.advance(4000);
     expect(s.state()).toEqual({ commandId: "play-b", visible: true });
   });
 

@@ -1,6 +1,42 @@
 import { describe, expect, it } from "vitest";
-import { topWordScores } from "../src/components/gameSummaryData";
+import { gameDuration, topWordScores } from "../src/components/gameSummaryData";
 import type { HistoryRecord } from "../shared/scoring";
+
+describe("game length", () => {
+  it.each([
+    [0, "Less than a minute"],
+    [45, "45 minutes"],
+    [60, "1 hour"],
+    [125, "2 hours 5 minutes"],
+    [1440, "1 day"],
+    [3061, "2 days 3 hours 1 minute"],
+  ])("formats %i minutes without empty units", (minutes, text) => {
+    expect(
+      gameDuration({ startedAt: 1000, endedAt: 1000 + minutes * 60_000 }),
+    ).toEqual({ label: "Game length", text });
+  });
+  it("uses an honest first-turn label for older games without a start timestamp", () => {
+    expect(
+      gameDuration({
+        endedAt: 121000,
+        historyComplete: true,
+        history: [{ at: 1000 } as HistoryRecord],
+      }),
+    ).toEqual({ label: "Time since first turn", text: "2 minutes" });
+    expect(
+      gameDuration({
+        endedAt: 121000,
+        historyComplete: false,
+        history: [{ at: 1000 } as HistoryRecord],
+      }),
+    ).toBeNull();
+  });
+  it("does not invent a duration when end/start timestamps are unavailable or invalid", () => {
+    expect(gameDuration({ startedAt: 10 })).toBeNull();
+    expect(gameDuration({ startedAt: 10, endedAt: 5 })).toBeNull();
+    expect(gameDuration({ startedAt: NaN, endedAt: 15 })).toBeNull();
+  });
+});
 
 function play(
   player: HistoryRecord["player"],

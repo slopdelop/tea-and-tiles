@@ -6480,7 +6480,9 @@ test("two players get one nonblocking turn announcement per real change, with qu
         "aunt",
       ]);
       const shown = (await turns(target))[1];
-      expect(shown.endedAt! - shown.at).toBeGreaterThan(1900);
+      expect(shown.endedAt! - shown.at).toBeGreaterThan(
+        target === page ? 0 : 1900,
+      );
       expect(shown.endedAt! - shown.at).toBeLessThan(3300);
     }
     await db
@@ -6990,7 +6992,7 @@ test("local slow and uncertain submissions preserve the live draft and reduced m
   await page.getByTestId("local-debug-tools").click();
   await page.getByTestId("debug-scene-uncertain-submit").click();
   await expect(notice).toBeVisible();
-  await expect(notice).toContainText("Your letters are still here");
+  await expect(notice).toContainText("Your letters are safe here");
   await expect(notice.getByTestId("submission-try-again")).toBeEnabled();
   await page.waitForTimeout(1600);
   await expect(notice).toBeVisible();
@@ -7057,7 +7059,7 @@ test("an uncertain real submission keeps its pending command and draft after dis
   await page.getByTestId("play-word").click();
   const notice = page.getByTestId("slow-submit-popup");
   await expect(notice).toBeVisible();
-  await expect(notice).toContainText("Your letters are still here");
+  await expect(notice).toContainText("Your letters are safe here");
   await notice.getByTestId("submission-try-again").click();
   await expect.poll(() => submittedIds.length).toBe(2);
   await expect(notice.getByTestId("submission-try-again")).toBeVisible();
@@ -7697,6 +7699,93 @@ test("an available update sits beside New game, is keyboard reachable and stays 
   await expect(page.getByTestId("settling-ghost")).toHaveCount(0);
   await expect(page.getByTestId("apply-update")).toBeEnabled();
   expect(await authoritativeState()).toEqual(before);
+});
+
+test("a new game retries auto update after late registration and late update availability", async ({
+  page,
+}) => {
+  await db
+    .doc("games/ui-table")
+    .update({ revision: 0, board: {}, lastMove: null });
+  expectedBoardKeys = [];
+  await page.route("**/src/hooks/useAppUpdate.ts*", async (route) => {
+    const original = await route.fetch();
+    const reactUrl = (await original.text()).match(
+      /from "([^"]*\/react\.js[^"]*)"/,
+    )?.[1];
+    if (!reactUrl)
+      throw new Error(
+        "Missing transformed React import in updater test fixture",
+      );
+    return route.fulfill({
+      contentType: "application/javascript",
+      body: `import React from ${JSON.stringify(reactUrl)}; const {useState}=React;
+      export function useAppUpdate() {
+        const [ready,setReady]=useState(false), [available,setAvailable]=useState(false);
+        window.mockUpdateReady=setReady; window.mockUpdateAvailable=setAvailable;
+        return {ready,available,checking:false,applying:false,error:null,status:'',check:async()=>available,apply:async()=>true,
+          applyAtNewGame:async(safe)=>{window.boundaryChecks=(window.boundaryChecks||0)+1;
+            if(available&&safe()) window.boundaryApplies=(window.boundaryApplies||0)+1; return available&&safe();}};
+      }`,
+    });
+  });
+  await enroll(page);
+  expect(await page.evaluate(() => (window as any).boundaryChecks || 0)).toBe(
+    0,
+  );
+  await page.evaluate(() => (window as any).mockUpdateReady(true));
+  await expect
+    .poll(() => page.evaluate(() => (window as any).boundaryChecks))
+    .toBe(1);
+  await rack(page, "A").tap();
+  await cell(page, 0, 1).tap();
+  await page.evaluate(() => (window as any).mockUpdateAvailable(true));
+  await expect(page.getByTestId("apply-update")).toBeVisible();
+  expect(await page.evaluate(() => (window as any).boundaryApplies || 0)).toBe(
+    0,
+  );
+  await page.getByTestId("recall-tiles").click();
+  await expect
+    .poll(() => page.evaluate(() => (window as any).boundaryApplies))
+    .toBe(1);
+  await db.doc("games/ui-table").update({ revision: 1 });
+  expectedRevision = 1;
+  await page.waitForTimeout(200);
+  expect(await page.evaluate(() => (window as any).boundaryApplies)).toBe(1);
+});
+
+test("game duration appears in the local ending report without changing the real game", async ({
+  page,
+}) => {
+  await enroll(page);
+  const before = await authoritativeState();
+  await page.getByTestId("help-settings").click();
+  await page.getByTestId("debug-enabled").check();
+  await page.getByRole("button", { name: "Close dialog" }).click();
+  await page.getByTestId("local-debug-tools").click();
+  await page.getByTestId("debug-scene-game-over").click();
+  await expect(page.getByTestId("game-duration")).toHaveText(
+    "Game length: 25 minutes",
+  );
+  expect(await authoritativeState()).toEqual(before);
+});
+
+test("arranging a tile dismisses the current turn banner without replaying it after release", async ({
+  page,
+  context,
+}) => {
+  await enroll(page);
+  await db.doc("games/ui-table").update({ turn: "aunt" });
+  await expect(page.getByTestId("turn-announcement")).toBeVisible();
+  const session = await context.newCDPSession(page);
+  await touch(session, "touchStart", await point(rack(page, "A")));
+  await touch(session, "touchMove", await point(cell(page, 0, 1)));
+  await expect(page.getByTestId("drag-ghost")).toBeVisible();
+  await expect(page.getByTestId("turn-announcement")).toHaveCount(0);
+  await touch(session, "touchEnd");
+  await expect(cell(page, 0, 1)).toHaveClass(/has-tentative/);
+  await page.waitForTimeout(1000);
+  await expect(page.getByTestId("turn-announcement")).toHaveCount(0);
 });
 
 test("a brighter private draft breathes across complete words and crossings without moving board squares", async ({
@@ -8368,6 +8457,83 @@ test("both players see only the exchange count before the next turn", async ({
     expect(saved.lastMove.tileIds).toBeUndefined();
     expectedRevision = 1;
     expectedCommandCount = 1;
+  } finally {
+    await auntContext.close();
+  }
+});
+
+test("temporary diagnostics capture a delayed opponent move through the real endpoint without slowing the sender", async ({
+  page,
+  browser,
+}) => {
+  await db.doc("games/ui-table").update({ turn: "aunt" });
+  const uploads: any[] = [];
+  page.on("request", (request) => {
+    if (
+      request.url().endsWith("/reportMoveDiagnostics") &&
+      request.method() === "POST"
+    ) {
+      const input = request.postDataJSON()?.data;
+      if (input?.action === "report") uploads.push(input.report);
+    }
+  });
+  await page.route("**/src/firebase.ts*", async (route) => {
+    const response = await route.fetch();
+    const original = await response.text();
+    const modified = original.replace(
+      /\(s\)\s*=>\s*\{(\s*if\s*\(s\.exists\(\)\))/,
+      `async (s) => {
+      if(s.exists() && s.data().lastMove?.player === 'aunt' && s.data().revision === 1) await new Promise(resolve=>setTimeout(resolve,18000));$1`,
+    );
+    if (modified === original)
+      throw new Error("Missing game snapshot hook in diagnostic test fixture");
+    await route.fulfill({ response, body: modified });
+  });
+  await enroll(page);
+  const { aunt, auntContext } = await joinRita(browser);
+  try {
+    const otherTiles = (await db.doc("games/ui-table/racks/aunt").get()).data()!
+      .tiles as Tile[];
+    for (const [letter, col] of [
+      ["A", 1],
+      ["N", 2],
+    ] as const) {
+      await aunt
+        .getByTestId(
+          `rack-tile-${otherTiles.find((tile) => tile.letter === letter)!.id}`,
+        )
+        .tap();
+      await cell(aunt, 0, col).tap();
+    }
+    const started = Date.now();
+    await aunt.getByTestId("play-word").click();
+    await expect(cell(aunt, 0, 1)).toContainText("A");
+    expect(Date.now() - started).toBeLessThan(8000);
+    await expect.poll(() => uploads.length, { timeout: 35000 }).toBe(1);
+    const report = uploads[0];
+    expect(report.reason).toBe("delivery-delay");
+    expect(report.delayMs - report.uncertaintyMs).toBeGreaterThan(15000);
+    expect(report.events.map((event: any) => event.name)).toEqual(
+      expect.arrayContaining([
+        "clock",
+        "snapshot",
+        "board-frame",
+        "scoring-start",
+      ]),
+    );
+    expect(report.browser).toBeTruthy();
+    expect(report.buildTime).toBeTruthy();
+    expect(JSON.stringify(report)).not.toMatch(/passphrase|setupCode|apiKey/);
+    await expect
+      .poll(async () =>
+        (await db.collection("diagnosticLimits").get()).docs.some((doc) =>
+          doc.data().ids.includes(report.id),
+        ),
+      )
+      .toBe(true);
+    await expect(cell(page, 0, 1)).toContainText("A");
+    expectedRevision = expectedCommandCount = 1;
+    expectedBoardKeys = ["0,0", "0,1", "0,2"];
   } finally {
     await auntContext.close();
   }

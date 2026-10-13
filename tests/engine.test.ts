@@ -10,6 +10,18 @@ import {
   type PlacedTile,
   DISTRIBUTION,
 } from "../shared/engine";
+it("records the server creation time for duration in every game mode", () => {
+  for (const mode of [
+    "classic",
+    "timed",
+    "turn-limit",
+    "target-score",
+  ] as const) {
+    expect(createGame("duration", () => 0.5, mode, 25, 123456).startedAt).toBe(
+      123456,
+    );
+  }
+});
 const tile = (letter: string, id = letter): Tile => ({
   id,
   letter,
