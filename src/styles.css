@@ -516,8 +516,8 @@
   :is(
     .selected-tile,
     .rack.drag-over-rack,
-    .square.drag-over-square,
-    .drag-ghost.valid-drop
+    .square[data-drag-landing="true"],
+    .drag-ghost[data-drop-valid="true"]
   ) {
   outline-color: var(--tile-hover);
 }
@@ -2260,7 +2260,7 @@ button {
     inset 0 -2px 0 #c5d0a8,
     0 4px 9px #4e583122;
 }
-.drag-ghost.valid-drop {
+.drag-ghost[data-drop-valid="true"] {
   outline: 1px solid #879b6f;
   outline-offset: 1px;
 }
@@ -2268,7 +2268,7 @@ button {
 .drag-anchor {
   will-change: transform;
 }
-.square.drag-over-square {
+.square[data-drag-landing="true"] {
   outline: 2px solid #748b5e;
   outline-offset: 2px;
   filter: brightness(1.045);
@@ -5301,4 +5301,98 @@ html.tablet-page-fitted,
     scale: 1;
     opacity: 1;
   }
+}
+
+/* Local-only opt-in performance tools. The meter updates its own component. */
+.debug-frame-meter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  align-items: center;
+  padding: 10px 14px;
+  margin: 12px 0;
+  border: 1px solid var(--tile-border, #b6bfc7);
+  border-radius: 9px;
+  background: var(--surface, #faf8ef);
+  color: var(--ink, #23384c);
+  font:
+    13px/1.5 "DM Sans",
+    sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+.debug-frame-meter strong {
+  font-size: 20px;
+}
+.debug-frame-meter.floating {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  z-index: 110;
+  max-width: min(370px, calc(100vw - 24px));
+  box-shadow: 0 3px 14px #0002;
+}
+.modal:has(.drag-performance-lab) {
+  max-width: 1000px;
+}
+.drag-performance-lab {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(0, 2fr);
+  column-gap: 20px;
+  align-items: start;
+}
+.drag-performance-lab > p {
+  grid-column: 1;
+  grid-row: 1;
+}
+.drag-performance-lab > .debug-buttons {
+  grid-column: 1;
+  grid-row: 2;
+  grid-template-columns: 1fr;
+}
+.drag-performance-lab > .debug-frame-meter {
+  grid-column: 1;
+  grid-row: 3;
+}
+.drag-performance-lab > .board-frame {
+  grid-column: 2;
+  grid-row: 1 / 4;
+}
+.drag-performance-lab > .rack {
+  grid-column: 2;
+  grid-row: 4;
+}
+.drag-performance-lab > small {
+  grid-column: 2;
+  grid-row: 5;
+}
+@media (max-width: 700px) {
+  .drag-performance-lab {
+    display: block;
+  }
+}
+.drag-performance-lab .board-frame {
+  width: min(100%, calc(100dvh - 230px));
+  margin: 12px auto;
+}
+.drag-performance-lab .board {
+  touch-action: none;
+}
+.drag-performance-lab .rack {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  min-height: 58px;
+}
+.drag-performance-lab .rack-slot {
+  width: 44px;
+  height: 49px;
+}
+.drag-performance-lab .rack-tile {
+  width: 44px;
+  height: 49px;
+}
+.drag-performance-lab > small {
+  display: block;
+  text-align: center;
+  margin: 10px 0;
 }

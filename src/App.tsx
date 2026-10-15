@@ -55,6 +55,8 @@ import { EndingPresentation } from "./components/EndingPresentation";
 import { debugEndingGame, debugMove, debugMoveBoard } from "./debugScenarios";
 import { SubmissionNotice } from "./components/SubmissionNotice";
 import { useSubmissionFeedback } from "./hooks/useSubmissionFeedback";
+import { DebugFrameMeter } from "./components/DebugFrameMeter";
+import { DragPerformanceLab } from "./components/DragPerformanceLab";
 import "./styles.css";
 
 type Dialog =
@@ -72,6 +74,7 @@ type Dialog =
   | "incoming-end-game"
   | "debug-result"
   | "debug-tools"
+  | "debug-performance"
   | "debug-end-request"
   | null;
 type Draft = { key: string; revision: number; placements: Placement[] };
@@ -780,6 +783,7 @@ export default function App() {
       import.meta.env.DEV && localStorage.getItem("tea-tiles-debug") === "true",
   );
   const [debugWinner, setDebugWinner] = useState<Slot | "tie">("mom");
+  const [debugFrameMeter, setDebugFrameMeter] = useState(false);
   const [debugExchange, setDebugExchange] = useState<
     "notice" | "handoff" | null
   >(null);
@@ -871,6 +875,7 @@ export default function App() {
     if (import.meta.env.DEV)
       localStorage.setItem("tea-tiles-debug", String(debugEnabled));
     if (!debugEnabled) {
+      setDebugFrameMeter(false);
       setDebugStarter(null);
       setDebugUpdating(false);
       setDebugExchange(null);
@@ -1040,8 +1045,7 @@ export default function App() {
   const lockedBoardScroll = useRef<{ left: number; top: number } | null>(null);
   const {
     drag,
-    dragX,
-    dragY,
+    dragGhostRef,
     settling,
     finishSettling,
     rackPreview,
@@ -2773,6 +2777,12 @@ export default function App() {
 
   return (
     <MotionConfig reducedMotion="user">
+      {import.meta.env.DEV &&
+        debugEnabled &&
+        debugFrameMeter &&
+        dialog !== "debug-performance" && (
+          <DebugFrameMeter floating close={() => setDebugFrameMeter(false)} />
+        )}
       <div
         className={`app-shell ${game && slot ? "active-game" : ""} ${compactTable ? "compact-table" : ""} ${tabletFits ? "tablet-viewport-fit" : ""} ${zoomed ? "board-focus" : ""}`}
       >
@@ -3032,10 +3042,6 @@ export default function App() {
                           (debugBoardMove
                             ? debugScoringReady !== debugBoardMove.move.id
                             : arrivingMove === latest?.id);
-                        const landing =
-                          drag?.target?.kind === "board" &&
-                          drag.target.row === row &&
-                          drag.target.col === col;
                         return (
                           <BoardCell
                             key={key}
@@ -3073,7 +3079,6 @@ export default function App() {
                             }
                             arriving={arriving}
                             arrivalIndex={arriving ? arrivalIndex : -1}
-                            landing={!!landing}
                             dragSource={!!tile && drag?.tile.id === tile.id}
                             settlingTarget={
                               !!tile && settling?.tile.id === tile.id
@@ -3253,7 +3258,7 @@ export default function App() {
                 </div>
                 <div className="hand-row">
                   <div
-                    className={`rack ${!visibleRack.length ? "empty-rack" : ""} ${drag?.target?.kind === "rack" ? "drag-over-rack" : ""}`}
+                    className={`rack ${!visibleRack.length ? "empty-rack" : ""} ${rackPreview ? "drag-over-rack" : ""}`}
                     aria-label="Your tile rack"
                     data-testid="tile-rack"
                     data-drop-rack="true"
@@ -3910,22 +3915,21 @@ export default function App() {
         )}
 
         {drag && (
-          <motion.div
-            className={`tile drag-ghost ${drag.target ? "valid-drop" : "invalid-drop"}`}
+          <div
+            ref={dragGhostRef}
+            className="tile drag-ghost"
             data-testid="drag-ghost"
             aria-hidden="true"
             style={{
               left: 0,
               top: 0,
-              x: dragX,
-              y: dragY,
               width: drag.width,
               height: drag.height,
             }}
           >
             <TileLetter letter={drag.tile.letter} />
             <small>{drag.tile.value}</small>
-          </motion.div>
+          </div>
         )}
         {settling && (
           <motion.div
@@ -4217,6 +4221,33 @@ export default function App() {
                 Sample scenes on your board. These previews do not save moves or
                 send requests.
               </p>
+              <h3>Drag performance</h3>
+              <p>
+                Frame timing helps spot stutters on an iPad. A fast computer can
+                hide them; compare with browser CPU throttling too. The meter
+                samples animation frames, not finger-to-screen delay.
+              </p>
+              <div className="debug-buttons">
+                <button
+                  className="secondary-button"
+                  data-testid="debug-show-frame-meter"
+                  onClick={() => {
+                    setDebugFrameMeter((v) => !v);
+                    setDialog(null);
+                  }}
+                >
+                  {debugFrameMeter
+                    ? "Hide frame meter"
+                    : "Show frame meter on game"}
+                </button>
+                <button
+                  className="secondary-button"
+                  data-testid="debug-drag-performance"
+                  onClick={() => setDialog("debug-performance")}
+                >
+                  Crowded-board drag test
+                </button>
+              </div>
               <h3>Scoring over the board</h3>
               <div className="debug-buttons">
                 {(
@@ -4405,6 +4436,17 @@ export default function App() {
               </button>
             </Modal>
           )}
+          {import.meta.env.DEV &&
+            debugEnabled &&
+            dialog === "debug-performance" && (
+              <Modal
+                title="Drag performance"
+                testId="debug-performance-popup"
+                close={() => setDialog(null)}
+              >
+                <DragPerformanceLab />
+              </Modal>
+            )}
           {import.meta.env.DEV &&
             debugEnabled &&
             dialog === "debug-end-request" && (

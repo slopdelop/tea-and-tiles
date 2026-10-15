@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { initializeApp } from "firebase/app";
-import { firestoreTransport } from "./firestoreTransport";
+import {
+  describeFirestoreTransport,
+  firestoreTransport,
+} from "./firestoreTransport";
 import { usePlayerPresence } from "./hooks/usePlayerPresence";
 import { createTimedGameSync } from "./hooks/timedGameSync";
 import { startBrowserDiagnostics } from "./diagnostics/browserDiagnostics";
@@ -180,7 +183,7 @@ export function useGameSession() {
         >(functions, "reportMoveDiagnostics", { timeout: 15000 })(input);
         return reply.data;
       },
-      JSON.stringify(firestoreTransport(emulator, navigator)),
+      describeFirestoreTransport(firestoreTransport(emulator, navigator)),
     );
     diagnostics.current = active;
     return () => {

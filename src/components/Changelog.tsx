@@ -1,5 +1,13 @@
 const releases = [
   {
+    version: "1.6.1",
+    items: [
+      "Less repeated screen rendering while dragging tiles, with more direct touch tracking.",
+      "Refined drag cancellation while preserving tile placement and rack rearrangement.",
+      "Adjusted the iPad and Safari receiving connection to help investigate occasional delayed turns.",
+    ],
+  },
+  {
     version: "1.6.0",
     items: [
       "More reliable automatic updates between games, while keeping unfinished moves safe.",

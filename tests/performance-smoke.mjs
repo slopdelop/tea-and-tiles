@@ -196,6 +196,29 @@ const presenceBuild = await bundle(
   ],
 );
 
+// Expose the actual hook's settling origin so animation scheduling cannot hide
+// cancellation/release races. No game/session or network is involved.
+const dragProbeBuild = await bundle(
+  `
+  import React,{useState} from 'react';import{createRoot}from'react-dom/client';
+  import{useTileDrag}from'./src/components/useTileDrag';import'./src/styles.css';
+  const tile={id:'probe-tile',letter:'A',value:1};window.probeDrops=[];
+  function Probe(){const[context,setContext]=useState(0);const[enabled,setEnabled]=useState(true);
+    window.probeContext=()=>setContext(v=>v+1);window.probeDisable=()=>setEnabled(false);
+    const{drag,dragGhostRef,settling,start}=useTileDrag({enabled,contextKey:String(context),
+      canDrop:(_id,t)=>t.kind==='rack'||t.col!==2,onDrop:(_id,t)=>window.probeDrops.push(t)});
+    return <div><div data-drop-rack style={{position:'fixed',left:80,top:300,display:'flex'}}>
+      <div data-rack-tile-id={tile.id}><button data-testid="probe-source" className="tile draggable-tile" style={{width:50,height:50}}
+       onPointerDown={e=>{window.probePointerId=e.pointerId;start(e,tile)}}>A</button></div></div>
+      {[0,1,2].map(col=><button key={col} data-testid={'probe-cell-'+col} data-drop-row="0" data-drop-col={col}
+        style={{position:'fixed',left:100+col*80,top:150,width:50,height:50}} />)}
+      {drag&&<div ref={dragGhostRef} data-testid="drag-ghost" className="tile drag-ghost" style={{left:0,top:0,width:drag.width,height:drag.height}}>A</div>}
+      <output data-testid="probe-settling">{JSON.stringify(settling)}</output></div>
+  }createRoot(document.getElementById('root')).render(<Probe/>);
+`,
+  [],
+);
+
 async function openFixture(
   browser,
   build,
@@ -263,6 +286,19 @@ try {
     "T",
   );
   await page.waitForTimeout(400);
+  // Exercise the production highlight/scale CSS on a dense board while input
+  // crosses targets. This fixture isolates paint cost from score-dialog timers.
+  const activeHighlights = await page.evaluate(() => {
+    for (const key of ["4-4", "4-5", "4-6", "4-7"]) {
+      const cell = document.querySelector(`[data-testid="board-cell-${key}"]`);
+      cell.classList.add("latest-square", "fresh-play-square");
+      cell
+        .querySelector(".board-tile")
+        .classList.add("latest-play-tile", "fresh-play-tile");
+    }
+    return document.querySelectorAll(".fresh-play-square").length;
+  });
+  assert.equal(activeHighlights, 4);
   await page.evaluate(() => {
     window.auditStats = { appRenders: 0, boardCells: 0, previewCalls: 0 };
   });
@@ -272,6 +308,17 @@ try {
     source.y + source.height / 2,
   );
   await page.mouse.down();
+  const pickup = await page.getByTestId("board-cell-6-0").boundingBox();
+  await page.mouse.move(
+    pickup.x + pickup.width / 2,
+    pickup.y + pickup.height / 2,
+  );
+  await page.getByTestId("drag-ghost").waitFor();
+  await page.waitForTimeout(100);
+  await page.evaluate(() => {
+    window.auditStats = { appRenders: 0, boardCells: 0, previewCalls: 0 };
+  });
+  let visitedTargets = 0;
   for (let row = 6; row <= 9; row++)
     for (let col = 0; col < 15; col++) {
       const rect = await page
@@ -279,17 +326,47 @@ try {
         .boundingBox();
       await page.mouse.move(rect.x + rect.width / 2, rect.y + rect.height / 2);
       await page.waitForTimeout(17);
+      const valid = !fixture.game.board[`${row},${col}`];
+      assert.equal(
+        await page.getByTestId("drag-ghost").getAttribute("data-drop-valid"),
+        String(valid),
+      );
+      assert.equal(
+        await page.locator('[data-drag-landing="true"]').count(),
+        valid ? 1 : 0,
+      );
+      if (valid)
+        assert.equal(
+          await page
+            .getByTestId(`board-cell-${row}-${col}`)
+            .getAttribute("data-drag-landing"),
+          "true",
+        );
+      visitedTargets++;
     }
+  const crossingStats = await page.evaluate(() => window.auditStats);
+  assert.equal(visitedTargets, 60);
+  assert.deepEqual(
+    crossingStats,
+    { appRenders: 0, boardCells: 0, previewCalls: 0 },
+    "Crossing board targets rebuilt React state",
+  );
+  await page.evaluate(() =>
+    window.auditChange({ presenceStatus: { mom: "present", aunt: "away" } }),
+  );
+  await page.waitForTimeout(50);
+  assert.equal(
+    await page.getByTestId("board-cell-9-14").getAttribute("data-drag-landing"),
+    "true",
+    "Unrelated React commit erased landing marker",
+  );
   await page.keyboard.press("Escape");
   await page.mouse.up();
   await page.waitForTimeout(300);
   const dragStats = await page.evaluate(() => window.auditStats);
+  assert.equal(await page.locator('[data-drag-landing="true"]').count(), 0);
   assert(
-    dragStats.appRenders >= 50,
-    "The gesture did not exercise enough target changes",
-  );
-  assert(
-    dragStats.boardCells <= 150,
+    dragStats.boardCells <= 10,
     `Unchanged cells rerendered during drag: ${dragStats.boardCells}`,
   );
   assert.equal(
@@ -331,6 +408,215 @@ try {
     "Tap recall retained a stale selection",
   );
   await page.close();
+
+  // Observe after the drag handler, before the next animation frame. The
+  // active tile must already follow touch input, without rendering the board.
+  const touch = await openFixture(browser, appBuild);
+  await touch.getByTestId("game-board").waitFor();
+  const touchSource = await touch.getByTestId("rack-tile-E-0").boundingBox();
+  const touchTarget = await touch.getByTestId("board-cell-7-10").boundingBox();
+  const cdp = await touch.context().newCDPSession(touch);
+  await touch.evaluate(() => {
+    window.touchPositionErrors = [];
+    window.firstGhostPosition = null;
+    window.lastTouchPoint = null;
+    new MutationObserver(() => {
+      const ghost = document.querySelector('[data-testid="drag-ghost"]');
+      if (!ghost || window.firstGhostPosition || !window.lastTouchPoint) return;
+      const m = new DOMMatrixReadOnly(ghost.style.transform || "none");
+      window.firstGhostPosition = {
+        error: Math.hypot(
+          m.m41 + parseFloat(ghost.style.width) / 2 - window.lastTouchPoint.x,
+          m.m42 + parseFloat(ghost.style.height) / 2 - window.lastTouchPoint.y,
+        ),
+        valid: ghost.getAttribute("data-drop-valid"),
+      };
+    }).observe(document.getElementById("root"), {
+      childList: true,
+      subtree: true,
+    });
+    window.addEventListener(
+      "pointermove",
+      (event) => {
+        if (event.pointerType !== "touch") return;
+        window.lastTouchPoint = { x: event.clientX, y: event.clientY };
+        const ghost = document.querySelector('[data-testid="drag-ghost"]');
+        if (!ghost) return;
+        const matrix = new DOMMatrixReadOnly(ghost.style.transform || "none");
+        window.touchPositionErrors.push(
+          Math.hypot(
+            matrix.m41 + parseFloat(ghost.style.width) / 2 - event.clientX,
+            matrix.m42 + parseFloat(ghost.style.height) / 2 - event.clientY,
+          ),
+        );
+      },
+      { passive: true },
+    );
+  });
+  await cdp.send("Input.dispatchTouchEvent", {
+    type: "touchStart",
+    touchPoints: [
+      {
+        x: touchSource.x + touchSource.width / 2,
+        y: touchSource.y + touchSource.height / 2,
+      },
+    ],
+  });
+  const center = {
+    x: touchTarget.x + touchTarget.width / 2,
+    y: touchTarget.y + touchTarget.height / 2,
+  };
+  await cdp.send("Input.dispatchTouchEvent", {
+    type: "touchMove",
+    touchPoints: [center],
+  });
+  await touch.getByTestId("drag-ghost").waitFor();
+  const firstMount = await touch.evaluate(() => window.firstGhostPosition);
+  assert(
+    firstMount && firstMount.error < 0.01,
+    "First committed ghost position was stale",
+  );
+  assert.equal(
+    firstMount.valid,
+    "true",
+    "First ghost mount lost target validity",
+  );
+  await touch.waitForTimeout(100);
+  const mountedPositionError = await touch.evaluate(({ x, y }) => {
+    const ghost = document.querySelector('[data-testid="drag-ghost"]');
+    const matrix = new DOMMatrixReadOnly(ghost.style.transform);
+    return Math.hypot(
+      matrix.m41 + parseFloat(ghost.style.width) / 2 - x,
+      matrix.m42 + parseFloat(ghost.style.height) / 2 - y,
+    );
+  }, center);
+  assert(
+    mountedPositionError < 0.01,
+    "Pickup mounted the tile at stale coordinates",
+  );
+  await touch.evaluate(() => {
+    window.auditStats = { appRenders: 0, boardCells: 0, previewCalls: 0 };
+  });
+  for (const offset of [2, -2, 3, -3, 1, -1, 2, 0]) {
+    await cdp.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [{ x: center.x + offset, y: center.y + offset }],
+    });
+    await touch.waitForTimeout(17);
+  }
+  const touchStats = await touch.evaluate(() => ({
+    ...window.auditStats,
+    errors: window.touchPositionErrors,
+  }));
+  assert(
+    touchStats.errors.length >= 8,
+    "Touch tracking samples were not observed",
+  );
+  assert(
+    Math.max(...touchStats.errors) < 0.01,
+    "Touch position waited for an animation frame",
+  );
+  assert.equal(
+    touchStats.appRenders,
+    0,
+    "Same-square movement rerendered the app",
+  );
+  assert.equal(touchStats.boardCells, 0);
+  assert.equal(touchStats.previewCalls, 0);
+  await cdp.send("Input.dispatchTouchEvent", {
+    type: "touchCancel",
+    touchPoints: [],
+  });
+  await touch.getByTestId("drag-ghost").waitFor({ state: "detached" });
+  assert.equal(await touch.getByTestId("rack-tile-E-0").count(), 1);
+  await touch.close();
+
+  for (const action of [
+    "Escape",
+    "pointercancel",
+    "blur",
+    "resize",
+    "context",
+    "disable",
+    "hidden",
+    "release",
+  ]) {
+    const probe = await openFixture(browser, dragProbeBuild);
+    const source = await probe.getByTestId("probe-source").boundingBox();
+    const a = await probe.getByTestId("probe-cell-0").boundingBox();
+    const b = await probe.getByTestId("probe-cell-1").boundingBox();
+    await probe.mouse.move(source.x + 25, source.y + 25);
+    await probe.mouse.down();
+    await probe.mouse.move(a.x + 25, a.y + 25);
+    await probe.getByTestId("drag-ghost").waitFor();
+    await probe.waitForTimeout(30);
+    const expected = await probe.evaluate(
+      ({ action, x, y }) => {
+        const id = window.probePointerId;
+        window.dispatchEvent(
+          new PointerEvent("pointermove", {
+            pointerId: id,
+            pointerType: "mouse",
+            clientX: x,
+            clientY: y,
+            cancelable: true,
+          }),
+        );
+        const ghost = document.querySelector('[data-testid="drag-ghost"]');
+        const m = new DOMMatrixReadOnly(ghost.style.transform);
+        const origin = { x: m.m41, y: m.m42 };
+        if (action === "Escape")
+          window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+        else if (action === "pointercancel")
+          window.dispatchEvent(
+            new PointerEvent("pointercancel", { pointerId: id }),
+          );
+        else if (action === "release")
+          window.dispatchEvent(
+            new PointerEvent("pointerup", {
+              pointerId: id,
+              clientX: x,
+              clientY: y,
+            }),
+          );
+        else if (action === "context") window.probeContext();
+        else if (action === "disable") window.probeDisable();
+        else if (action === "hidden") {
+          Object.defineProperty(document, "hidden", {
+            configurable: true,
+            value: true,
+          });
+          document.dispatchEvent(new Event("visibilitychange"));
+        } else window.dispatchEvent(new Event(action));
+        return origin;
+      },
+      { action, x: b.x + 25, y: b.y + 25 },
+    );
+    await probe.getByTestId("drag-ghost").waitFor({ state: "detached" });
+    assert.equal(
+      await probe.locator('[data-drag-landing="true"]').count(),
+      0,
+      `Marker survived ${action}`,
+    );
+    const drops = await probe.evaluate(() => window.probeDrops);
+    assert.deepEqual(
+      drops,
+      action === "release" ? [{ kind: "board", row: 0, col: 1 }] : [],
+    );
+    if (!["context", "disable", "hidden"].includes(action)) {
+      const settling = JSON.parse(
+        await probe.getByTestId("probe-settling").textContent(),
+      );
+      assert(settling, `No settling geometry for ${action}`);
+      assert(
+        Math.hypot(settling.from.x - expected.x, settling.from.y - expected.y) <
+          0.01,
+        `Settling origin was stale after ${action}`,
+      );
+    }
+    await probe.mouse.up();
+    await probe.close();
+  }
 
   // A pass has no card, but its presentation timer may still be running when
   // the next player submits. Its stale ID must not briefly render that play.
@@ -477,6 +763,8 @@ try {
     JSON.stringify(
       {
         dragStats,
+        crossingStats,
+        touchStats,
         idleStats,
         presence:
           "expiry, stable labels, metadata and heartbeat assertions passed",

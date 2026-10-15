@@ -528,12 +528,11 @@ async function beginMouseDrag(
   ).not.toBe("none");
   await expect(page.locator(".has-tentative")).toHaveCount(tentativeBefore);
   if (
-    (await page.getByTestId("drag-ghost").getAttribute("class"))
-      ?.split(/\s+/)
-      .includes("valid-drop") &&
+    (await page.getByTestId("drag-ghost").getAttribute("data-drop-valid")) ===
+      "true" &&
     (await destination.getAttribute("data-drop-row")) !== null
   ) {
-    await expect(destination).toHaveClass(/drag-over-square/);
+    await expect(destination).toHaveAttribute("data-drag-landing", "true");
     expect(
       await destination.evaluate((element) =>
         parseFloat(getComputedStyle(element).outlineWidth),
@@ -2126,7 +2125,7 @@ test("touch drag follows finger, cancels safely, returns to rack and keeps tap p
   expect(Math.abs(ghost.x + ghost.width / 2 - target.x)).toBeLessThan(2);
   expect(Math.abs(ghost.y + ghost.height / 2 - target.y)).toBeLessThan(2);
   await expect(page.getByTestId("drag-anchor")).toHaveCount(0);
-  await expect(cell(page, 7, 7)).toHaveClass(/drag-over-square/);
+  await expect(cell(page, 7, 7)).toHaveAttribute("data-drag-landing", "true");
   expect(
     await cell(page, 7, 7).evaluate((element) =>
       parseFloat(getComputedStyle(element).outlineWidth),
@@ -2238,7 +2237,7 @@ test("drag replacement returns draft tiles to the hand and protects committed ti
   await rack(page, "W").click({ trial: true });
   await touch(touchSession, "touchStart", await point(rack(page, "W")));
   await touch(touchSession, "touchMove", await point(cell(page, 7, 7)));
-  await expect(cell(page, 7, 7)).toHaveClass(/drag-over-square/);
+  await expect(cell(page, 7, 7)).toHaveAttribute("data-drag-landing", "true");
   await touch(touchSession, "touchCancel");
   await expect(face(7, 7)).toHaveText("B");
   await touch(touchSession, "touchStart", await point(rack(page, "W")));
@@ -2352,7 +2351,7 @@ test("explicit zoom keeps actions accessible, drag targets accurate and scroll s
   const session = await context.newCDPSession(page);
   await touch(session, "touchStart", await point(rack(page, "W")));
   await touch(session, "touchMove", target);
-  await expect(cell(page, 7, 7)).toHaveClass(/drag-over-square/);
+  await expect(cell(page, 7, 7)).toHaveAttribute("data-drag-landing", "true");
   await expect(page.getByTestId("landing-preview")).toHaveCount(0);
   await expect(cell(page, 7, 7).locator(".board-tile")).toHaveCount(0);
   await expect(cell(page, 7, 7)).not.toHaveClass(/has-tentative/);
@@ -2416,7 +2415,7 @@ test("explicit zoom keeps actions accessible, drag targets accurate and scroll s
   }));
   await touch(session, "touchStart", sourcePoint);
   await touch(session, "touchMove", portraitTarget);
-  await expect(cell(page, 7, 8)).toHaveClass(/drag-over-square/);
+  await expect(cell(page, 7, 8)).toHaveAttribute("data-drag-landing", "true");
   await expect(page.getByTestId("landing-preview")).toHaveCount(0);
   await expect(cell(page, 7, 8).locator(".board-tile")).toHaveCount(0);
   expect(
@@ -3050,7 +3049,7 @@ test("waiting player can prepare and reload a draft; opponent update preserves s
   const session = await context.newCDPSession(page);
   await touch(session, "touchStart", await point(rack(page, "T")));
   await touch(session, "touchMove", await point(cell(page, 0, 2)));
-  await expect(cell(page, 0, 2)).toHaveClass(/drag-over-square/);
+  await expect(cell(page, 0, 2)).toHaveAttribute("data-drag-landing", "true");
   await expect(page.getByTestId("landing-preview")).toHaveCount(0);
   await expect(cell(page, 0, 2).locator(".board-tile")).toHaveCount(0);
   await touch(session, "touchEnd");
@@ -3228,7 +3227,10 @@ test("free draft placement permits diagonal and gapped tiles, repairs by reposit
   );
   await rack(page, "Q").tap();
   await beginMouseDrag(page, rack(page, "Q"), cell(page, 7, 7));
-  await expect(page.getByTestId("drag-ghost")).toHaveClass(/\binvalid-drop\b/);
+  await expect(page.getByTestId("drag-ghost")).toHaveAttribute(
+    "data-drop-valid",
+    "false",
+  );
   await finishDrag(page, () => page.mouse.up(), rack(page, "Q"), "returning");
   await expect(cell(page, 7, 7)).toHaveClass(/has-committed/);
   await expect(page.locator(".has-tentative")).toHaveCount(2);
@@ -3266,7 +3268,10 @@ test("free draft placement permits diagonal and gapped tiles, repairs by reposit
   });
   const boardA = cell(page, 7, 10).locator(".board-tile");
   await beginMouseDrag(page, boardA, page.getByTestId("recall-tiles"));
-  await expect(page.getByTestId("drag-ghost")).toHaveClass(/\binvalid-drop\b/);
+  await expect(page.getByTestId("drag-ghost")).toHaveAttribute(
+    "data-drop-valid",
+    "false",
+  );
   await finishDrag(page, () => page.mouse.up(), boardA, "returning");
   await expect(hand.locator(".rack-slot")).toHaveCount(0);
   await expect(cell(page, 7, 10)).toHaveClass(/has-tentative/);
@@ -8593,4 +8598,65 @@ test("iPad transport uses XHR rather than fetch streams while receiving a real m
   } finally {
     await context.close();
   }
+});
+
+test("local drag performance tools isolate the sample board and expose frame timing", async ({
+  page,
+  context,
+}, info) => {
+  await enroll(page);
+  const before = (await db.doc("games/ui-table").get()).data();
+  let commands = 0;
+  page.on("request", (request) => {
+    if (request.url().includes("/submitCommand")) commands++;
+  });
+  await page.getByTestId("help-settings").click();
+  await page.getByTestId("debug-enabled").check();
+  await page.getByTestId("debug-end-game").click();
+  await page.getByTestId("debug-show-frame-meter").click();
+  await expect(page.getByTestId("debug-frame-meter")).toContainText(/\d+ FPS/);
+  await page
+    .getByTestId("debug-frame-meter")
+    .getByRole("button", { name: "Hide meter" })
+    .click();
+  await expect(page.getByTestId("debug-frame-meter")).toHaveCount(0);
+  await page.getByTestId("local-debug-tools").click();
+  await page.getByTestId("debug-drag-performance").click();
+  const lab = page.getByTestId("drag-performance-lab");
+  await expect(lab.getByTestId("debug-frame-meter")).toContainText(/\d+ FPS/);
+  await expect(lab.locator(".has-committed")).toHaveCount(86);
+  await lab.getByRole("button", { name: "Replay word highlight" }).click();
+  await expect(lab.locator(".fresh-play-square")).toHaveCount(4);
+  const cdp = await context.newCDPSession(page);
+  const source = lab.locator('[data-rack-tile-id="lab-rack-0"] button');
+  const target = lab.getByTestId("board-cell-10-10");
+  const sourcePoint = await point(source);
+  const targetBox = (await target.boundingBox())!;
+  const targetPoint = {
+    x: targetBox.x + targetBox.width / 2,
+    y: targetBox.y + targetBox.height / 2,
+  };
+  await touch(cdp, "touchStart", sourcePoint);
+  await touch(cdp, "touchMove", targetPoint);
+  const ghost = page.getByTestId("lab-drag-ghost");
+  await expect(ghost).toBeVisible();
+  await expect(target).toHaveAttribute("data-drag-landing", "true");
+  const rect = (await ghost.boundingBox())!;
+  expect(Math.abs(rect.x + rect.width / 2 - targetPoint.x)).toBeLessThan(1);
+  expect(Math.abs(rect.y + rect.height / 2 - targetPoint.y)).toBeLessThan(1);
+  await touch(cdp, "touchEnd");
+  await expect(target).toContainText("G");
+  await lab.getByRole("button", { name: "Board: crowded" }).click();
+  await expect(lab.locator(".has-committed")).toHaveCount(4);
+  await expect(lab.locator("[data-drag-landing]")).toHaveCount(0);
+  await lab.getByRole("button", { name: "Board: light" }).click();
+  await page.screenshot({ path: info.outputPath("drag-performance-lab.png") });
+  await page
+    .getByTestId("debug-performance-popup")
+    .getByRole("button", { name: "Close dialog" })
+    .click();
+  await expect(lab).toHaveCount(0);
+  await expect(page.getByTestId("lab-drag-ghost")).toHaveCount(0);
+  expect(commands).toBe(0);
+  expect((await db.doc("games/ui-table").get()).data()).toEqual(before);
 });

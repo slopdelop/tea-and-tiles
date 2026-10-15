@@ -2,6 +2,10 @@
 
 This is passive instrumentation, not a connection repair or a second polling channel. No player-facing controls or messages are added.
 
+## Apple timeout experiment (version 1.6.1)
+
+After the October 14 reports showed slow receipt on both devices with fast server commits and board frames, version 1.6.1 requests a ten-second cloud iPad/Safari long-poll timeout. It is controlled by `APPLE_LONG_POLL_TIMEOUT_SECONDS` in `src/firestoreTransport.ts`; restore 30 to return to the SDK default. Other browsers and local-emulator transport retain their existing settings. The diagnostic report's transport field includes the configured timeout so comparisons can identify this experiment. This is a frontend SDK setting, not a Firestore console/CLI database setting; each iPad must update to 1.6.1 for it to take effect. Real-device improvement remains to be measured.
+
 ## Switch off
 
 Set `MOVE_DIAGNOSTICS_ENABLED = false` in `shared/move-diagnostics.ts`, rebuild and publish the frontend, and redeploy `submitCommand` and `reportMoveDiagnostics`. This stops client recording, calibration, uploads and custom server acceptance logs. The code can remain dormant until it is removed.

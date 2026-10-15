@@ -5,8 +5,8 @@ import {
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
+  type RefObject,
 } from "react";
-import { useMotionValue } from "motion/react";
 import { flushSync } from "react-dom";
 import { findRackInsertionIndex } from "../rackTarget";
 
@@ -23,6 +23,8 @@ export type RackPreview = {
   slotPitch: number;
 };
 type DragOptions = {
+  /** Optional isolated surface, used by the local performance sandbox. */
+  root?: RefObject<HTMLElement | null>;
   enabled: boolean;
   contextKey: string;
   canDrop: (tileId: string, target: DropTarget) => boolean;
@@ -41,6 +43,23 @@ type DragView = {
   target: DropTarget | null;
   rackPreview: RackPreview | null;
 };
+type DragPresentation = Pick<
+  DragView,
+  "tile" | "width" | "height" | "touch" | "rackPreview"
+>;
+
+function sameRackPreview(a: RackPreview | null, b: RackPreview | null) {
+  return (
+    a === b ||
+    (!!a &&
+      !!b &&
+      a.insertionIndex === b.insertionIndex &&
+      a.sourceIndex === b.sourceIndex &&
+      a.slotPitch === b.slotPitch &&
+      a.tileIds.length === b.tileIds.length &&
+      a.tileIds.every((id, i) => id === b.tileIds[i]))
+  );
+}
 type TileRect = { x: number; y: number; width: number; height: number };
 type SettlingTile = {
   id: number;
@@ -79,14 +98,79 @@ type PointerSession = {
 export function useTileDrag(options: DragOptions) {
   const optionsRef = useRef(options);
   optionsRef.current = options;
+  const getRoot = useCallback(
+    () => optionsRef.current.root?.current ?? document,
+    [],
+  );
   const session = useRef<PointerSession | null>(null);
   const suppressClickUntil = useRef(0);
-  const [drag, setDrag] = useState<DragView | null>(null);
+  const [drag, setDrag] = useState<DragPresentation | null>(null);
+  const publishedDrag = useRef<DragPresentation | null>(null);
+  const publishDrag = useCallback((view: DragView | null) => {
+    const previous = publishedDrag.current;
+    if (!view) {
+      if (!previous) return;
+      publishedDrag.current = null;
+      setDrag(null);
+      return;
+    }
+    if (
+      previous &&
+      previous.tile === view.tile &&
+      previous.width === view.width &&
+      previous.height === view.height &&
+      previous.touch === view.touch &&
+      sameRackPreview(previous.rackPreview, view.rackPreview)
+    )
+      return;
+    const next: DragPresentation = {
+      tile: view.tile,
+      width: view.width,
+      height: view.height,
+      touch: view.touch,
+      rackPreview: view.rackPreview,
+    };
+    publishedDrag.current = next;
+    setDrag(next);
+  }, []);
   const dragRef = useRef<DragView | null>(null);
-  const dragX = useMotionValue(0);
-  const dragY = useMotionValue(0);
-  const pointerX = useMotionValue(0);
-  const pointerY = useMotionValue(0);
+  const landingElement = useRef<HTMLElement | null>(null);
+  const validDrop = useRef(false);
+  // These transient attributes belong exclusively to the hook. React never
+  // renders them, so unrelated commits cannot erase a landing marker.
+  const paintTarget = useCallback(
+    (element: HTMLElement | null, valid: boolean) => {
+      if (landingElement.current !== element) {
+        landingElement.current?.removeAttribute("data-drag-landing");
+        landingElement.current = element;
+        element?.setAttribute("data-drag-landing", "true");
+      }
+      if (validDrop.current !== valid) {
+        validDrop.current = valid;
+        ghostElement.current?.setAttribute("data-drop-valid", String(valid));
+      }
+    },
+    [],
+  );
+  const ghostElement = useRef<HTMLDivElement | null>(null);
+  const ghostPosition = useRef({ x: 0, y: 0 });
+  const dragGhostRef = useCallback((element: HTMLDivElement | null) => {
+    ghostElement.current = element;
+    if (element) {
+      const { x, y } = ghostPosition.current;
+      element.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+      element.setAttribute("data-drop-valid", String(validDrop.current));
+    }
+  }, []);
+  const positionGhost = useCallback((x: number, y: number) => {
+    const previous = ghostPosition.current;
+    if (previous.x === x && previous.y === y) return;
+    ghostPosition.current = { x, y };
+    // Write the compositor transform in the input handler. An animation
+    // scheduler here can leave the visible tile one frame behind the finger.
+    if (ghostElement.current)
+      ghostElement.current.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+  }, []);
   const moveFrame = useRef(0);
   const latestPoint = useRef<{ x: number; y: number } | null>(null);
   const [settling, setSettling] = useState<SettlingTile | null>(null);
@@ -110,9 +194,10 @@ export function useTileDrag(options: DragOptions) {
     if (active?.source.hasPointerCapture(active.pointerId)) {
       active.source.releasePointerCapture(active.pointerId);
     }
-    setDrag(null);
+    paintTarget(null, false);
+    publishDrag(null);
     dragRef.current = null;
-  }, []);
+  }, [paintTarget, publishDrag]);
 
   // A compact rack changes size and position on return/reorder. Measure the
   // returned tile after React commits the new rack instead of using an old slot.
@@ -126,7 +211,7 @@ export function useTileDrag(options: DragOptions) {
       document.hidden
     )
       return;
-    const destination = document.querySelector<HTMLElement>(
+    const destination = getRoot().querySelector<HTMLElement>(
       `[data-drop-rack] [data-rack-tile-id="${queued.tile.id}"]`,
     );
     if (!destination?.isConnected) return;
@@ -148,6 +233,11 @@ export function useTileDrag(options: DragOptions) {
       tileId: string,
     ): DropTarget | null => {
       const element = document.elementFromPoint(x, y);
+      if (element && !getRoot().contains(element)) {
+        if (session.current) session.current.rackInsertionIndex = null;
+        paintTarget(null, false);
+        return null;
+      }
       const cell = element?.closest<HTMLElement>(
         "[data-drop-row][data-drop-col]",
       );
@@ -185,22 +275,22 @@ export function useTileDrag(options: DragOptions) {
       if (active)
         active.rackInsertionIndex =
           validTarget?.kind === "rack" ? insertionIndex : null;
+      paintTarget(
+        validTarget?.kind === "board" ? (cell ?? null) : null,
+        !!validTarget,
+      );
       return validTarget;
     };
     const update = (x: number, y: number) => {
       const active = session.current;
       if (!active?.dragging) return;
-      const previous = dragRef.current;
       if (!active.rackGeometryCaptured) {
         // A board return reserves an extra slot. Commit that reservation before
         // measuring, even when pointerup beats the first animation frame. The
         // captured geometry then stays fixed for the entire gesture.
-        dragX.set(x - active.offsetX);
-        dragY.set(y - active.offsetY);
-        pointerX.set(x);
-        pointerY.set(y);
+        positionGhost(x - active.offsetX, y - active.offsetY);
         flushSync(() =>
-          setDrag({
+          publishDrag({
             tile: active.tile,
             x: x - active.offsetX,
             y: y - active.offsetY,
@@ -214,7 +304,7 @@ export function useTileDrag(options: DragOptions) {
           }),
         );
         const slots = [
-          ...document.querySelectorAll<HTMLElement>(
+          ...getRoot().querySelectorAll<HTMLElement>(
             '[data-drop-rack] [data-rack-tile-id], [data-drop-rack] [data-testid="rack-preview-gap"]',
           ),
         ].map((slot) => slot.getBoundingClientRect());
@@ -256,25 +346,10 @@ export function useTileDrag(options: DragOptions) {
             : null,
       };
       dragRef.current = view;
-      // Coordinates animate outside React. Rerender only on pickup or when the
-      // landing target changes, rather than rebuilding 225 squares per pixel.
-      dragX.set(view.x);
-      dragY.set(view.y);
-      pointerX.set(x);
-      pointerY.set(y);
-      const a = previous?.target,
-        b = view.target;
-      const sameTarget =
-        a === b ||
-        (!!a &&
-          !!b &&
-          a.kind === b.kind &&
-          (a.kind === "board" && b.kind === "board"
-            ? a.row === b.row && a.col === b.col
-            : a.kind === "rack" &&
-              b.kind === "rack" &&
-              a.beforeTileId === b.beforeTileId));
-      if (!previous || !sameTarget) setDrag(view);
+      // Position and validated board targets never rerender App. Rack-preview
+      // changes still publish so neighboring rack tiles animate as before.
+      positionGhost(view.x, view.y);
+      publishDrag(view);
     };
     const move = (event: PointerEvent) => {
       const active = session.current;
@@ -296,11 +371,11 @@ export function useTileDrag(options: DragOptions) {
       if (event.cancelable) event.preventDefault();
       latestPoint.current = { x: event.clientX, y: event.clientY };
       // Follow input immediately; only hit testing and React updates wait for
-      // our animation frame. Motion can render these values in its own frame.
-      dragX.set(event.clientX - active.offsetX);
-      dragY.set(event.clientY - active.offsetY);
-      pointerX.set(event.clientX);
-      pointerY.set(event.clientY);
+      // our animation frame. Position changes never wait for another scheduler.
+      positionGhost(
+        event.clientX - active.offsetX,
+        event.clientY - active.offsetY,
+      );
       if (!moveFrame.current)
         moveFrame.current = requestAnimationFrame(() => {
           moveFrame.current = 0;
@@ -318,7 +393,7 @@ export function useTileDrag(options: DragOptions) {
       )
         return;
       const rackSlots = [
-        ...document.querySelectorAll<HTMLElement>(
+        ...getRoot().querySelectorAll<HTMLElement>(
           "[data-drop-rack] [data-rack-tile-id]",
         ),
       ];
@@ -333,7 +408,7 @@ export function useTileDrag(options: DragOptions) {
           : remaining.length;
       const destination =
         target?.kind === "board"
-          ? document.querySelector<HTMLElement>(
+          ? getRoot().querySelector<HTMLElement>(
               `[data-drop-row="${target.row}"][data-drop-col="${target.col}"]`,
             )
           : target?.kind === "rack"
@@ -343,10 +418,11 @@ export function useTileDrag(options: DragOptions) {
       const rect = destination.getBoundingClientRect();
       const inset = target?.kind === "board" ? 2 : 0;
       const sourceOffset = target ? null : active.sourceOffset;
+      const { x, y } = ghostPosition.current;
       setSettling({
         id: ++settlingId.current,
         tile: active.tile,
-        from: { x: view.x, y: view.y, width: view.width, height: view.height },
+        from: { x, y, width: view.width, height: view.height },
         to: {
           x: rect.left + (sourceOffset?.x ?? inset),
           y: rect.top + (sourceOffset?.y ?? inset),
@@ -463,10 +539,11 @@ export function useTileDrag(options: DragOptions) {
       cancelAnimationFrame(moveFrame.current);
       moveFrame.current = 0;
       latestPoint.current = null;
+      paintTarget(null, false);
       if (active?.source.hasPointerCapture(active.pointerId))
         active.source.releasePointerCapture(active.pointerId);
     };
-  }, [clear, dragX, dragY, pointerX, pointerY]);
+  }, [clear, positionGhost, paintTarget, publishDrag, getRoot]);
 
   useEffect(() => {
     clear();
@@ -488,7 +565,7 @@ export function useTileDrag(options: DragOptions) {
     const sourceAnchorRect = sourceAnchor.getBoundingClientRect();
     const rackVisual = source.closest<HTMLElement>(".rack-visual");
     const sourceVisualRect = rackVisual?.getBoundingClientRect();
-    const rack = document.querySelector<HTMLElement>("[data-drop-rack]");
+    const rack = getRoot().querySelector<HTMLElement>("[data-drop-rack]");
     const measuredSlots = rack
       ? [...rack.querySelectorAll<HTMLElement>("[data-rack-tile-id]")].map(
           (slot) => ({
@@ -514,7 +591,7 @@ export function useTileDrag(options: DragOptions) {
         ? (rackSlots.at(-1)!.centerX - rackSlots[0].centerX) /
           (rackSlots.length - 1)
         : (measuredSlots[0]?.rect.width ?? rect.width) + gap;
-    const boardCell = document.querySelector<HTMLElement>(
+    const boardCell = getRoot().querySelector<HTMLElement>(
       "[data-drop-row][data-drop-col]",
     );
     const touch = event.pointerType === "touch";
@@ -564,10 +641,7 @@ export function useTileDrag(options: DragOptions) {
   return {
     drag,
     rackPreview: drag?.rackPreview ?? null,
-    dragX,
-    dragY,
-    pointerX,
-    pointerY,
+    dragGhostRef,
     settling,
     finishSettling,
     start,

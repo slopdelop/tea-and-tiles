@@ -1,12 +1,20 @@
 import type { FirestoreSettings } from "firebase/firestore";
 
 type BrowserIdentity = Pick<Navigator, "userAgent" | "maxTouchPoints">;
+// Temporary delivery-delay trial; restoring 30 returns to Firebase's default.
+export const APPLE_LONG_POLL_TIMEOUT_SECONDS = 10;
 // Firebase's browser SDK accepts this setting, although its public TypeScript
 // interface currently omits it. The SDK-level regression test protects this
 // compatibility option when dependencies change.
 type BrowserFirestoreSettings = FirestoreSettings & {
   useFetchStreams?: boolean;
 };
+
+/** Keep the diagnostic label within the deployed endpoint's 100-character limit. */
+export function describeFirestoreTransport(settings: BrowserFirestoreSettings) {
+  const { experimentalLongPollingOptions, ...transport } = settings;
+  return JSON.stringify({ ...transport, ...experimentalLongPollingOptions });
+}
 
 export function firestoreTransport(
   emulator: boolean,
@@ -26,7 +34,12 @@ export function firestoreTransport(
   const appleBrowser = appleMobile || safari;
   return {
     ...(!emulator && appleBrowser
-      ? { experimentalForceLongPolling: true }
+      ? {
+          experimentalForceLongPolling: true,
+          experimentalLongPollingOptions: {
+            timeoutSeconds: APPLE_LONG_POLL_TIMEOUT_SECONDS,
+          },
+        }
       : { experimentalAutoDetectLongPolling: true }),
     ...(appleBrowser ? { useFetchStreams: false } : {}),
   };

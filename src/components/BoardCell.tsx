@@ -35,7 +35,6 @@ type BoardCellProps = {
   describedBy?: string;
   arriving: boolean;
   arrivalIndex: number;
-  landing: boolean;
   dragSource: boolean;
   settlingTarget: boolean;
   canEdit: boolean;
@@ -45,7 +44,7 @@ type BoardCellProps = {
 };
 
 // Each cell receives its own visual flags, rather than the whole drag/session.
-// Crossing a square therefore updates only the old and new landing cells.
+// Landing feedback is owned by useTileDrag, without rerendering cells.
 export const BoardCell = memo(function BoardCell({
   row,
   col,
@@ -65,7 +64,6 @@ export const BoardCell = memo(function BoardCell({
   describedBy,
   arriving,
   arrivalIndex,
-  landing,
   dragSource,
   settlingTarget,
   canEdit,
@@ -86,7 +84,7 @@ export const BoardCell = memo(function BoardCell({
       data-drop-row={row}
       data-drop-col={col}
       data-draft-word={draftWord || undefined}
-      className={`square ${premium?.toLowerCase() || ""} ${openingCentre ? "opening-centre" : ""} ${tentative ? "has-tentative" : ""} ${committed ? "has-committed" : ""} ${selectedSquare ? "selected-square" : ""} ${latest && committed ? "latest-square" : ""} ${fading && committed ? "fresh-play-square" : ""} ${landing ? "drag-over-square" : ""}`}
+      className={`square ${premium?.toLowerCase() || ""} ${openingCentre ? "opening-centre" : ""} ${tentative ? "has-tentative" : ""} ${committed ? "has-committed" : ""} ${selectedSquare ? "selected-square" : ""} ${latest && committed ? "latest-square" : ""} ${fading && committed ? "fresh-play-square" : ""}`}
       data-latest-play={
         latest && committed ? (fresh ? "fresh" : "settled") : undefined
       }

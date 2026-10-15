@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { firestoreTransport } from "../src/firestoreTransport";
+import {
+  describeFirestoreTransport,
+  firestoreTransport,
+} from "../src/firestoreTransport";
 import { initializeApp, deleteApp } from "firebase/app";
 
 const browsers = [
@@ -62,9 +65,23 @@ const browsers = [
 ];
 
 describe("Firestore browser compatibility", () => {
+  it("keeps the timeout in a diagnostic label accepted by the deployed endpoint", () => {
+    const label = describeFirestoreTransport(
+      firestoreTransport(false, browsers[0]),
+    );
+    expect(label.length).toBeLessThanOrEqual(100);
+    expect(JSON.parse(label)).toEqual({
+      experimentalForceLongPolling: true,
+      useFetchStreams: false,
+      timeoutSeconds: 10,
+    });
+  });
   it.each(browsers)("selects the cloud transport for $name", (browser) => {
     const settings = firestoreTransport(false, browser);
     expect(settings.experimentalForceLongPolling === true).toBe(browser.forced);
+    expect(settings.experimentalLongPollingOptions?.timeoutSeconds).toBe(
+      browser.forced ? 10 : undefined,
+    );
     // Firebase rejects force and auto-detection when both are enabled.
     expect(
       settings.experimentalForceLongPolling &&
@@ -109,6 +126,9 @@ describe("Firestore browser compatibility", () => {
           expect(effective.useFetchStreams).toBe(!browser.forced);
           expect(effective.experimentalForceLongPolling).toBe(
             !emulator && browser.forced,
+          );
+          expect(effective.experimentalLongPollingOptions?.timeoutSeconds).toBe(
+            !emulator && browser.forced ? 10 : undefined,
           );
         } finally {
           await deleteApp(app);
