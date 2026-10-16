@@ -1060,6 +1060,7 @@ export function useGameSession() {
         );
       if (!pairs.some((pair) => pair.id === id))
         throw new Error("That table is unavailable.");
+      if (id === pairId) return;
       setGame(null);
       setRack([]);
       setWordRequests([]);
@@ -1067,7 +1068,7 @@ export function useGameSession() {
       setEndGameRequests([]);
       setPairId(id);
     },
-    [pairs, mutationBusy],
+    [pairs, pairId, mutationBusy],
   );
   const signOut = useCallback(async () => {
     if (

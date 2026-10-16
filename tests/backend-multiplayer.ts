@@ -19,6 +19,7 @@ import { getFirestore } from "firebase-admin/firestore";
 import { createGame, type Game, type Slot } from "../shared/engine";
 import { createCredential } from "../functions/player-login";
 import { upgradeMultiplayer } from "../scripts/upgrade-multiplayer.mjs";
+import { renamePlayers } from "../scripts/player-profiles.mjs";
 
 type Backend = typeof import("../functions/index");
 type Services = Pick<
@@ -480,6 +481,59 @@ export function multiplayerBackendTests(
       );
     });
 
+    it("renames profiles and every table atomically without changing sessions or credentials", async () => {
+      const db = getFirestore();
+      const credential = {
+        ...(await createCredential("123456")),
+        enabled: true,
+      };
+      await db.doc("playerCredentials/alice").set(credential);
+      const binding = (await db.doc(`bindings/${uid("alice")}`).get()).data();
+      await renamePlayers(db, { alice: "Alicia" });
+      expect((await db.doc("players/alice").get()).data()).toMatchObject({
+        displayName: "Alicia",
+        loginName: "alicia",
+        sessionVersion: 0,
+      });
+      expect((await db.doc("pairs/alice-bob").get()).data()?.names.mom).toBe(
+        "Alicia",
+      );
+      expect((await db.doc("pairs/carol-alice").get()).data()?.names.aunt).toBe(
+        "Alicia",
+      );
+      expect((await db.doc("pairs/bob-dana").get()).data()?.names).toEqual(
+        definitions["bob-dana"],
+      );
+      expect((await db.doc("playerCredentials/alice").get()).data()).toEqual(
+        credential,
+      );
+      expect((await db.doc(`bindings/${uid("alice")}`).get()).data()).toEqual(
+        binding,
+      );
+      await assertSucceeds(
+        getDoc(
+          doc(client("alice"), `games/${games["carol-alice"].id}/racks/aunt`),
+        ),
+      );
+      await expect(
+        services().login("renamed-device", {
+          playerId: "Alicia",
+          passphrase: "123456",
+        }),
+      ).resolves.toMatchObject({ playerId: "alice" });
+      for (const name of ["Bob", "CAROL", " ", "x".repeat(31)])
+        await expect(renamePlayers(db, { alice: name })).rejects.toThrow();
+      expect((await db.doc("players/alice").get()).data()?.displayName).toBe(
+        "Alicia",
+      );
+      await expect(
+        renamePlayers(db, { alice: "Annie", bob: "Annie" }),
+      ).rejects.toThrow();
+      expect((await db.doc("players/alice").get()).data()?.displayName).toBe(
+        "Alicia",
+      );
+    });
+
     it("upgrades legacy identities additively and is idempotent without rotating credentials or changing gameplay", async () => {
       const db = getFirestore();
       const family = (await db.doc("pairs/family").get()).data()!;
@@ -537,6 +591,35 @@ export function multiplayerBackendTests(
           passphrase: "123456",
         }),
       ).resolves.toMatchObject({ playerId: "mom" });
+      // A remembered device must also work without signing in again.
+      const legacyClient = environment()
+        .authenticatedContext("test-mom")
+        .firestore();
+      await assertSucceeds(getDoc(doc(legacyClient, "pairs/family")));
+      await assertSucceeds(
+        getDocs(
+          query(
+            collection(legacyClient, "pairs"),
+            where("memberIds", "array-contains", "mom"),
+          ),
+        ),
+      );
+      await assertSucceeds(
+        getDoc(doc(legacyClient, `games/${gameId}/racks/mom`)),
+      );
+      await assertFails(
+        getDoc(doc(legacyClient, `games/${gameId}/racks/aunt`)),
+      );
+      const starter = originalGame!.turn;
+      await expect(
+        services().submit(`test-${starter}`, {
+          pairId: "family",
+          gameId,
+          id: randomUUID(),
+          kind: "pass",
+          expectedRevision: originalGame!.revision,
+        }),
+      ).resolves.toMatchObject({ revision: originalGame!.revision + 1 });
     });
   });
 }

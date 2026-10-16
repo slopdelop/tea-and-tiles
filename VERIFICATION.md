@@ -466,18 +466,19 @@ The private production database/Auth backup remains separate under `.tools/backu
 Start the usual local emulators (`npm run emulators`) and frontend (`npm run dev`).
 Run `node scripts/admin.mjs prepare-multiplayer --project demo-tea-and-tiles` once
 (or again safely). It adds profiles/table metadata and test opponents; it does not
-reset the family board or rotate existing credentials. Alex, Jamie and Sam have
+reset the family board or rotate existing credentials. Justin, Mabel and Caroline have
 local-only code `246810` when first created. Never use this fixture command in cloud.
 
-Open `http://127.0.0.1:5173/#player=Alex&code=246810`, then press Sign in. The fragment
-is removed immediately. Alex can open tables with Jamie, Sam and the existing
-Elizabeth account. Two local frontends may be run on ports 5173 and 5174 to give each player independent browser storage.
+Open `http://127.0.0.1:5173/#player=Justin&code=246810`, then press Sign in. The fragment
+is removed immediately. All five family players have a table with each other.
+Two local frontends may be run on ports 5173 and 5174 to give each player independent browser storage.
 
-- Open **Games**, choose Jamie, arrange an unsubmitted tile, then choose Sam.
-  Confirm the hands and drafts are independent; return to Jamie to recover the draft.
-- Reload on Sam's table: it should reopen directly without a game chooser.
+- Open **Games**, choose Mabel, arrange an unsubmitted tile, then choose Caroline.
+  Confirm the hands and drafts are independent; return to Mabel to recover the draft.
+- Select the current **Open now** table: the board, hand and private draft should stay visible.
+- Reload on Caroline's table: it should reopen directly without a game chooser.
 - In **Help & settings**, check the four short submenus and **Sign out**.
-  Sign out and enter Jamie / `246810`; Alex's private hand/draft must disappear.
+  Sign out and enter Mabel / `246810`; Justin's private hand/draft must disappear.
 - Use another browser profile/incognito window for the opponent. Tabs in the same
   browser profile share Firebase Auth, so they are not separate account sessions.
 - Play, exchange, pass, ask to approve an unfamiliar word, and request a new game.
@@ -493,6 +494,7 @@ require `--cloud`; no cloud commands have been run for this candidate.
 
 - `node scripts/admin.mjs add-player --project demo-tea-and-tiles --id PLAYER_ID --name NAME`
 - `node scripts/admin.mjs issue-pin --project demo-tea-and-tiles --player PLAYER_ID`
+- `node scripts/admin.mjs rename-player --project demo-tea-and-tiles --player PLAYER_ID --name NEW_NAME` updates the profile, sign-in name and every table label atomically, preserving signed-in devices and credentials.
 - `node scripts/admin.mjs create-pair --project demo-tea-and-tiles --player-a ID_A --player-b ID_B`
 - `node scripts/admin.mjs list --project demo-tea-and-tiles`
 - `node scripts/upgrade-multiplayer.mjs --project demo-tea-and-tiles` is a dry run;
@@ -525,3 +527,35 @@ Validation for this local candidate (2026-10-16):
 Implementation checkpoint: `checkpoint/multiplayer-local` on
 `codex/multiple-players`. The production and pre-multiplayer tags above remain
 unchanged. Keep production deployment as a separate reviewed step.
+
+### Review fixes and family accounts — 2026-10-16 (local only)
+
+Selecting the current “Open now” table is a no-op and preserves its listeners,
+private draft and hand. The administrator's rename operations now update the
+account display/sign-in name and all table labels in one transaction, reject
+duplicate names/IDs, and leave credentials and device bindings intact. The legacy
+`names` command retains its default-name repair behavior; `rename-player` works
+for any configured account.
+
+The normal welcome screen offers only name/code sign-in. Old `#setup=` invitation
+links remain supported for compatibility, with a button to use name/code instead.
+New users should receive reusable sign-in links, not one-time setup tickets.
+
+The local fixture adds Justin, Mabel and Caroline with local-only code `246810`
+and all ten one-on-one pairings among them, Elizabeth and Rita. Existing local
+accounts, games and credentials are retained. Production accounts are unchanged.
+
+Validation: 197 unit tests, 91 isolated backend/security-rules tests, five focused
+Chrome regressions, the frontend/Functions
+build, script syntax checks and whitespace checks passed. Browser checks cover
+current-table reopening with a draft, opposite seats across tables, sign-out,
+remembered extra devices, modern sign-in links, old invitation links, and the
+single sign-in form. Migration regression coverage now also exercises a remembered
+legacy UID's table query, private-rack permissions and a turn after migration.
+
+Recall and Shuffle now use 60px controls with 12px labels and 24px icons. The
+wooden rack centers independently on the board, with controls aligned to its
+right edge. Narrow boards place controls below the rack rather than shrinking
+the tiles or overlapping them. The local build and three focused browser
+regressions passed, covering four tablet sizes, partial-hand centering, stable
+drag targets and Recall landing positions. No publication was performed.

@@ -192,8 +192,11 @@ test.afterAll(async () => {
 });
 
 async function openInvitationForm(page: Page) {
-  if (!(await page.getByTestId("setup-code").isVisible()))
-    await page.getByTestId("welcome-join").click();
+  if (!(await page.getByTestId("setup-code").isVisible())) {
+    // Invitation links are read at startup; force a new document, not a hash change.
+    await page.goto("about:blank");
+    await page.goto("/#setup=maple");
+  }
   await expect(page.getByTestId("setup-code")).toBeVisible();
 }
 async function enroll(page: Page, expectedRackCount = 7) {
@@ -1169,6 +1172,62 @@ test("wooden rack stays the same size as tiles leave and return and bonus legend
     "Triple word",
   ]) {
     await expect(help.getByText(label, { exact: false })).toBeVisible();
+  }
+});
+
+test("the rack centers on the board while full-size hand controls follow its right edge", async ({
+  page,
+}) => {
+  await enroll(page);
+  for (const viewport of [
+    { width: 1024, height: 768 },
+    { width: 820, height: 1180 },
+    { width: 1366, height: 1024 },
+    { width: 1440, height: 1200 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const board = document
+            .querySelector(".board-frame")!
+            .getBoundingClientRect();
+          const rack = document
+            .querySelector(".hand-row .rack")!
+            .getBoundingClientRect();
+          const actions = document
+            .querySelector(".hand-actions")!
+            .getBoundingClientRect();
+          const tile = document
+            .querySelector(".rack-tile")!
+            .getBoundingClientRect();
+          const controls = [
+            ...document.querySelectorAll(".hand-action-button"),
+          ];
+          const overlap =
+            actions.left < rack.right &&
+            actions.right > rack.left &&
+            actions.top < rack.bottom &&
+            actions.bottom > rack.top;
+          return (
+            Math.abs(
+              rack.left + rack.width / 2 - board.left - board.width / 2,
+            ) < 1 &&
+            Math.abs(actions.right - board.right) < 1 &&
+            !overlap &&
+            controls.every((control) => {
+              const rect = control.getBoundingClientRect();
+              return (
+                rect.width >= tile.width &&
+                rect.height >= tile.height &&
+                getComputedStyle(control).fontSize === "12px"
+              );
+            }) &&
+            document.documentElement.scrollWidth <= innerWidth
+          );
+        }),
+      )
+      .toBe(true);
   }
 });
 
@@ -9133,6 +9192,24 @@ test("multiple tables keep opposite seats, drafts and sign-out private across fo
   await expect(page.locator(".has-tentative")).toHaveCount(1);
   await page.getByTestId("open-games").click();
   await expect(page.getByTestId("open-pair-family")).toBeVisible();
+  // Reopening the current table must retain its live board, hand and draft.
+  const currentRackIds = await page
+    .locator("[data-rack-tile-id]")
+    .evaluateAll((elements) =>
+      elements.map((element) => element.getAttribute("data-rack-tile-id")),
+    );
+  await page.getByTestId("open-pair-family").click();
+  await expect(page.getByTestId("games-drawer")).toBeHidden();
+  await expect(page.getByTestId("game-board")).toBeVisible();
+  await expect(page.locator(".has-tentative")).toHaveCount(1);
+  expect(
+    await page
+      .locator("[data-rack-tile-id]")
+      .evaluateAll((elements) =>
+        elements.map((element) => element.getAttribute("data-rack-tile-id")),
+      ),
+  ).toEqual(currentRackIds);
+  await page.getByTestId("open-games").click();
   await expect(page.getByTestId("open-pair-carol-mom")).toContainText("Carol");
   await expect(page.getByTestId("open-pair-rita-dana")).toHaveCount(0);
   await page.getByTestId("open-pair-carol-mom").click();
@@ -9250,4 +9327,15 @@ test("a stable-account sign-in link shows a readable name and sign-out clears it
   await expect(page.getByTestId("login-password")).toHaveValue("");
   await expect(page.getByTestId("login-player")).toHaveValue("");
   await expect(page.getByTestId("tile-rack")).toHaveCount(0);
+});
+
+test("the normal welcome screen offers only name and code sign-in", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect(page.getByTestId("login-player")).toBeVisible();
+  await expect(page.getByTestId("login-password")).toBeVisible();
+  await expect(page.getByTestId("welcome-join")).toHaveCount(0);
+  await expect(page.getByTestId("welcome-signin")).toHaveCount(0);
+  await expect(page.getByTestId("setup-code")).toHaveCount(0);
 });

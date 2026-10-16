@@ -1395,6 +1395,10 @@ describe.skipIf(!enabled)(
       });
       expect((await db.doc(`games/${game.id}`).get()).data()).toEqual(before);
       for (const slot of ["mom", "aunt"] as Slot[]) {
+        expect((await db.doc(`players/${slot}`).get()).data()).toMatchObject({
+          displayName: slot === "mom" ? "Elizabeth" : "Rita",
+          loginName: slot === "mom" ? "elizabeth" : "rita",
+        });
         expect((await db.doc(`players/${slot}`).get()).data()?.uid).toBe(
           uids[slot],
         );

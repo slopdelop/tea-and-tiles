@@ -200,9 +200,7 @@ test("isolated real Firebase back-and-forth", async ({ browser }, info) => {
         "*AIzaSyCYW3ISS9hun5qTLw5LNvRaSOUuT-1ChOM*",
       ],
     });
-    await page.goto("/");
-    if (!(await page.getByTestId("setup-code").isVisible()))
-      await page.getByTestId("welcome-join").click();
+    await page.goto(`/#setup=${encodeURIComponent(codes[slot])}`);
     await page.getByTestId("setup-code").fill(codes[slot]);
     await page.getByTestId("enroll-submit").click();
     await expect(page.getByTestId("game-board")).toBeVisible({

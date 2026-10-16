@@ -56,6 +56,9 @@ async function seedFixture() {
   const { bag, racks, ...publicGame } = fixture;
   const batch = db.batch();
   batch.set(db.doc("pairs/family"), {
+    schemaVersion: 2,
+    memberIds: ["mom", "aunt"],
+    seatPlayers: { mom: "mom", aunt: "aunt" },
     activeGameId: fixture.id,
     names: { mom: "Elizabeth", aunt: "Rita" },
   });
@@ -82,8 +85,7 @@ async function seedFixture() {
 }
 
 async function enroll(page: Page, slot: Slot) {
-  await page.goto("/");
-  await page.getByTestId("welcome-join").click();
+  await page.goto(`/#setup=${codes[slot]}`);
   await page.getByTestId("setup-code").fill(codes[slot]);
   await page.getByTestId("enroll-submit").click();
   await expect(page.getByTestId("board-cell-7-7")).toBeVisible({

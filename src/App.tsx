@@ -1138,6 +1138,37 @@ function TableApp({
   }, []);
   const compactTable = tabletLandscape && !!game && !!slot;
   const boardViewport = useRef<HTMLDivElement>(null);
+  const handRow = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const board = boardViewport.current?.closest<HTMLElement>(".board-frame");
+    const hand = handRow.current;
+    if (!board || !hand) return;
+    const measure = () => {
+      const width = board.offsetWidth;
+      const css = getComputedStyle(hand);
+      const value = (name: string) => parseFloat(css.getPropertyValue(name));
+      const rackWidth =
+        7 * value("--hand-slot-width") +
+        6 * value("--hand-slot-gap") +
+        2 * value("--hand-padding");
+      const actionsWidth = 2 * value("--shuffle-size") + 10;
+      // Controls need their full width on the right of an independently centered rack.
+      const below = width < rackWidth + 2 * (actionsWidth + 10);
+      const nextWidth = `${width}px`;
+      if (hand.style.width !== nextWidth) hand.style.width = nextWidth;
+      const nextBelow = String(below);
+      if (hand.dataset.actionsBelow !== nextBelow)
+        hand.dataset.actionsBelow = nextBelow;
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(board);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [game?.id, zoomed]);
   const lockedBoardScroll = useRef<{ left: number; top: number } | null>(null);
   const {
     drag,
@@ -2962,33 +2993,20 @@ function TableApp({
               A quiet little place to play together,
               <br className="desktop-break" /> whenever you have a moment.
             </p>
-            <div className="welcome-modes" aria-label="Open your table">
-              <button
-                type="button"
-                className={welcomeMode === "signin" ? "chosen" : ""}
-                aria-pressed={welcomeMode === "signin"}
-                data-testid="welcome-signin"
-                onClick={() => {
-                  setWelcomeMode("signin");
-                  setMessage("");
-                }}
-              >
-                Sign in
-              </button>
-              <button
-                type="button"
-                className={welcomeMode === "join" ? "chosen" : ""}
-                aria-pressed={welcomeMode === "join"}
-                data-testid="welcome-join"
-                onClick={() => {
-                  setWelcomeMode("join");
-                  setPassphrase("");
-                  setMessage("");
-                }}
-              >
-                Join with invitation
-              </button>
-            </div>
+            {welcomeMode === "join" && (
+              <div className="welcome-modes" aria-label="Open your table">
+                <button
+                  type="button"
+                  data-testid="welcome-signin"
+                  onClick={() => {
+                    setWelcomeMode("signin");
+                    setMessage("");
+                  }}
+                >
+                  Use name and code
+                </button>
+              </div>
+            )}
             <form
               className="enroll-form"
               onSubmit={async (event) => {
@@ -3397,7 +3415,7 @@ function TableApp({
                       </div>
                     )}
                 </div>
-                <div className="hand-row">
+                <div className="hand-row" ref={handRow}>
                   <div
                     className={`rack ${!visibleRack.length ? "empty-rack" : ""} ${rackPreview ? "drag-over-rack" : ""}`}
                     aria-label="Your tile rack"
@@ -3600,32 +3618,37 @@ function TableApp({
                       </span>
                     )}
                   </div>
-                  <button
-                    className="hand-action-button"
-                    data-testid="recall-tiles"
-                    aria-label="Recall tiles"
-                    title="Recall tiles"
-                    disabled={
-                      !canEdit || !placements.length || !!drag || !!settling
-                    }
-                    onClick={() => recallTiles()}
-                  >
-                    <Icon name="recall" />
-                    <span>Recall</span>
-                  </button>
-                  <button
-                    onClick={shuffle}
-                    className="hand-action-button shuffle-button"
-                    data-testid="shuffle-rack"
-                    aria-label="Shuffle your tiles"
-                    title="Shuffle your tiles"
-                    disabled={
-                      !canEdit || visibleRack.length < 2 || !!drag || !!settling
-                    }
-                  >
-                    <Icon name="shuffle" />
-                    <span>Shuffle</span>
-                  </button>
+                  <div className="hand-actions">
+                    <button
+                      className="hand-action-button"
+                      data-testid="recall-tiles"
+                      aria-label="Recall tiles"
+                      title="Recall tiles"
+                      disabled={
+                        !canEdit || !placements.length || !!drag || !!settling
+                      }
+                      onClick={() => recallTiles()}
+                    >
+                      <Icon name="recall" />
+                      <span>Recall</span>
+                    </button>
+                    <button
+                      onClick={shuffle}
+                      className="hand-action-button shuffle-button"
+                      data-testid="shuffle-rack"
+                      aria-label="Shuffle your tiles"
+                      title="Shuffle your tiles"
+                      disabled={
+                        !canEdit ||
+                        visibleRack.length < 2 ||
+                        !!drag ||
+                        !!settling
+                      }
+                    >
+                      <Icon name="shuffle" />
+                      <span>Shuffle</span>
+                    </button>
+                  </div>
                 </div>
                 <p className="rack-hint" data-testid="rack-hint">
                   {recallAnimation.active

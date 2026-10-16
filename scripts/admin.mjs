@@ -4,6 +4,7 @@ import { getAuth } from "firebase-admin/auth";
 import { randomUUID, createHash, randomInt } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { upgradeMultiplayer } from "./upgrade-multiplayer.mjs";
+import { renamePlayers } from "./player-profiles.mjs";
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -473,12 +474,11 @@ async function prepareMultiplayer() {
   if (!(await db.doc("pairs/family").get()).exists) await prepare();
   await upgradeMultiplayer(db, { apply: true });
   for (const [id, name] of [
-    ["test-alex", "Alex"],
-    ["test-jamie", "Jamie"],
-    ["test-sam", "Sam"],
+    ["justin", "Justin"],
+    ["mabel", "Mabel"],
+    ["caroline", "Caroline"],
   ]) {
     await addPlayer(id, name);
-    await createPair("mom", id);
     const credential = await db.doc(`playerCredentials/${id}`).get();
     if (!credential.exists) {
       const { createCredential } =
@@ -491,8 +491,10 @@ async function prepareMultiplayer() {
       console.log(`LOCAL TEST ONLY: ${name} sign-in code 246810`);
     }
   }
-  await createPair("test-alex", "test-jamie");
-  await createPair("test-alex", "test-sam");
+  const familyPlayers = ["mom", "aunt", "justin", "mabel", "caroline"];
+  for (let first = 0; first < familyPlayers.length; first++)
+    for (let second = first + 1; second < familyPlayers.length; second++)
+      await createPair(familyPlayers[first], familyPlayers[second]);
   await listPlayers();
 }
 
@@ -512,24 +514,21 @@ export async function run() {
   else if (command === "issue-login") await issueLogin();
   else if (command === "issue-pin") await issueLogin(true);
   else if (command === "revoke-login") await revokeLogin();
-  else if (command === "fixture") await fixture();
+  else if (command === "rename-player") {
+    const { slot } = await resolvePlayer();
+    await renamePlayers(db, { [slot]: option("name") });
+  } else if (command === "fixture") await fixture();
   else if (command === "names") {
     const names = {
-      mom: option("mom-name") || defaultNames.mom,
-      aunt: option("aunt-name") || defaultNames.aunt,
+      ...(option("mom-name") !== undefined ? { mom: option("mom-name") } : {}),
+      ...(option("aunt-name") !== undefined
+        ? { aunt: option("aunt-name") }
+        : {}),
     };
-    if (
-      !names.mom ||
-      !names.aunt ||
-      Object.values(names).some((name) => name.length > 30)
-    )
-      throw new Error(
-        "Provide --mom-name and --aunt-name (1–30 characters each).",
-      );
-    await db.doc("pairs/family").update({ names });
+    await renamePlayers(db, Object.keys(names).length ? names : defaultNames);
   } else
     throw new Error(
-      "Usage: node scripts/admin.mjs prepare|prepare-multiplayer|upgrade-multiplayer|add-player|create-pair|list|reset|issue-code|issue-login|issue-pin|revoke-login|fixture|names --project ID [--slot mom|aunt] [--player Elizabeth|Rita] [--app-url URL] [--cloud]",
+      "Usage: node scripts/admin.mjs prepare|prepare-multiplayer|upgrade-multiplayer|add-player|rename-player|create-pair|list|reset|issue-code|issue-login|issue-pin|revoke-login|fixture|names --project ID [--slot mom|aunt] [--player ID_OR_NAME] [--name NEW_NAME] [--app-url URL] [--cloud]",
     );
 }
 if (
