@@ -1975,6 +1975,9 @@ function TableApp({
     activity.visible,
     activity.acknowledge,
     activity.approved,
+    // Summary observation can run after this child effect. Retry acknowledgment
+    // when it catches up, using only the board/request versions delivered above.
+    activity.tables[session.pairId || ""]?.observed,
   ]);
   useEffect(() => {
     if (!debugEnabled) activity.clearPreview();

@@ -23,7 +23,9 @@ export function GameActivityNotice({
   dismiss: (id: string) => void;
   anchor: RefObject<HTMLElement | null>;
 }) {
-  const [held, setHeld] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const held = hovered || focused;
   const [ready, setReady] = useState(false);
   const countdown = useRef({ id: "", remaining: 8000 });
   const card = useRef<HTMLDivElement>(null);
@@ -61,7 +63,8 @@ export function GameActivityNotice({
   }, [event?.id, show, ready, anchor]);
   useEffect(() => {
     setReady(false);
-    setHeld(false);
+    setHovered(false);
+    setFocused(false);
     if (!show || !event) return;
     let timer: ReturnType<typeof setTimeout>;
     const check = () => {
@@ -104,12 +107,12 @@ export function GameActivityNotice({
       data-pair-id={event.pairId}
       role="status"
       aria-live="polite"
-      onMouseEnter={() => setHeld(true)}
-      onMouseLeave={() => setHeld(false)}
-      onFocusCapture={() => setHeld(true)}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onFocusCapture={() => setFocused(true)}
       onBlurCapture={(e) => {
         if (!e.currentTarget.contains(e.relatedTarget as Node | null))
-          setHeld(false);
+          setFocused(false);
       }}
     >
       <button

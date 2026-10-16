@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PairSummary } from "../shared/players";
+import { advanceActivity } from "../src/hooks/useGameActivity";
 import {
   acknowledgeActivity,
   activitySnapshot,
@@ -49,6 +50,95 @@ const observe = (
   pairs: PairSummary[],
 ) => observeActivity(state, pairs, "justin", approved, 20);
 describe("other-table activity", () => {
+  it("keeps a queued request ahead of a later turn at the same table", () => {
+    const p = pair();
+    const baseline = {
+      scope: "test:justin",
+      synced: true,
+      tables: observe({}, [p]),
+      queue: [],
+    };
+    const requested = {
+      ...p,
+      actionNeededBy: { newGame: "justin" },
+      actionVersions: { newGame: "request-1" },
+    };
+    const queued = advanceActivity(
+      baseline,
+      [requested],
+      "justin",
+      approved,
+      "other",
+    );
+    expect(queued.queue[0].kind).toBe("newGame");
+    const next = advanceActivity(
+      queued,
+      [moved(requested)],
+      "justin",
+      approved,
+      "other",
+    );
+    expect(next.queue).toEqual(queued.queue);
+    expect(unreadEvents(next.tables.one)).toHaveLength(2);
+    const resolved = advanceActivity(
+      next,
+      [{ ...moved(requested), actionNeededBy: {} }],
+      "justin",
+      approved,
+      "other",
+    );
+    expect(resolved.queue).toHaveLength(0);
+    expect(unreadEvents(resolved.tables.one).map((e) => e.kind)).toEqual([
+      "turn",
+    ]);
+  });
+  it("does not resurrect a dismissed request when a later turn arrives", () => {
+    const p = pair();
+    const requested = {
+      ...p,
+      actionNeededBy: { newGame: "justin" },
+      actionVersions: { newGame: "request-1" },
+    };
+    const queued = advanceActivity(
+      { scope: "test", synced: true, tables: observe({}, [p]), queue: [] },
+      [requested],
+      "justin",
+      approved,
+      "other",
+    );
+    const next = advanceActivity(
+      { ...queued, queue: [] },
+      [moved(requested)],
+      "justin",
+      approved,
+      "other",
+    );
+    expect(next.queue.map((e) => e.kind)).toEqual(["turn"]);
+  });
+  it("lets a fresh request replace an ordinary queued notice", () => {
+    const p = pair(),
+      q = moved(p);
+    const queued = advanceActivity(
+      { scope: "test", synced: true, tables: observe({}, [p]), queue: [] },
+      [q],
+      "justin",
+      approved,
+      "other",
+    );
+    const requested = {
+      ...q,
+      actionNeededBy: { endGame: "justin" },
+      actionVersions: { endGame: "request-1" },
+    };
+    const next = advanceActivity(
+      queued,
+      [requested],
+      "justin",
+      approved,
+      "other",
+    );
+    expect(next.queue.map((e) => e.kind)).toEqual(["endGame"]);
+  });
   it("baselines first-seen tables without historical notifications", () => {
     const p = moved(pair());
     expect(unreadEvents(observe({}, [p]).one)).toEqual([]);

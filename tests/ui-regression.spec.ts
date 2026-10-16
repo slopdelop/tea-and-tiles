@@ -9378,6 +9378,81 @@ async function seedActivityTables() {
   await db.doc("players/mom").update({ defaultPairId: "family" });
 }
 
+for (const arrival of ["board-first", "summary-first", "together"] as const) {
+  test(`viewed turns stay read after switching tables (${arrival})`, async ({
+    page,
+  }) => {
+    await seedActivityTables();
+    fixtureGame.turn = "aunt";
+    await writeFixture(fixtureGame);
+    await db.doc("pairs/family").update({ "activeGame.turn": "aunt" });
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await enroll(page);
+    const readFamilyActivity = () =>
+      page.evaluate(() => {
+        const saved = localStorage.getItem(
+          "tea-game-activity:v1:demo-tea-and-tiles-ui-tests:mom",
+        );
+        return saved ? JSON.parse(saved).tables.family : null;
+      });
+    await expect
+      .poll(async () => (await readFamilyActivity())?.observed.revision)
+      .toBe(fixtureGame.revision);
+    const next = applyCommand(
+      fixtureGame,
+      "aunt",
+      {
+        id: `activity-${arrival}`,
+        gameId: fixtureGame.id,
+        expectedRevision: fixtureGame.revision,
+        kind: "pass",
+      },
+      new Set(),
+      () => 0.42,
+    );
+    const { racks, bag, ...publicState } = next;
+    expectedRevision = next.revision;
+    const summary = {
+      id: next.id,
+      status: next.status,
+      turn: next.turn,
+      scores: next.scores,
+      revision: next.revision,
+      updatedAt: Date.now(),
+      lastMove: next.lastMove,
+    };
+    if (arrival === "board-first") {
+      await db.doc(`games/${next.id}`).update(publicState);
+      await expect(page.getByTestId("turn-status")).toContainText("Your turn");
+      expect((await readFamilyActivity()).observed.revision).toBe(
+        fixtureGame.revision,
+      );
+      await db.doc("pairs/family").update({ activeGame: summary });
+    } else if (arrival === "summary-first") {
+      await db.doc("pairs/family").update({ activeGame: summary });
+      await expect
+        .poll(async () => (await readFamilyActivity())?.move?.revision)
+        .toBe(next.revision);
+      await db.doc(`games/${next.id}`).update(publicState);
+    } else {
+      const batch = db.batch();
+      batch.update(db.doc(`games/${next.id}`), publicState);
+      batch.update(db.doc("pairs/family"), { activeGame: summary });
+      await batch.commit();
+    }
+    await expect
+      .poll(async () => {
+        const activity = await readFamilyActivity();
+        return activity?.observed.revision === next.revision && !activity.move;
+      })
+      .toBe(true);
+    await expect(page.getByTestId("open-games")).toBeEnabled();
+    await page.getByTestId("open-games").click();
+    await page.getByTestId("open-pair-activity-mabel").click();
+    await expect(page.getByTestId("games-activity-count")).toHaveCount(0);
+  });
+}
+
 test("other-table real turns defer notices, persist unread state and open without losing drafts", async ({
   page,
   browser,
@@ -9486,7 +9561,14 @@ test("debug activity uses real badge and notice UI, retains request highlights, 
   await expect(page.getByTestId("games-activity-count")).toHaveText("2");
   const notice = page.getByTestId("game-activity-notice");
   await expect(notice).toContainText("would like to start a new game");
+  await page.getByTestId("open-activity-game").focus();
   await page.getByTestId("open-activity-game").hover();
+  await page.mouse.move(0, 0);
+  await page.waitForTimeout(8500);
+  await expect(page.getByTestId("open-activity-game")).toBeFocused();
+  await expect(notice).toBeVisible();
+  await page.getByTestId("open-activity-game").hover();
+  await page.getByTestId("open-games").focus();
   await page.waitForTimeout(8500);
   await expect(notice).toBeVisible();
   await page.setViewportSize({ width: 820, height: 1180 });

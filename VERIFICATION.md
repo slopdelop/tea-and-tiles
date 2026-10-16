@@ -593,3 +593,20 @@ hit testing, and a notification deferred until scoring finishes. The initial
 tablet overlay test found a stacking/hit-testing problem; the portal fix passed
 the reruns. Production was not changed or published. Real-iPad review remains a
 manual check.
+
+### Other-game activity review fixes — 2026-10-16 (local only)
+
+Acknowledgment now retries when the selected table's observed summary changes,
+while retaining the delivered board revision and exact request versions as its
+limits. A queued request survives later ordinary activity at the same table;
+explicitly dismissed notices are not resurrected. Notice expiration pauses while
+either hover or keyboard focus remains, including overlapping interactions.
+
+Validation: 212 unit tests, the frontend/Functions build, and five focused Chrome
+regressions passed. These cover board-first, summary-first and atomic delivery,
+switching away without a false unread badge, retaining unread state until the
+board arrives, account isolation, draft preservation, debug previews, deferred
+notices, and both hover/focus overlap directions beyond the eight-second timeout.
+The new fixture's cleanup expectation initially omitted its simulated revision
+increment; correcting that expectation made all three arrival-order cases pass.
+No backend behavior, Firebase traffic, deployment or publication changed.

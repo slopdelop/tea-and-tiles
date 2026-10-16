@@ -17,7 +17,7 @@ interface Model {
   tables: ActivityState;
   queue: ActivityEvent[];
 }
-function advance(
+export function advanceActivity(
   model: Model,
   pairs: PairSummary[],
   player: string,
@@ -51,12 +51,18 @@ function advance(
         (e) => !before.has(e.id),
       );
       if (!fresh.length) continue;
-      fresh.sort(
+      // Preserve a queued request when ordinary activity arrives at its table.
+      // Only queued or fresh events participate: dismissed notices stay dismissed.
+      const candidates = [
+        ...queue.filter((e) => e.pairId === pair.id),
+        ...fresh,
+      ];
+      candidates.sort(
         (a, b) =>
           Number(isRequestActivity(b)) - Number(isRequestActivity(a)) ||
           b.at - a.at,
       );
-      queue = [...queue.filter((e) => e.pairId !== pair.id), fresh[0]];
+      queue = [...queue.filter((e) => e.pairId !== pair.id), candidates[0]];
     }
   }
   queue.sort(
@@ -122,7 +128,7 @@ export function useGameActivity(input: {
     if (!scope || !playerId || !serverReady || !dictionaryReady) return;
     setModel((old) =>
       old.scope === scope
-        ? advance(old, pairs, playerId, approved, selectedPairId)
+        ? advanceActivity(old, pairs, playerId, approved, selectedPairId)
         : old,
     );
   }, [
@@ -251,7 +257,7 @@ export function useGameActivity(input: {
       });
       setPreview({
         pairs: changed,
-        model: advance(
+        model: advanceActivity(
           { scope, synced: true, tables: baseline, queue: [] },
           changed,
           playerId,
