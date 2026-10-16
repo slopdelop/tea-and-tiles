@@ -2125,18 +2125,18 @@ button {
   position: absolute;
   right: 10px;
   top: 10px;
-  width: 36px;
-  height: 36px;
+  width: 48px;
+  height: 48px;
   border: 0;
 }
 .modal h2 {
   font-size: 28px;
   letter-spacing: -0.7px;
-  margin: 0 20px 0 0;
+  margin: 0 38px 0 0;
 }
 .modal p,
 .help-steps {
-  font-size: 13px;
+  font-size: 16px;
   line-height: 1.75;
   color: #707b65;
   margin: 12px 0 20px;
@@ -4105,7 +4105,7 @@ button {
   overflow-wrap: anywhere;
 }
 .history-note {
-  font-size: 11px !important;
+  font-size: 14px !important;
   color: var(--muted);
 }
 .final-adjustments {
@@ -5453,7 +5453,7 @@ html.tablet-page-fitted,
 }
 .games-control-anchor {
   position: relative;
-  z-index: 30;
+  z-index: 10;
   width: max-content;
 }
 .games-control {
@@ -5476,7 +5476,7 @@ html.tablet-page-fitted,
 .games-reply-needed {
   outline: 2px solid #709456;
   outline-offset: 2px;
-  animation: games-reply-glow 3s ease-in-out infinite;
+  animation: games-reply-glow 3s ease-in-out 3;
 }
 @keyframes games-reply-glow {
   0%,
@@ -5527,7 +5527,7 @@ html.tablet-page-fitted,
 .activity-open span {
   display: block;
   margin-top: 6px;
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 700;
 }
 .activity-dismiss {
@@ -5600,4 +5600,156 @@ html.tablet-page-fitted,
 /* Small final-report notes need full contrast in every table palette. */
 .modal :is(.ending-phase, .history-note) {
   color: var(--ink);
+}
+
+/* Readable supporting controls without changing the board or rack tile sizes. */
+.hand-action-button {
+  font-size: 15px;
+}
+.rack-hint,
+.turn-description,
+.word-check,
+.mode-progress,
+.turn-card .preview-note.arrangement-error,
+.turn-card :is(.exchange-note, .scoreless-notice, .end-request-status) {
+  font-size: 14px;
+  line-height: 1.5;
+}
+.turn-heading {
+  margin-bottom: 12px;
+}
+.turn-description {
+  margin-top: 0;
+}
+.player-details > span:first-child {
+  flex-wrap: wrap;
+  font-size: 16px;
+}
+.player-caption {
+  font-size: 13px;
+}
+.player-details small.player-presence {
+  font-size: 12px;
+}
+.header-actions :is(.games-control, .header-new-game),
+.score-details-button,
+.word-check-action {
+  font-size: 16px;
+  min-height: 44px;
+}
+.modal :is(.setup-note, .dictionary-reassurance, .theme-options > p),
+.choice-card strong {
+  font-size: 16px;
+}
+.choice-card small {
+  font-size: 14px;
+}
+.debug-toggle {
+  min-height: 48px;
+  font-size: 16px;
+}
+.game-reply-label {
+  font-weight: 700;
+  line-height: 1.5;
+}
+.ending-ledger,
+.final-adjustments,
+.player-histories li {
+  font-size: 15px;
+}
+.ending-ledger dt small,
+.top-word-columns small {
+  font-size: 14px;
+}
+.ending-ledger dd,
+.final-adjustments dd {
+  white-space: nowrap;
+}
+.game-history {
+  margin-top: 20px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.game-history > summary {
+  min-height: 48px;
+  padding: 12px;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.game-history > :not(summary) {
+  margin-inline: 14px;
+}
+.game-history > summary:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 3px;
+  border-radius: 8px;
+}
+.enroll-form label,
+.enroll-form input,
+.enroll-form input::placeholder {
+  font-size: 16px;
+}
+.enroll-form input + label {
+  margin-top: 16px;
+}
+.private-code-field {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+.private-code-field input {
+  min-width: 0;
+}
+.private-code-field .code-visibility {
+  flex: 0 0 106px;
+  min-height: 49px;
+  font-size: 15px;
+  padding: 8px;
+}
+@media (min-width: 800px) {
+  .score-explanation .long-score-word .score-letter > .tile-letter {
+    font-size: max(15px, calc(var(--score-tile-size) * 0.65));
+  }
+}
+.enroll-form .setup-note {
+  font-size: 14px;
+}
+/* Keep sign-in controls together in a short landscape window. */
+@media (min-width: 700px) and (max-height: 850px) and (orientation: landscape) {
+  .app-shell:not(.active-game) {
+    padding-top: 12px;
+  }
+  .app-shell:not(.active-game) > .app-header {
+    margin-bottom: 8px;
+  }
+  .welcome {
+    margin-top: 8px;
+    margin-bottom: 16px;
+  }
+  .welcome-art {
+    height: 96px;
+  }
+  .welcome-art > .tea-mark {
+    width: 44px;
+    height: 48px;
+  }
+  .welcome-tiles .tile {
+    width: 34px;
+    height: 36px;
+    font-size: 24px;
+  }
+  .welcome .paper-leaf {
+    display: none;
+  }
+  .welcome > .eyebrow {
+    margin: 12px 0 8px;
+  }
+  .welcome h1 {
+    font-size: 32px;
+  }
+  .welcome-copy {
+    margin: 12px 0 16px;
+  }
 }

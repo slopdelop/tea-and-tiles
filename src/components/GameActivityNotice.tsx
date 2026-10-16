@@ -7,7 +7,7 @@ import {
   type CSSProperties,
 } from "react";
 import { createPortal } from "react-dom";
-import type { ActivityEvent } from "../gameActivity";
+import { isRequestActivity, type ActivityEvent } from "../gameActivity";
 export function GameActivityNotice({
   event,
   text,
@@ -27,7 +27,7 @@ export function GameActivityNotice({
   const [focused, setFocused] = useState(false);
   const held = hovered || focused;
   const [ready, setReady] = useState(false);
-  const countdown = useRef({ id: "", remaining: 8000 });
+  const countdown = useRef({ id: "", remaining: 12000 });
   const card = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState<CSSProperties>({});
   useLayoutEffect(() => {
@@ -82,7 +82,10 @@ export function GameActivityNotice({
   useEffect(() => {
     if (!event) return;
     if (countdown.current.id !== event.id)
-      countdown.current = { id: event.id, remaining: 8000 };
+      countdown.current = {
+        id: event.id,
+        remaining: isRequestActivity(event) ? 15000 : 12000,
+      };
     if (!show || !ready || held) return;
     const start = performance.now();
     const timer = setTimeout(

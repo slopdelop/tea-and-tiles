@@ -155,7 +155,7 @@ export function EndingPresentation({
               <dl className="ending-ledger">
                 <div>
                   <dt>
-                    Points earned <small>including bingo bonuses</small>
+                    Points earned <small>including seven-tile bonuses</small>
                   </dt>
                   <dd>{player.earned}</dd>
                 </div>
@@ -166,7 +166,7 @@ export function EndingPresentation({
                       : "pending"
                   }
                 >
-                  <dt>Remaining tiles</dt>
+                  <dt>Unused tile points</dt>
                   <dd>{player.deducted ? `−${player.deducted}` : "0"}</dd>
                 </div>
                 {data.hasTransfer && (
@@ -177,8 +177,10 @@ export function EndingPresentation({
                         : "pending"
                     }
                   >
-                    <dt>Partner’s remaining tiles</dt>
-                    <dd>{player.transferred ? `+${player.transferred}` : "0"}</dd>
+                    <dt>Partner’s unused tile points</dt>
+                    <dd>
+                      {player.transferred ? `+${player.transferred}` : "0"}
+                    </dd>
                   </div>
                 )}
               </dl>

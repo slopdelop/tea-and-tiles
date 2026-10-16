@@ -381,96 +381,99 @@ export function GameSummary({
           );
         })}
       </div>
-      <h3 className="help-section-title">The game in words</h3>
-      {game.historyComplete !== true && (
-        <p className="history-note" data-testid="partial-history">
-          Only recorded turns are shown. Earlier turns from this game may be
-          missing.
-        </p>
-      )}
-      <div className="player-histories">
-        {(["mom", "aunt"] as const).map((player) => {
-          const moves = history.filter((move) => move.player === player);
-          const adjustment = game.finalScoreAdjustments?.players[player];
-          return (
-            <section key={player} data-testid={`history-${player}`}>
-              <h4>{names[player]}</h4>
-              {moves.length ? (
-                <ol>
-                  {moves.map((move) => (
-                    <li key={move.id}>
-                      <span className="history-word-scores">
-                        {move.kind === "play" ? (
-                          move.wordScores?.length ? (
-                            <>
-                              {move.wordScores.map((word, index) => (
-                                <span key={`${index}:${word.word}`}>
-                                  {word.word} <small>{word.score} points</small>
-                                </span>
-                              ))}
-                              {!!move.bingoBonus && (
-                                <small>Seven tiles +{move.bingoBonus}</small>
-                              )}
-                            </>
+      <details className="game-history" data-testid="game-history">
+        <summary>Turn-by-turn history and score adjustments</summary>
+        {game.historyComplete !== true && (
+          <p className="history-note" data-testid="partial-history">
+            Only recorded turns are shown. Earlier turns from this game may be
+            missing.
+          </p>
+        )}
+        <div className="player-histories">
+          {(["mom", "aunt"] as const).map((player) => {
+            const moves = history.filter((move) => move.player === player);
+            const adjustment = game.finalScoreAdjustments?.players[player];
+            return (
+              <section key={player} data-testid={`history-${player}`}>
+                <h4>{names[player]}</h4>
+                {moves.length ? (
+                  <ol>
+                    {moves.map((move) => (
+                      <li key={move.id}>
+                        <span className="history-word-scores">
+                          {move.kind === "play" ? (
+                            move.wordScores?.length ? (
+                              <>
+                                {move.wordScores.map((word, index) => (
+                                  <span key={`${index}:${word.word}`}>
+                                    {word.word}{" "}
+                                    <small>{word.score} points</small>
+                                  </span>
+                                ))}
+                                {!!move.bingoBonus && (
+                                  <small>Seven tiles +{move.bingoBonus}</small>
+                                )}
+                              </>
+                            ) : (
+                              move.words.join(" / ")
+                            )
+                          ) : move.kind === "pass" ? (
+                            "Passed"
                           ) : (
-                            move.words.join(" / ")
-                          )
-                        ) : move.kind === "pass" ? (
-                          "Passed"
-                        ) : (
-                          "Exchanged tiles"
-                        )}
-                      </span>
-                      <b aria-label={`Turn total ${move.score}`}>
-                        {move.score > 0 ? "+" : ""}
-                        {move.score}
-                      </b>
-                    </li>
-                  ))}
-                </ol>
-              ) : (
-                <p className="history-note">No recorded turns.</p>
-              )}
-              {adjustment ? (
-                <dl
-                  className="final-adjustments"
-                  data-testid={`adjustments-${player}`}
-                >
-                  <div>
-                    <dt>Earned in play</dt>
-                    <dd>{adjustment.earned}</dd>
-                  </div>
-                  <div>
-                    <dt>Tiles left in hand</dt>
-                    <dd>{adjustment.rackValue}</dd>
-                  </div>
-                  <div>
-                    <dt>Rack deduction</dt>
-                    <dd>
-                      {adjustment.deducted ? `−${adjustment.deducted}` : "0"}
-                    </dd>
-                  </div>
-                  {adjustment.transferred > 0 && (
+                            "Exchanged tiles"
+                          )}
+                        </span>
+                        <b aria-label={`Turn total ${move.score}`}>
+                          {move.score > 0 ? "+" : ""}
+                          {move.score}
+                        </b>
+                      </li>
+                    ))}
+                  </ol>
+                ) : (
+                  <p className="history-note">No recorded turns.</p>
+                )}
+                {adjustment ? (
+                  <dl
+                    className="final-adjustments"
+                    data-testid={`adjustments-${player}`}
+                  >
                     <div>
-                      <dt>From partner’s rack</dt>
-                      <dd>+{adjustment.transferred}</dd>
+                      <dt>Earned in play</dt>
+                      <dd>{adjustment.earned}</dd>
                     </div>
-                  )}
-                  <div className="adjusted-total">
-                    <dt>Final total</dt>
-                    <dd>{adjustment.final}</dd>
-                  </div>
-                </dl>
-              ) : (
-                <p className="history-note">
-                  Final score: {game.scores[player]}. Rack adjustments were not
-                  recorded.
-                </p>
-              )}
-            </section>
-          );
-        })}
-      </div>
+                    <div>
+                      <dt>Unused tile points</dt>
+                      <dd>{adjustment.rackValue}</dd>
+                    </div>
+                    <div>
+                      <dt>Rack deduction</dt>
+                      <dd>
+                        {adjustment.deducted ? `−${adjustment.deducted}` : "0"}
+                      </dd>
+                    </div>
+                    {adjustment.transferred > 0 && (
+                      <div>
+                        <dt>From partner’s rack</dt>
+                        <dd>+{adjustment.transferred}</dd>
+                      </div>
+                    )}
+                    <div className="adjusted-total">
+                      <dt>Final total</dt>
+                      <dd>{adjustment.final}</dd>
+                    </div>
+                  </dl>
+                ) : (
+                  <p className="history-note">
+                    Final score: {game.scores[player]}. Rack adjustments were
+                    not recorded.
+                  </p>
+                )}
+              </section>
+            );
+          })}
+        </div>
+      </details>
     </section>
   );
 }

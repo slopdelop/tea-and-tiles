@@ -26,6 +26,17 @@ export interface TableActivity {
 export type ActivityState = Record<string, TableActivity>;
 export const isRequestActivity = (event: ActivityEvent) =>
   ["newGame", "endGame", "word"].includes(event.kind);
+export function requestActivityLabel(actions: Record<string, string>) {
+  const labels: string[] = [];
+  if (actions.newGame) labels.push("New game request");
+  if (actions.endGame) labels.push("End game request");
+  const words = Object.keys(actions).filter((key) =>
+    key.startsWith("word-"),
+  ).length;
+  if (words)
+    labels.push(words === 1 ? "Word approval" : `${words} word approvals`);
+  return labels.length ? `${labels.join(" · ")} — please reply` : "";
+}
 export function incomingActions(
   pair: PairSummary,
   playerId: string,

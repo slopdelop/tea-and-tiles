@@ -610,3 +610,43 @@ notices, and both hover/focus overlap directions beyond the eight-second timeout
 The new fixture's cleanup expectation initially omitted its simulated revision
 increment; correcting that expectation made all three arrival-order cases pass.
 No backend behavior, Firebase traffic, deployment or publication changed.
+
+### UI audit polish — 2026-10-16 (local only)
+
+Recovery checkpoint: `checkpoint/pre-ui-audit-polish` (`043ba3d`). The prior
+notification fixes were committed before this visual pass.
+
+Games now stays behind modal dialogs. Unrecognized drafts have one Review word
+action, without a +score badge; review remains available while preparing the
+next turn and does not submit a move. Approval copy explains that words enter
+the family-wide dictionary. Routine turn filler is hidden, while saving,
+reconnection and invalid-placement explanations remain.
+
+Supporting text and touch targets are larger, including 15px Recall/Shuffle
+labels, 48px dialog dismissal and 44px Score details. Board/rack tile dimensions
+and the existing scoring/winner effects remain intact. Long-word score tiles
+retain at least 15px lettering on tablet-sized windows. The board-fit regression
+now reserves the measured hand/control rows rather than the obsolete fixed
+single-row height assumption.
+
+Drawer requests show a specific decision instead of three competing statuses.
+Turn notices last 12 visible seconds and requests 15; hover/focus pauses and
+deferred presentation still apply. The Games request outline pulses three times,
+then remains steady. These changes use existing summaries and add no Firebase
+calls or polling.
+
+The final report calls deductions unused tile points and bonuses seven-tile
+bonuses. Best words remain visible, with full history and adjustments in an
+accessible disclosure. Short-landscape sign-in keeps its fields/button/guidance
+together; Show/Hide code is an explicit, non-persistent toggle. Help describes
+drag replacement of tentative tiles.
+
+Validation: 213 unit tests, the frontend/Functions build, and 19 focused Chrome
+regressions passed across the initial run and targeted reruns. Checks cover
+tablet fitting/foreground restore, rack alignment and label bounds, nine themes,
+dictionary review while waiting, a real rack-out/rematch, 8- and 15-letter scores,
+exchange/turn feedback, account isolation, all listener arrival orders, modal
+hit testing, results disclosure, short-screen sign-in and code masking, and both
+notice durations without clearing unread state. Visual captures of sign-in,
+results and tablet layouts were reviewed. Physical-iPad review remains manual.
+No production publication or Firebase deployment was performed.

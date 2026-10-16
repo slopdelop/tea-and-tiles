@@ -7,6 +7,7 @@ import {
   incomingActions,
   observeActivity,
   readActivityState,
+  requestActivityLabel,
   unreadEvents,
 } from "../src/gameActivity";
 const approved = new Set<string>();
@@ -50,6 +51,21 @@ const observe = (
   pairs: PairSummary[],
 ) => observeActivity(state, pairs, "justin", approved, 20);
 describe("other-table activity", () => {
+  it("describes the decisions a table needs without an ambiguous turn status", () => {
+    expect(requestActivityLabel({})).toBe("");
+    expect(requestActivityLabel({ newGame: "a" })).toBe(
+      "New game request — please reply",
+    );
+    expect(requestActivityLabel({ endGame: "b" })).toBe(
+      "End game request — please reply",
+    );
+    expect(
+      requestActivityLabel({ "word-mom-ZZ": "c", "word-aunt-ZA": "d" }),
+    ).toBe("2 word approvals — please reply");
+    expect(requestActivityLabel({ newGame: "a", "word-mom-ZZ": "c" })).toBe(
+      "New game request · Word approval — please reply",
+    );
+  });
   it("keeps a queued request ahead of a later turn at the same table", () => {
     const p = pair();
     const baseline = {

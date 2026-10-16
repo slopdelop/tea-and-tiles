@@ -58,7 +58,12 @@ import { useSubmissionFeedback } from "./hooks/useSubmissionFeedback";
 import { DebugFrameMeter } from "./components/DebugFrameMeter";
 import { DragPerformanceLab } from "./components/DragPerformanceLab";
 import { useGameActivity } from "./hooks/useGameActivity";
-import { activityText, incomingActions, unreadEvents } from "./gameActivity";
+import {
+  activityText,
+  incomingActions,
+  requestActivityLabel,
+  unreadEvents,
+} from "./gameActivity";
 import { GameActivityNotice } from "./components/GameActivityNotice";
 import "./styles.css";
 
@@ -697,6 +702,7 @@ function TableApp({
   );
   const [loginPlayer, setLoginPlayer] = useState<string>(welcomeDefaults.name);
   const [passphrase, setPassphrase] = useState(welcomeDefaults.code);
+  const [showPrivateCode, setShowPrivateCode] = useState(false);
   const [linkPlayerId, setLinkPlayerId] = useState(welcomeDefaults.playerId);
   const [enrolling, setEnrolling] = useState(false);
   const [message, setMessage] = useState("");
@@ -2599,6 +2605,7 @@ function TableApp({
     !newGameBusy &&
     !endGameBusy &&
     !sharedActionsPaused;
+  const needsWordReview = !!preview && wordCheckState === "unrecognized";
   const popupWords = dictionaryWords.filter((word) => !houseWords.has(word));
   const requestableWords = popupWords.filter(
     (word) =>
@@ -2706,6 +2713,11 @@ function TableApp({
     ) : null;
   const wordRequests = (testPrefix = "", review = false) => (
     <div className="word-request-content">
+      {review && (
+        <p>
+          Approved words are shared by everyone in the family, across all games.
+        </p>
+      )}
       {review && !!session.houseWords.length && (
         <p className="shared-word-count">
           {session.houseWords.length} shared{" "}
@@ -3197,6 +3209,7 @@ function TableApp({
                       passphrase,
                     );
                   setPassphrase("");
+                  setShowPrivateCode(false);
                 } catch (error) {
                   setMessage(
                     error instanceof Error
@@ -3242,17 +3255,31 @@ function TableApp({
                     placeholder="Your name"
                   />
                   <label htmlFor="login-password">Your private code</label>
-                  <input
-                    id="login-password"
-                    data-testid="login-password"
-                    type="password"
-                    value={passphrase}
-                    onChange={(event) => setPassphrase(event.target.value)}
-                    autoComplete="current-password"
-                    inputMode="numeric"
-                    maxLength={128}
-                    required
-                  />
+                  <div className="private-code-field">
+                    <input
+                      id="login-password"
+                      data-testid="login-password"
+                      type={showPrivateCode ? "text" : "password"}
+                      value={passphrase}
+                      onChange={(event) => setPassphrase(event.target.value)}
+                      autoComplete="current-password"
+                      autoCapitalize="none"
+                      spellCheck={false}
+                      inputMode="numeric"
+                      maxLength={128}
+                      required
+                    />
+                    <button
+                      type="button"
+                      className="secondary-button code-visibility"
+                      data-testid="toggle-private-code"
+                      aria-controls="login-password"
+                      aria-pressed={showPrivateCode}
+                      onClick={() => setShowPrivateCode((shown) => !shown)}
+                    >
+                      {showPrivateCode ? "Hide code" : "Show code"}
+                    </button>
+                  </div>
                 </>
               )}
               <button
@@ -3829,7 +3856,7 @@ function TableApp({
                   {recallAnimation.active
                     ? "Returning your tiles…"
                     : drag
-                      ? "Drop on an empty square or back in your hand."
+                      ? "Drop on a square, swap a draft tile, or return to your hand."
                       : selected
                         ? placements.some((p) => p.tileId === selected)
                           ? "Choose a square, or tap the tile again to return it."
@@ -3939,19 +3966,19 @@ function TableApp({
                       )}
                     </div>
                   )}
-                  <p className="turn-description">
-                    {pending
-                      ? "Please keep this move here until it is confirmed."
-                      : finishedOnBoard
-                        ? game.endedReason === "new-game"
-                          ? "A fresh board is on its way."
-                          : "Your final scores are saved. Take a look back over the board."
-                        : !connected
-                          ? "Your draft is saved here. We’ll reconnect to your game."
-                          : yourTurn
-                            ? "There’s a good word in there somewhere."
-                            : `Prepare a private draft while ${partnerName} plays. Only you can see these tiles.`}
-                  </p>
+                  {(pending || finishedOnBoard || !connected) && (
+                    <p className="turn-description">
+                      {pending
+                        ? "Please keep this move here until it is confirmed."
+                        : finishedOnBoard
+                          ? game.endedReason === "new-game"
+                            ? "A fresh board is on its way."
+                            : "Your final scores are saved. Take a look back over the board."
+                          : !connected
+                            ? "Your draft is saved here. We’ll reconnect to your game."
+                            : ""}
+                    </p>
+                  )}
                   {openingBoard && placements.length === 0 && (
                     <p
                       className={`first-word-hint ${centreCovered ? "centre-covered" : ""}`}
@@ -4040,17 +4067,6 @@ function TableApp({
                                   ? "Checking words…"
                                   : "Word check unavailable"}
                           </span>
-                          {wordCheckState === "unrecognized" && (
-                            <button
-                              className="word-check-action"
-                              data-testid="ask-about-word"
-                              disabled={!canUseDictionary}
-                              onClick={() => showDictionary(unknownWords)}
-                            >
-                              Ask to add{" "}
-                              {unknownWords.length === 1 ? "word" : "words"}
-                            </button>
-                          )}
                           {wordDictionary.error && (
                             <button
                               className="word-check-action"
@@ -4065,15 +4081,28 @@ function TableApp({
                       <button
                         className="primary-button play-button"
                         data-testid="play-word"
-                        disabled={!canSubmit || !connected || !preview}
-                        onClick={() => void send("play")}
+                        disabled={
+                          needsWordReview
+                            ? !canUseDictionary ||
+                              !canEdit ||
+                              !!drag ||
+                              !!settling
+                            : !canSubmit || !connected || !preview
+                        }
+                        onClick={() =>
+                          needsWordReview
+                            ? showDictionary(unknownWords)
+                            : void send("play")
+                        }
                       >
                         {busy
                           ? "Saving…"
-                          : yourTurn
-                            ? "Play word"
-                            : `Wait for ${partnerName}`}
-                        {preview ? (
+                          : needsWordReview
+                            ? "Review word"
+                            : yourTurn
+                              ? "Play word"
+                              : `Wait for ${partnerName}`}
+                        {preview && !needsWordReview ? (
                           <span className="button-score">+{preview.score}</span>
                         ) : (
                           <Icon name="arrow" />
@@ -5158,7 +5187,7 @@ function TableApp({
           )}
           {dialog === "incoming-word" && incomingWordRequest && (
             <Modal
-              title={`Add ${incomingWordRequest.word} to your dictionary?`}
+              title={`Add ${incomingWordRequest.word} to the family dictionary?`}
               testId="incoming-word-popup"
               dismissible={false}
               close={() => setDialog(null)}
@@ -5169,8 +5198,8 @@ function TableApp({
               >
                 <p>
                   {names[incomingWordRequest.requestedBy]} would like to play{" "}
-                  <strong>{incomingWordRequest.word}</strong>. Add it so you can
-                  both use it in this and future games?
+                  <strong>{incomingWordRequest.word}</strong>. If you agree,
+                  everyone can use it in their games.
                 </p>
                 <p className="dictionary-reassurance">
                   Your tiles stay where you left them. Adding a word does not
@@ -5243,7 +5272,7 @@ function TableApp({
               <div>
                 {popupWords.length ? (
                   <>
-                    <p>These words aren’t in your dictionary yet:</p>
+                    <p>These words aren’t in the dictionary yet:</p>
                     <ul className="dictionary-word-list">
                       {popupWords.map((word) => (
                         <li key={word}>{word}</li>
@@ -5252,9 +5281,8 @@ function TableApp({
                     <p>
                       Ask {partnerName} to add{" "}
                       {popupWords.length === 1 ? "this word" : "these words"} to
-                      your shared dictionary. If they agree, you can both use{" "}
-                      {popupWords.length === 1 ? "it" : "them"} in this and
-                      future games.
+                      the family dictionary. If they agree, everyone can use{" "}
+                      {popupWords.length === 1 ? "it" : "them"} in their games.
                     </p>
                     <p className="dictionary-reassurance">
                       Your tiles stay here. You can play after approval, when
@@ -5340,15 +5368,16 @@ function TableApp({
                   const unread =
                     !selectedPair &&
                     unreadEvents(activity.tables[pair.id]).length > 0;
-                  const needsReply =
-                    !!session.playerId &&
-                    Object.keys(
-                      incomingActions(
-                        pair,
-                        session.playerId,
-                        activity.approved,
-                      ),
-                    ).length > 0;
+                  const replyLabel = requestActivityLabel(
+                    session.playerId
+                      ? incomingActions(
+                          pair,
+                          session.playerId,
+                          activity.approved,
+                        )
+                      : {},
+                  );
+                  const needsReply = !!replyLabel;
                   return (
                     <button
                       key={pair.id}
@@ -5361,21 +5390,23 @@ function TableApp({
                       }}
                     >
                       <strong>{opponent}</strong>
-                      {unread && (
+                      {unread && !needsReply && (
                         <small className="game-unread-label">
                           ● New activity
                         </small>
                       )}
                       {needsReply && (
-                        <small className="game-reply-label">Reply needed</small>
+                        <span className="game-reply-label">{replyLabel}</span>
                       )}
-                      <span>
-                        {pair.activeGame?.status === "finished"
-                          ? "Game complete"
-                          : pair.activeGame?.turn === ownSeat
-                            ? "Your turn"
-                            : `Waiting for ${opponent}`}
-                      </span>
+                      {!needsReply && (
+                        <span>
+                          {pair.activeGame?.status === "finished"
+                            ? "Game complete"
+                            : pair.activeGame?.turn === ownSeat
+                              ? "Your turn"
+                              : `Waiting for ${opponent}`}
+                        </span>
+                      )}
                       {selectedPair && <small>Open now</small>}
                     </button>
                   );
@@ -5608,7 +5639,8 @@ function TableApp({
                   <p>
                     To move a tentative tile, tap it and then another square.
                     Tap it twice to return it to your rack. You can also drag
-                    tiles onto empty squares or back to the rack.{" "}
+                    tiles onto empty squares or back to the rack. Drag onto a
+                    tile you placed this turn to swap it out.{" "}
                     <b>Recall tiles</b> brings them all back.
                   </p>
                   <p>

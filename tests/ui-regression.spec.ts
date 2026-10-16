@@ -851,7 +851,21 @@ test("tablet landscape expands the board to the top and exposes the build versio
     const board = await page.locator(".board-frame").boundingBox();
     const hand = await page.locator(".hand-row").boundingBox();
     expect(board!.y).toBeLessThanOrEqual(24);
-    expect(board!.width).toBeGreaterThan(height - 140);
+    // Maximize the square after reserving the actual rack/control rows, rather
+    // than assuming the old single-row hand always needs the same height.
+    const handHint = (await page.getByTestId("rack-hint").boundingBox())!;
+    const playArea = (await page.locator(".play-area").boundingBox())!;
+    const contentBottom = Math.max(
+      hand!.y + hand!.height,
+      handHint.y + handHint.height,
+    );
+    const belowBoard = contentBottom - board!.y - board!.height;
+    const available = Math.min(
+      playArea.width,
+      height - board!.y - belowBoard - 16,
+    );
+    expect(board!.width).toBeGreaterThanOrEqual(available - 8);
+    expect(contentBottom).toBeLessThanOrEqual(height);
     expect(hand!.y + hand!.height).toBeLessThanOrEqual(height);
     await expect(page.getByTestId("help-settings")).toBeVisible();
     await expect(page.getByTestId("new-game")).toBeVisible();
@@ -1220,7 +1234,8 @@ test("the rack centers on the board while full-size hand controls follow its rig
               return (
                 rect.width >= tile.width &&
                 rect.height >= tile.height &&
-                getComputedStyle(control).fontSize === "12px"
+                getComputedStyle(control).fontSize === "15px" &&
+                control.scrollWidth <= control.clientWidth
               );
             }) &&
             document.documentElement.scrollWidth <= innerWidth
@@ -3684,13 +3699,17 @@ test("live dictionary checks include unknown crosswords while waiting and preser
   expect(unknownInk[0]).toBeGreaterThan(unknownInk[1]);
   await checkTextContrast(page, '[data-testid="word-check"]');
   await expect(page.locator(".invalid-arrangement")).toHaveCount(0);
-  await expect(page.getByTestId("play-word")).toBeDisabled();
-  await expect(page.getByTestId("ask-about-word")).toBeEnabled();
+  await expect(page.getByTestId("play-word")).toBeEnabled();
+  await expect(page.getByTestId("play-word")).toContainText("Review word");
+  await expect(
+    page.getByTestId("play-word").locator(".button-score"),
+  ).toHaveCount(0);
+  await expect(page.getByTestId("ask-about-word")).toHaveCount(0);
   await page.screenshot({
     path: info.outputPath("unrecognized-preview-red.png"),
     fullPage: false,
   });
-  await page.getByTestId("ask-about-word").click();
+  await page.getByTestId("play-word").click();
   await expect(page.getByTestId("dictionary-popup").locator("li")).toHaveText([
     "QA",
   ]);
@@ -4516,6 +4535,11 @@ test("actual last tile with an empty bag ends both devices, transfers leftover p
       await expect(target.getByTestId("result-score-aunt")).toHaveText("15");
       const summary = target.getByTestId("game-summary");
       await expect(summary).toBeVisible();
+      await expect(summary.getByTestId("game-history")).not.toHaveAttribute(
+        "open",
+        "",
+      );
+      await summary.getByTestId("game-history").locator("summary").click();
       await expect(
         summary.getByTestId("history-mom").locator("li"),
       ).toHaveCount(1);
@@ -9525,11 +9549,11 @@ test("other-table real turns defer notices, persist unread state and open withou
     // Catch-up state is quiet after reload: use Games to acknowledge it.
     await expect(page.getByTestId("turn-announcement")).toBeHidden();
     await page.getByTestId("open-games").click();
+    await expect(
+      page.getByTestId("open-pair-activity-mabel"),
+    ).not.toContainText("New activity");
     await expect(page.getByTestId("open-pair-activity-mabel")).toContainText(
-      "New activity",
-    );
-    await expect(page.getByTestId("open-pair-activity-mabel")).toContainText(
-      "Reply needed",
+      "New game request — please reply",
     );
     await page.getByTestId("open-pair-activity-mabel").click();
     await expect(page.getByTestId("turn-status")).toContainText("Your turn");
@@ -9601,7 +9625,7 @@ test("debug activity uses real badge and notice UI, retains request highlights, 
   await expect(page.getByTestId("games-activity-count")).toHaveText("1");
   await page.getByTestId("open-games").click();
   await expect(page.getByTestId(`open-pair-${target}`)).toContainText(
-    "Reply needed",
+    "New game request — please reply",
   );
   await page.getByRole("button", { name: "Close dialog" }).click();
   await page.getByTestId("local-debug-tools").click();
@@ -9628,3 +9652,141 @@ test("the normal welcome screen offers only name and code sign-in", async ({
   await expect(page.getByTestId("welcome-signin")).toHaveCount(0);
   await expect(page.getByTestId("setup-code")).toHaveCount(0);
 });
+
+test("audit polish keeps sign-in together and reveals the private code only on request", async ({
+  page,
+}, info) => {
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await page.goto("/");
+  const codeInput = page.getByTestId("login-password");
+  await page.getByTestId("login-player").fill("Elizabeth");
+  await codeInput.fill("123456");
+  await expect(codeInput).toHaveAttribute("type", "password");
+  await page.getByTestId("toggle-private-code").click();
+  await expect(codeInput).toHaveAttribute("type", "text");
+  await expect(codeInput).toHaveValue("123456");
+  await expect(page.getByTestId("game-board")).toHaveCount(0);
+  await page.getByTestId("toggle-private-code").click();
+  await expect(codeInput).toHaveAttribute("type", "password");
+  for (const size of [
+    { width: 1024, height: 768 },
+    { width: 1180, height: 820 },
+  ]) {
+    await page.setViewportSize(size);
+    for (const control of [
+      codeInput,
+      page.getByTestId("toggle-private-code"),
+      page.getByTestId("enroll-submit"),
+    ])
+      await expectControlInsideViewport(page, control);
+    await expect(page.locator(".enroll-form .setup-note")).toBeInViewport({
+      ratio: 1,
+    });
+  }
+  await page.screenshot({ path: info.outputPath("compact-sign-in.png") });
+  await page.reload();
+  await expect(codeInput).toHaveAttribute("type", "password");
+});
+
+test("audit polish layers dialogs above Games and keeps results history optional", async ({
+  page,
+}, info) => {
+  await seedActivityTables();
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.addInitScript(() =>
+    localStorage.setItem("tea-tiles-debug", "true"),
+  );
+  await enroll(page);
+  await expect(page.getByTestId("turn-announcement")).toBeHidden();
+  await expect(page.locator(".turn-description")).toHaveCount(0);
+  const expectGamesCovered = async () => {
+    await expect(page.locator(".modal-backdrop")).toHaveCSS("opacity", "1");
+    await expect
+      .poll(() =>
+        page.getByTestId("open-games").evaluate((button) => {
+          const r = button.getBoundingClientRect();
+          const top = document.elementFromPoint(
+            r.left + r.width / 2,
+            r.top + r.height / 2,
+          );
+          return !!top?.closest(".modal-backdrop") && !button.contains(top);
+        }),
+      )
+      .toBe(true);
+  };
+  await page.getByTestId("open-games").click();
+  await expectGamesCovered();
+  await expectControlInsideViewport(
+    page,
+    page.getByRole("button", { name: "Close dialog" }),
+  );
+  await expect(page.getByRole("button", { name: "Close dialog" })).toHaveCSS(
+    "width",
+    "48px",
+  );
+  await page.getByRole("button", { name: "Close dialog" }).click();
+  await page.getByTestId("help-settings").click();
+  await expectGamesCovered();
+  await page.getByRole("button", { name: "Close dialog" }).click();
+  await page.getByTestId("local-debug-tools").click();
+  await page.getByTestId("debug-ending-rack-out").click();
+  const result = page.getByTestId("debug-end-game-popup");
+  await expect(result).toBeVisible();
+  await expectGamesCovered();
+  await expect(result).toContainText("Unused tile points");
+  await expect(result).toContainText("seven-tile bonuses");
+  await expect(result).not.toContainText("bingo");
+  const history = result.getByTestId("game-history");
+  await expect(history).toHaveJSProperty("open", false);
+  await expect(result.getByTestId("top-word-scores-mom")).toBeVisible();
+  await history.locator("summary").click();
+  await expect(history).toHaveJSProperty("open", true);
+  await expect(result.getByTestId("history-mom")).toBeVisible();
+  await expectControlInsideViewport(
+    page,
+    result.getByRole("button", { name: "Play a new game?" }),
+  );
+  await history.locator("summary").click();
+  await result.getByRole("heading", { name: "Game complete" }).click();
+  await page.screenshot({ path: info.outputPath("readable-game-results.png") });
+});
+
+for (const [scene, visibleMs] of [
+  ["turn", 11000],
+  ["request", 14000],
+] as const) {
+  test(`audit polish gives ${scene} notices time to read without marking the table seen`, async ({
+    page,
+  }) => {
+    await seedActivityTables();
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.addInitScript(() =>
+      localStorage.setItem("tea-tiles-debug", "true"),
+    );
+    await enroll(page);
+    await expect(page.getByTestId("turn-announcement")).toBeHidden();
+    await page.clock.install();
+    await page.getByTestId("local-debug-tools").click();
+    await page.getByTestId(`debug-activity-${scene}`).click();
+    const notice = page.getByTestId("game-activity-notice");
+    await expect(notice).toBeVisible();
+    await page.mouse.move(0, 0);
+    await page.clock.pauseAt(new Date());
+    await page.clock.runFor(visibleMs);
+    await expect(notice).toBeVisible();
+    await page.clock.runFor(2000);
+    await expect(notice).toBeHidden();
+    await expect(page.getByTestId("games-activity-count")).toHaveText("1");
+    await page.getByTestId("open-games").click();
+    if (scene === "request") {
+      const requestRow = page.locator(".game-choice.game-needs-reply");
+      await expect(requestRow).toContainText("New game request — please reply");
+      await expect(requestRow).not.toContainText("New activity");
+      await expect(requestRow).not.toContainText("Your turn");
+    } else {
+      await expect(page.locator(".game-choice.game-unread")).toContainText(
+        "New activity",
+      );
+    }
+  });
+}
