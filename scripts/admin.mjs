@@ -81,6 +81,14 @@ function gameSummary(game) {
     scores: game.scores,
     revision: game.revision,
     updatedAt: Date.now(),
+    lastMove: game.lastMove
+      ? {
+          id: game.lastMove.id,
+          player: game.lastMove.player,
+          kind: game.lastMove.kind,
+          at: game.lastMove.at,
+        }
+      : null,
   };
 }
 function addGame(batch, game, pairId = "family") {

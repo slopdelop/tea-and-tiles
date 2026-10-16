@@ -559,3 +559,37 @@ right edge. Narrow boards place controls below the rack rather than shrinking
 the tiles or overlapping them. The local build and three focused browser
 regressions passed, covering four tablet sizes, partial-hand centering, stable
 drag targets and Recall landing positions. No publication was performed.
+
+### Other-game activity — local candidate
+
+Recovery checkpoint: `checkpoint/pre-game-activity` (`2913936`). The Games badge
+counts unread inactive tables, while unanswered incoming requests retain a glow
+and a separate Reply needed label. Opening a delivered board acknowledges only
+its received revision and request versions. The account/project-scoped local
+markers survive reload/sign-out; another account cannot inherit them.
+
+Notices use the real table-summary listener and wait behind dragging, scoring,
+turn announcements, dialogs, app updates and background state. They last eight
+visible seconds, pause on hover/focus, and never change tables automatically.
+The anchored overlay lives outside the tablet sidebar so board layers cannot
+intercept its buttons. Summary writes carry only bounded public move metadata
+and active request versions; there are no extra listeners, polling, callables or
+Firestore acknowledgment writes. Old summaries remain readable without migration.
+
+Local checks: Help → Local preview tools → Enable local preview tools → open
+the Debug button. Under Other-game activity, try Another player finished a turn,
+Request to start a game, Updates in two games, and Notification after scoring.
+Clear activity previews restores the real indicators. These scenes use existing
+other tables and isolated in-memory activity state; no fake requests are sent or
+saved. Clicking a preview notice opens that existing real table. The tools are
+development-only.
+
+Validation: 209 unit tests, 92 isolated backend/security-rules tests, and focused
+Chrome regressions passed. The browser checks include an actual opponent pass
+and new-game request, modal deferral, persisted unread markers, sign-out to a
+different account and back, request decline, restored private draft, debug badge
+and request highlights, hover beyond eight seconds, portrait overlay bounds and
+hit testing, and a notification deferred until scoring finishes. The initial
+tablet overlay test found a stacking/hit-testing problem; the portal fix passed
+the reruns. Production was not changed or published. Real-iPad review remains a
+manual check.

@@ -1,4 +1,4 @@
-import type { Slot } from "./engine.js";
+import type { Slot, MoveRecord } from "./engine.js";
 
 /** An account identity is independent of its seat at any particular table. */
 export type PlayerId = string;
@@ -14,6 +14,7 @@ export interface ActiveGameSummary {
   scores: Record<Slot, number>;
   revision: number;
   updatedAt: number;
+  lastMove?: Pick<MoveRecord, "id" | "player" | "kind" | "at"> | null;
 }
 export interface PairSummary {
   id: string;
@@ -24,6 +25,7 @@ export interface PairSummary {
   activeGameId: string;
   activeGame?: ActiveGameSummary;
   actionNeededBy?: Record<string, PlayerId>;
+  actionVersions?: Record<string, string>;
   pendingNewGameRequestId?: string | null;
   pendingEndGameRequestId?: string | null;
 }

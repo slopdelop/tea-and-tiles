@@ -228,6 +228,58 @@ export function multiplayerBackendTests(
       );
     });
 
+    it("projects bounded move metadata and versions word re-requests without extra activity documents", async () => {
+      const db = getFirestore(),
+        api = services(),
+        pairId = "alice-bob";
+      const command = move(pairId);
+      await api.submit(uid("alice"), command);
+      const summary = (await db.doc(`pairs/${pairId}`).get()).data()!;
+      expect(summary.activeGame.lastMove).toMatchObject({
+        id: command.id,
+        player: "mom",
+        kind: "pass",
+      });
+      expect(Object.keys(summary.activeGame.lastMove).sort()).toEqual([
+        "at",
+        "id",
+        "kind",
+        "player",
+      ]);
+      await api.submit(uid("alice"), command);
+      expect((await db.doc(`pairs/${pairId}`).get()).data()).toEqual(summary);
+      const request = await api.requestHouseWord(uid("alice"), {
+        pairId,
+        gameId: games[pairId].id,
+        word: "QZX",
+      });
+      const record = (
+        await db.doc(`pairs/${pairId}/wordRequests/${request.id}`).get()
+      ).data()!;
+      const key = `word-${request.id}`;
+      expect(
+        (await db.doc(`pairs/${pairId}`).get()).data()?.actionVersions[key],
+      ).toBe(`${games[pairId].id}:${record.requestedAt}`);
+      await api.respondHouseWord(uid("bob"), {
+        pairId,
+        gameId: games[pairId].id,
+        requestId: request.id,
+        approve: false,
+        expectedRequestedAt: record.requestedAt,
+      });
+      expect(
+        (await db.doc(`pairs/${pairId}`).get()).data()?.actionVersions?.[key],
+      ).toBeUndefined();
+      await api.requestHouseWord(uid("alice"), {
+        pairId,
+        gameId: games[pairId].id,
+        word: "QZX",
+      });
+      expect(
+        (await db.doc(`pairs/${pairId}`).get()).data()?.actionVersions[key],
+      ).not.toBe(`${games[pairId].id}:${record.requestedAt}`);
+    });
+
     it("uses the same account in opposite seats and retries each command only in its original table", async () => {
       const api = services(),
         db = getFirestore();

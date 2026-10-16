@@ -9329,6 +9329,213 @@ test("a stable-account sign-in link shows a readable name and sign-out clears it
   await expect(page.getByTestId("tile-rack")).toHaveCount(0);
 });
 
+async function seedActivityTables() {
+  for (const name of ["Mabel", "Caroline"]) {
+    const id = name.toLowerCase(),
+      pairId = `activity-${id}`;
+    const game = createGame(`ui-${pairId}`, () => 0.5);
+    game.turn = "mom";
+    const { racks, bag, ...state } = game;
+    const batch = db.batch();
+    batch.set(db.doc(`players/${id}`), {
+      displayName: name,
+      loginName: id,
+      sessionVersion: 0,
+    });
+    batch.set(db.doc(`playerCredentials/${id}`), {
+      ...(await createCredential("123456")),
+      enabled: true,
+    });
+    batch.set(db.doc(`pairs/${pairId}`), {
+      schemaVersion: 2,
+      memberIds: ["mom", id],
+      seatPlayers: { mom: id, aunt: "mom" },
+      names: { mom: name, aunt: "Elizabeth" },
+      activeGameId: game.id,
+      activeGame: {
+        id: game.id,
+        status: game.status,
+        turn: game.turn,
+        scores: game.scores,
+        revision: 0,
+        updatedAt: Date.now(),
+        lastMove: null,
+      },
+    });
+    batch.set(db.doc(`games/${game.id}`), {
+      ...state,
+      pairId,
+      rackCounts: { mom: 7, aunt: 7 },
+      bagCount: bag.length,
+    });
+    for (const seat of ["mom", "aunt"] as const)
+      batch.set(db.doc(`games/${game.id}/racks/${seat}`), {
+        tiles: racks[seat],
+      });
+    batch.set(db.doc(`games/${game.id}/private/state`), { bag });
+    await batch.commit();
+  }
+  await db.doc("players/mom").update({ defaultPairId: "family" });
+}
+
+test("other-table real turns defer notices, persist unread state and open without losing drafts", async ({
+  page,
+  browser,
+}) => {
+  await seedActivityTables();
+  await db
+    .doc("playerCredentials/mom")
+    .set({ ...(await createCredential("123456")), enabled: true });
+  const requests: string[] = [];
+  page.on("request", (request) => {
+    if (request.method() === "POST")
+      requests.push(
+        `${request.url()} ${decodeURIComponent(request.postData() || "")}`,
+      );
+  });
+  await enroll(page);
+  await expect(page.getByTestId("turn-announcement")).toBeHidden();
+  await rack(page, "A").tap();
+  await cell(page, 0, 1).tap();
+  await page.getByTestId("help-settings").click();
+  const other = await browser.newContext({
+    baseURL: "http://127.0.0.1:5183",
+    reducedMotion: "reduce",
+  });
+  try {
+    const actor = await other.newPage();
+    await actor.goto("/#player=Mabel&code=123456");
+    await actor.getByTestId("enroll-submit").click();
+    await expect(actor.getByTestId("pass-turn")).toBeEnabled();
+    await actor.getByTestId("pass-turn").click();
+    await actor.getByTestId("confirm-pass").click();
+    await expect(page.getByTestId("games-activity-count")).toHaveText("1");
+    await expect(page.getByTestId("game-activity-notice")).toBeHidden();
+    // Merely receiving activity must not subscribe to the other board or rack.
+    expect(
+      requests
+        .filter((text) => text.includes("/Listen"))
+        .some((text) => text.includes("games/ui-activity-mabel")),
+    ).toBe(false);
+    await page.getByRole("button", { name: "Close dialog" }).click();
+    await expect(page.getByTestId("game-activity-notice")).toContainText(
+      "Mabel finished their turn",
+    );
+    await expect(page.locator(".has-tentative")).toHaveCount(1);
+    await actor.getByTestId("new-game").click();
+    await actor.getByTestId("request-new-game").click();
+    await expect(page.getByTestId("game-activity-notice")).toContainText(
+      "Mabel would like to start a new game",
+    );
+    await expect(page.getByTestId("games-activity-count")).toHaveText("1");
+    await expect(page.getByTestId("open-games")).toHaveClass(
+      /games-reply-needed/,
+    );
+    // Unread markers belong to the account, not the anonymous device UID.
+    await page.getByTestId("help-settings").click();
+    await page.getByTestId("sign-out").click();
+    await page.getByTestId("login-player").fill("Mabel");
+    await page.getByTestId("login-password").fill("123456");
+    await page.getByTestId("enroll-submit").click();
+    await expect(page.getByTestId("game-board")).toBeVisible();
+    await expect(page.getByTestId("games-activity-count")).toHaveCount(0);
+    await page.getByTestId("help-settings").click();
+    await page.getByTestId("sign-out").click();
+    await page.getByTestId("login-player").fill("Elizabeth");
+    await page.getByTestId("login-password").fill("123456");
+    await page.getByTestId("enroll-submit").click();
+    await expect(page.getByTestId("games-activity-count")).toHaveText("1");
+    await page.reload();
+    await expect(page.getByTestId("games-activity-count")).toHaveText("1");
+    // Catch-up state is quiet after reload: use Games to acknowledge it.
+    await expect(page.getByTestId("turn-announcement")).toBeHidden();
+    await page.getByTestId("open-games").click();
+    await expect(page.getByTestId("open-pair-activity-mabel")).toContainText(
+      "New activity",
+    );
+    await expect(page.getByTestId("open-pair-activity-mabel")).toContainText(
+      "Reply needed",
+    );
+    await page.getByTestId("open-pair-activity-mabel").click();
+    await expect(page.getByTestId("turn-status")).toContainText("Your turn");
+    await expect(page.getByTestId("games-activity-count")).toHaveCount(0);
+    await page.getByTestId("decline-new-game").click();
+    await expect(page.getByTestId("open-games")).not.toHaveClass(
+      /games-reply-needed/,
+    );
+    await page.getByTestId("open-games").click();
+    await page.getByTestId("open-pair-family").click();
+    await expect(page.locator(".has-tentative")).toHaveCount(1);
+  } finally {
+    await other.close();
+  }
+});
+
+test("debug activity uses real badge and notice UI, retains request highlights, and waits for scoring", async ({
+  page,
+}, info) => {
+  await seedActivityTables();
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.addInitScript(() =>
+    localStorage.setItem("tea-tiles-debug", "true"),
+  );
+  await enroll(page);
+  await expect(page.getByTestId("turn-announcement")).toBeHidden();
+  await page.getByTestId("local-debug-tools").click();
+  await page.getByTestId("debug-activity-two").click();
+  await expect(page.getByTestId("games-activity-count")).toHaveText("2");
+  const notice = page.getByTestId("game-activity-notice");
+  await expect(notice).toContainText("would like to start a new game");
+  await page.getByTestId("open-activity-game").hover();
+  await page.waitForTimeout(8500);
+  await expect(notice).toBeVisible();
+  await page.setViewportSize({ width: 820, height: 1180 });
+  await expect
+    .poll(() =>
+      notice.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        const button = element.querySelector("button")!;
+        const b = button.getBoundingClientRect();
+        return (
+          rect.left >= 0 &&
+          rect.right <= innerWidth &&
+          rect.top >= 0 &&
+          rect.bottom <= innerHeight &&
+          button.contains(
+            document.elementFromPoint(
+              b.left + b.width / 2,
+              b.top + b.height / 2,
+            ),
+          )
+        );
+      }),
+    )
+    .toBe(true);
+  await page.screenshot({ path: info.outputPath("activity-portrait.png") });
+  await page.setViewportSize({ width: 1024, height: 768 });
+  const target = (await notice.getAttribute("data-pair-id"))!;
+  await page.getByTestId("open-activity-game").click();
+  await expect(page.getByTestId("turn-status")).toContainText(/turn|Waiting/);
+  await expect(page.getByTestId("games-activity-count")).toHaveText("1");
+  await page.getByTestId("open-games").click();
+  await expect(page.getByTestId(`open-pair-${target}`)).toContainText(
+    "Reply needed",
+  );
+  await page.getByRole("button", { name: "Close dialog" }).click();
+  await page.getByTestId("local-debug-tools").click();
+  await page.getByTestId("debug-activity-clear").click();
+  await expect(page.getByTestId("games-activity-count")).toHaveCount(0);
+  await page.getByTestId("local-debug-tools").click();
+  await page.getByTestId("debug-activity-after-scoring").click();
+  await expect(page.getByTestId("celebration-preview")).toBeVisible();
+  await expect(notice).toBeHidden();
+  await expect(page.getByTestId("celebration-preview")).toBeHidden({
+    timeout: 20000,
+  });
+  await expect(notice).toBeVisible();
+  await expect(notice).toContainText("would like to start a new game");
+});
+
 test("the normal welcome screen offers only name and code sign-in", async ({
   page,
 }) => {

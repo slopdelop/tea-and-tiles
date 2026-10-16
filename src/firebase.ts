@@ -141,6 +141,7 @@ export function useGameSession() {
   const [playerId, setPlayerId] = useState<string | null>(null);
   const [displayName, setDisplayName] = useState("");
   const [pairsReady, setPairsReady] = useState(false);
+  const [pairsServerReady, setPairsServerReady] = useState(false);
   const [profileReady, setProfileReady] = useState(false);
   const [defaultPairId, setDefaultPairId] = useState<string | null>(null);
   const [pairs, setPairs] = useState<PairSummary[]>([]);
@@ -159,6 +160,7 @@ export function useGameSession() {
     [houseWords, setHouseWords] = useState<HouseWord[]>([]),
     [wordRequests, setWordRequests] = useState<WordRequest[]>([]),
     [dictionaryReady, setDictionaryReady] = useState(false),
+    [wordRequestsReady, setWordRequestsReady] = useState(false),
     [dictionaryError, setDictionaryError] = useState<string | null>(null),
     [newGameRequests, setNewGameRequests] = useState<NewGameRequest[]>([]),
     [newGameRequestsForGame, setNewGameRequestsForGame] = useState<
@@ -421,6 +423,7 @@ export function useGameSession() {
   useEffect(() => {
     setProfileReady(false);
     setPairsReady(false);
+    setPairsServerReady(false);
     setPairs([]);
     setPairId(null);
     setSlot(null);
@@ -450,6 +453,7 @@ export function useGameSession() {
         collection(db, "pairs"),
         where("memberIds", "array-contains", playerId),
       ),
+      { includeMetadataChanges: true },
       (snapshot) => {
         if (disposed || auth.currentUser?.uid !== uid) return;
         const next = snapshot.docs
@@ -457,12 +461,14 @@ export function useGameSession() {
           .sort((a, b) => a.id.localeCompare(b.id));
         setPairs(next);
         setPairsReady(true);
+        setPairsServerReady(!snapshot.metadata.fromCache);
         setLoading(false);
       },
       (e) => {
         if (!disposed && auth.currentUser?.uid === uid) {
           setError(message(e));
           setPairsReady(true);
+          setPairsServerReady(false);
           setLoading(false);
         }
       },
@@ -720,6 +726,7 @@ export function useGameSession() {
   }, [playerId, uid]);
   useEffect(() => {
     setWordRequests([]);
+    setWordRequestsReady(false);
     if (!pairId || !game?.id || !slot) return;
     let disposed = false;
     const listenerContext = contextRef.current;
@@ -728,17 +735,21 @@ export function useGameSession() {
         collection(db, "pairs", pairId, "wordRequests"),
         where("gameId", "==", game.id),
       ),
+      { includeMetadataChanges: true },
       (snapshot) => {
-        if (!disposed && listenerContext === contextRef.current)
+        if (!disposed && listenerContext === contextRef.current) {
           setWordRequests(
             snapshot.docs.map(
               (record) => ({ ...record.data(), id: record.id }) as WordRequest,
             ),
           );
+          setWordRequestsReady(!snapshot.metadata.fromCache);
+        }
       },
       (e) => {
         if (!disposed && listenerContext === contextRef.current) {
           setWordRequests([]);
+          setWordRequestsReady(false);
           setError(message(e));
         }
       },
@@ -1098,6 +1109,8 @@ export function useGameSession() {
   }, [mutationBusy, resumeSharedActions]);
   return {
     playerId,
+    accountScope: playerId ? `${projectId}:${playerId}` : null,
+    pairsServerReady,
     displayName,
     pairs,
     pairId,
@@ -1114,6 +1127,7 @@ export function useGameSession() {
     rack,
     houseWords,
     wordRequests,
+    wordRequestsReady,
     dictionaryReady,
     dictionaryError,
     requestWord,

@@ -57,6 +57,9 @@ import { SubmissionNotice } from "./components/SubmissionNotice";
 import { useSubmissionFeedback } from "./hooks/useSubmissionFeedback";
 import { DebugFrameMeter } from "./components/DebugFrameMeter";
 import { DragPerformanceLab } from "./components/DragPerformanceLab";
+import { useGameActivity } from "./hooks/useGameActivity";
+import { activityText, incomingActions, unreadEvents } from "./gameActivity";
+import { GameActivityNotice } from "./components/GameActivityNotice";
 import "./styles.css";
 
 type Dialog =
@@ -602,6 +605,15 @@ function Modal({
 export default function App() {
   const session = useGameSession();
   const appUpdate = useAppUpdate();
+  const activity = useGameActivity({
+    scope: session.accountScope,
+    playerId: session.playerId,
+    pairs: session.pairs,
+    serverReady: session.pairsServerReady,
+    dictionaryReady: session.dictionaryReady,
+    approvedWords: session.houseWords.map((word) => word.word),
+    selectedPairId: session.pairId,
+  });
   const openedAccounts = useRef(new Set<string>());
   const entry = useRef({ key: "", initial: false });
   const key = `${session.playerId || "welcome"}:${session.pairId || "none"}`;
@@ -621,6 +633,7 @@ export default function App() {
       key={key}
       session={session}
       appUpdate={appUpdate}
+      activity={activity}
       initialTableEntry={entry.current.initial}
     />
   );
@@ -629,10 +642,12 @@ export default function App() {
 function TableApp({
   session,
   appUpdate,
+  activity,
   initialTableEntry,
 }: {
   session: ReturnType<typeof useGameSession>;
   appUpdate: ReturnType<typeof useAppUpdate>;
+  activity: ReturnType<typeof useGameActivity>;
   initialTableEntry: boolean;
 }) {
   const [welcomeDefaults] = useState(() => {
@@ -688,6 +703,7 @@ function TableApp({
   const [busy, setBusy] = useState(false);
   const [arrivingMove, setArrivingMove] = useState<string | null>(null);
   const [dialog, setDialog] = useState<Dialog>(null);
+  const gamesAnchor = useRef<HTMLDivElement>(null);
   const [helpPage, setHelpPage] = useState<
     "root" | "play" | "settings" | "dictionary" | "about" | "debug"
   >("root");
@@ -1839,6 +1855,130 @@ function TableApp({
         request.status === "pending" &&
         request.requestedBy !== slot,
     );
+  const canNavigateTables =
+    session.canLeaveTable &&
+    !busy &&
+    !wordBusy &&
+    !newGameBusy &&
+    !endGameBusy &&
+    !hasIncomingDecision &&
+    !drag &&
+    !settling &&
+    !blank &&
+    !recallAnimation.active &&
+    !appUpdate.applying;
+  const activityBlocked =
+    !canNavigateTables ||
+    !!dialog ||
+    !!arrivingMove ||
+    !!animatedMove ||
+    !!turnAnnouncement ||
+    !!queuedTurn ||
+    !!queuedResult ||
+    submissionNoticeVisible ||
+    zoomed ||
+    !!debugBoardMove ||
+    !!debugFinishedBoard ||
+    !!debugSubmission ||
+    !!debugExchange ||
+    !!debugStarter ||
+    debugUpdating ||
+    !activity.visible;
+  const unreadTableCount = activity.pairs.filter(
+    (pair) =>
+      pair.id !== session.pairId &&
+      unreadEvents(activity.tables[pair.id]).length,
+  ).length;
+  const repliesNeeded = activity.pairs.some(
+    (pair) =>
+      pair.id !== session.pairId &&
+      session.playerId &&
+      Object.keys(incomingActions(pair, session.playerId, activity.approved))
+        .length,
+  );
+  function openActivityTable(pairId: string, fromDrawer = false) {
+    if (!canNavigateTables || (dialog && !(fromDrawer && dialog === "games")))
+      return;
+    if (!session.pairs.some((pair) => pair.id === pairId)) return;
+    try {
+      session.selectPair(pairId);
+      setDialog(null);
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Please wait for your move to finish saving.",
+      );
+    }
+  }
+  const currentActivityPair = activity.pairs.find(
+    (pair) => pair.id === session.pairId,
+  );
+  useEffect(() => {
+    if (
+      !game ||
+      !slot ||
+      !session.pairId ||
+      !session.playerId ||
+      !currentActivityPair ||
+      currentActivityPair.activeGameId !== game.id ||
+      !activity.visible ||
+      !session.newGameRequestsReady ||
+      !session.endGameRequestsReady ||
+      !session.wordRequestsReady
+    )
+      return;
+    const delivered: Record<string, string> = {};
+    for (const [key, version] of Object.entries(
+      incomingActions(currentActivityPair, session.playerId, activity.approved),
+    )) {
+      const present =
+        key === "newGame"
+          ? session.newGameRequests.some(
+              (r) =>
+                r.id === currentActivityPair.pendingNewGameRequestId &&
+                r.status === "pending",
+            )
+          : key === "endGame"
+            ? session.endGameRequests.some(
+                (r) =>
+                  r.id === currentActivityPair.pendingEndGameRequestId &&
+                  r.status === "pending",
+              )
+            : session.wordRequests.some(
+                (r) =>
+                  `word-${r.id}` === key &&
+                  r.status === "pending" &&
+                  (version.startsWith("legacy:") ||
+                    version === `${game.id}:${r.requestedAt}`),
+              );
+      if (present) delivered[key] = version;
+    }
+    activity.acknowledge(session.pairId, {
+      gameId: game.id,
+      revision: game.revision,
+      actions: delivered,
+    });
+  }, [
+    game?.id,
+    game?.revision,
+    slot,
+    session.pairId,
+    session.playerId,
+    currentActivityPair,
+    session.newGameRequests,
+    session.endGameRequests,
+    session.wordRequests,
+    session.newGameRequestsReady,
+    session.endGameRequestsReady,
+    session.wordRequestsReady,
+    activity.visible,
+    activity.acknowledge,
+    activity.approved,
+  ]);
+  useEffect(() => {
+    if (!debugEnabled) activity.clearPreview();
+  }, [debugEnabled, activity.clearPreview]);
   useEffect(() => {
     if (
       !queuedResult ||
@@ -2816,22 +2956,54 @@ function TableApp({
           </div>
         )}
         {session.playerId && (
-          <button
-            className="secondary-button games-control"
-            data-testid="open-games"
-            disabled={
-              !session.canLeaveTable ||
-              busy ||
-              !!wordBusy ||
-              newGameBusy ||
-              endGameBusy ||
-              hasIncomingDecision ||
-              !!drag
-            }
-            onClick={() => setDialog("games")}
-          >
-            Games
-          </button>
+          <div className="games-control-anchor" ref={gamesAnchor}>
+            <button
+              className={`secondary-button games-control ${repliesNeeded ? "games-reply-needed" : ""}`}
+              data-testid="open-games"
+              aria-label={`Games${unreadTableCount ? `, updates in ${unreadTableCount} other ${unreadTableCount === 1 ? "game" : "games"}` : ""}${repliesNeeded ? ", a reply is needed" : ""}`}
+              disabled={!canNavigateTables}
+              onClick={() => setDialog("games")}
+            >
+              Games
+              {unreadTableCount > 0 && (
+                <span
+                  className="games-badge"
+                  data-testid="games-activity-count"
+                  aria-hidden="true"
+                >
+                  {unreadTableCount}
+                </span>
+              )}
+            </button>
+            <GameActivityNotice
+              anchor={gamesAnchor}
+              event={activity.notice}
+              text={
+                activity.notice
+                  ? activityText(
+                      activity.notice,
+                      (() => {
+                        const pair = activity.pairs.find(
+                          (p) => p.id === activity.notice!.pairId,
+                        );
+                        return pair
+                          ? pair.names[
+                              pair.seatPlayers.mom === session.playerId
+                                ? "aunt"
+                                : "mom"
+                            ]
+                          : "Your partner";
+                      })(),
+                    )
+                  : ""
+              }
+              show={!activityBlocked}
+              open={() =>
+                activity.notice && openActivityTable(activity.notice.pairId)
+              }
+              dismiss={activity.dismiss}
+            />
+          </div>
         )}
         {game && slot && (
           <button
@@ -4385,6 +4557,62 @@ function TableApp({
                 Sample scenes on your board. These previews do not save moves or
                 send requests.
               </p>
+              <h3>Other-game activity</h3>
+              <p>
+                Preview notices and Games highlights using your other tables. No
+                moves or requests are saved.
+              </p>
+              <div className="debug-buttons">
+                {(
+                  [
+                    ["turn", "Another player finished a turn"],
+                    ["request", "Request to start a game"],
+                    ["two", "Updates in two games"],
+                  ] as const
+                ).map(([kind, label]) => (
+                  <button
+                    key={kind}
+                    className="secondary-button"
+                    data-testid={`debug-activity-${kind}`}
+                    disabled={
+                      session.pairs.filter((p) => p.id !== session.pairId)
+                        .length < (kind === "two" ? 2 : 1)
+                    }
+                    onClick={() => {
+                      activity.showPreview(kind);
+                      setDialog(null);
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+                <button
+                  className="secondary-button"
+                  data-testid="debug-activity-after-scoring"
+                  disabled={!session.pairs.some((p) => p.id !== session.pairId)}
+                  onClick={() => {
+                    activity.showPreview("request");
+                    const move = debugMove("normal");
+                    setDebugBoardMove({
+                      move: { ...move, id: `preview:${Date.now()}` },
+                      board: debugMoveBoard("normal"),
+                    });
+                    setDialog(null);
+                  }}
+                >
+                  Notification after scoring
+                </button>
+                <button
+                  className="secondary-button"
+                  data-testid="debug-activity-clear"
+                  onClick={() => {
+                    activity.clearPreview();
+                    setDialog(null);
+                  }}
+                >
+                  Clear activity previews
+                </button>
+              </div>
               <h3>Drag performance</h3>
               <p>
                 Frame timing helps spot stutters on an iPad. A fast computer can
@@ -5101,39 +5329,49 @@ function TableApp({
                 Choose a table. Your tiles stay saved at each one.
               </p>
               <div className="games-list">
-                {session.pairs.map((pair) => {
+                {activity.pairs.map((pair) => {
                   const ownSeat =
                     pair.seatPlayers.mom === session.playerId ? "mom" : "aunt";
                   const opponent = pair.names[other(ownSeat)];
                   const selectedPair = pair.id === session.pairId;
+                  const unread =
+                    !selectedPair &&
+                    unreadEvents(activity.tables[pair.id]).length > 0;
+                  const needsReply =
+                    !!session.playerId &&
+                    Object.keys(
+                      incomingActions(
+                        pair,
+                        session.playerId,
+                        activity.approved,
+                      ),
+                    ).length > 0;
                   return (
                     <button
                       key={pair.id}
-                      className={`game-choice ${selectedPair ? "chosen" : ""}`}
+                      className={`game-choice ${selectedPair ? "chosen" : ""} ${unread ? "game-unread" : ""} ${needsReply ? "game-needs-reply" : ""}`}
                       data-testid={`open-pair-${pair.id}`}
                       aria-current={selectedPair ? "page" : undefined}
-                      disabled={!session.canLeaveTable}
+                      disabled={!canNavigateTables}
                       onClick={() => {
-                        session.selectPair(pair.id);
-                        setDialog(null);
+                        openActivityTable(pair.id, true);
                       }}
                     >
                       <strong>{opponent}</strong>
+                      {unread && (
+                        <small className="game-unread-label">
+                          ● New activity
+                        </small>
+                      )}
+                      {needsReply && (
+                        <small className="game-reply-label">Reply needed</small>
+                      )}
                       <span>
-                        {Object.entries(pair.actionNeededBy || {}).some(
-                          ([action, player]) =>
-                            player === session.playerId &&
-                            (!action.startsWith("word-") ||
-                              !houseWords.has(
-                                action.split("-").slice(2).join("-"),
-                              )),
-                        )
-                          ? "Your reply is needed"
-                          : pair.activeGame?.status === "finished"
-                            ? "Game complete"
-                            : pair.activeGame?.turn === ownSeat
-                              ? "Your turn"
-                              : `Waiting for ${opponent}`}
+                        {pair.activeGame?.status === "finished"
+                          ? "Game complete"
+                          : pair.activeGame?.turn === ownSeat
+                            ? "Your turn"
+                            : `Waiting for ${opponent}`}
                       </span>
                       {selectedPair && <small>Open now</small>}
                     </button>

@@ -535,6 +535,14 @@ function summary(game: FirebaseFirestore.DocumentData) {
     scores: game.scores,
     revision: game.revision,
     updatedAt: Date.now(),
+    lastMove: game.lastMove
+      ? {
+          id: game.lastMove.id,
+          player: game.lastMove.player,
+          kind: game.lastMove.kind,
+          at: game.lastMove.at,
+        }
+      : null,
   };
 }
 function updateSummary(
@@ -548,6 +556,7 @@ function updateSummary(
       ? {
           pendingEndGameRequestId: null,
           "actionNeededBy.endGame": FieldValue.delete(),
+          "actionVersions.endGame": FieldValue.delete(),
         }
       : {}),
   });
@@ -653,6 +662,7 @@ export async function requestHouseWord(
         });
         tx.update(pair.ref, {
           [`actionNeededBy.word-${id}`]: FieldValue.delete(),
+          [`actionVersions.word-${id}`]: FieldValue.delete(),
         });
         return { id };
       }
@@ -679,6 +689,7 @@ export async function requestHouseWord(
     tx.set(ref, { ...request, gameId });
     tx.update(pair.ref, {
       [`actionNeededBy.word-${id}`]: opponentId(pair, slot),
+      [`actionVersions.word-${id}`]: `${gameId}:${request.requestedAt}`,
     });
     return { id };
   });
@@ -782,6 +793,7 @@ export async function respondHouseWord(
     });
     tx.update(pair.ref, {
       [`actionNeededBy.word-${requestId}`]: FieldValue.delete(),
+      [`actionVersions.word-${requestId}`]: FieldValue.delete(),
     });
     if (approve && !house?.exists) {
       const accepted: HouseWord = {
@@ -898,6 +910,7 @@ export async function requestGameRestart(
     tx.update(pairRef, {
       pendingNewGameRequestId: id,
       "actionNeededBy.newGame": opponentId(pair, slot),
+      "actionVersions.newGame": id,
     });
     return { id };
   });
@@ -1010,6 +1023,7 @@ export async function respondGameRestart(
       tx.update(pairRef, {
         pendingNewGameRequestId: null,
         "actionNeededBy.newGame": FieldValue.delete(),
+        "actionVersions.newGame": FieldValue.delete(),
       });
       return { status };
     }
@@ -1051,6 +1065,7 @@ export async function respondGameRestart(
       pendingNewGameRequestId: null,
       pendingEndGameRequestId: null,
       actionNeededBy: {},
+      actionVersions: {},
     });
     return { status, newGameId };
   });
@@ -1177,6 +1192,7 @@ export async function requestGameEnd(
     tx.update(pairRef, {
       pendingEndGameRequestId: id,
       "actionNeededBy.endGame": opponentId(pair, slot),
+      "actionVersions.endGame": id,
     });
     return { id };
   });
@@ -1322,6 +1338,7 @@ export async function respondGameEnd(
     tx.update(pairRef, {
       pendingEndGameRequestId: null,
       "actionNeededBy.endGame": FieldValue.delete(),
+      "actionVersions.endGame": FieldValue.delete(),
     });
     if (fields) {
       tx.update(gameRef, fields);
@@ -1664,6 +1681,7 @@ export async function submit(
             pendingNewGameRequestId: null,
             pendingEndGameRequestId: null,
             actionNeededBy: {},
+            actionVersions: {},
           });
         tx.create(resultRef, { uid, payloadHash, result });
         return result;
