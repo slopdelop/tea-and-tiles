@@ -5,14 +5,20 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 import {
+  cloudSourceSelection,
+  readCloudSource,
+} from "../scripts/cloud-test-source.mjs";
+import {
   assertCloudTestTarget,
   cloudTest,
   cloudTestAccess,
 } from "../scripts/cloud-test-project.mjs";
 import type { Game } from "../shared/engine";
 import { runSoak } from "./soak-scenario";
+import { requireCloudTestDeployment } from "../scripts/cloud-test-deployment.mjs";
 
 assertCloudTestTarget();
+requireCloudTestDeployment();
 if (process.env.TEA_CLOUD_SOAK !== "tea-and-tiles-test")
   throw new Error(
     "Use npm run test:soak:cloud; no implicit cloud test execution.",
@@ -55,17 +61,10 @@ test("isolated real Firebase back-and-forth", async ({ browser }, info) => {
     !secret.token
   )
     throw new Error("Private test App Check setup is missing or mismatched.");
-  const source = JSON.parse(
-    readFileSync(
-      resolve(".tools/cloud-test-release/cloud-test-source.json"),
-      "utf8",
-    ),
-  );
-  expect(source.revision).toBe("d71f3869388604acf2ec68c00e972490bbd3e70c");
+  const source = readCloudSource();
+  const { root } = cloudSourceSelection();
   const { createGame } = await import(
-    pathToFileURL(
-      resolve(".tools/cloud-test-release/functions/lib/shared/engine.js"),
-    ).href
+    pathToFileURL(resolve(root, "functions/lib/shared/engine.js")).href
   );
   let seed = 1234567;
   const initial: Game = createGame(
@@ -100,7 +99,18 @@ test("isolated real Firebase back-and-forth", async ({ browser }, info) => {
       sourceRevision: source.revision,
     });
     tx.set(pair, {
+      schemaVersion: 2,
+      memberIds: ["mom", "aunt"],
+      seatPlayers: { mom: "mom", aunt: "aunt" },
       activeGameId: initial.id,
+      activeGame: {
+        id: initial.id,
+        status: initial.status,
+        turn: initial.turn,
+        scores: initial.scores,
+        revision: initial.revision,
+        updatedAt: Date.now(),
+      },
       names: { mom: "Test Elizabeth", aunt: "Test Rita" },
       testHarness: "cloud-soak",
     });
@@ -110,6 +120,8 @@ test("isolated real Firebase back-and-forth", async ({ browser }, info) => {
     ] as const) {
       tx.set(db.doc(`players/${slot}`), {
         uid: null,
+        displayName: slot === "mom" ? "Test Elizabeth" : "Test Rita",
+        loginName: slot === "mom" ? "test elizabeth" : "test rita",
         sessionVersion: (previous.data()?.sessionVersion || 0) + 1,
       });
       const hash = createHash("sha256").update(codes[slot]).digest("hex");
@@ -122,6 +134,7 @@ test("isolated real Firebase back-and-forth", async ({ browser }, info) => {
     const { racks, bag, ...publicGame } = initial;
     tx.create(db.doc(`games/${initial.id}`), {
       ...publicGame,
+      pairId: "family",
       rackCounts: { mom: 7, aunt: 7 },
       bagCount: bag.length,
     });
@@ -205,10 +218,7 @@ test("isolated real Firebase back-and-forth", async ({ browser }, info) => {
     await enroll(page, "mom");
     await enroll(aunt, "aunt");
     const dictionary = new Set(
-      readFileSync(
-        resolve(".tools/cloud-test-release/shared/words.txt"),
-        "utf8",
-      )
+      readFileSync(resolve(root, "shared/words.txt"), "utf8")
         .trim()
         .split(/\s+/),
     );
@@ -229,7 +239,7 @@ test("isolated real Firebase back-and-forth", async ({ browser }, info) => {
       info,
       dictionary,
       clock: () => clock,
-      environment: `real Firebase ${cloudTest.projectId}; released 1.6.1; Chrome default transport; normal animations`,
+      environment: `real Firebase ${cloudTest.projectId}; source ${source.revision}; Chrome default transport; normal animations`,
       readPublicGame: async () =>
         (await db.doc(`games/${gameId}`).get()).data() as Game,
       readGame: async () => {

@@ -3,6 +3,7 @@ import { getFirestore } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
 import { randomUUID, createHash, randomInt } from "node:crypto";
 import { pathToFileURL } from "node:url";
+import { upgradeMultiplayer } from "./upgrade-multiplayer.mjs";
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -71,11 +72,22 @@ async function engine() {
     throw new Error("Run npm run build:functions before preparing data.");
   }
 }
-function addGame(batch, game) {
+function gameSummary(game) {
+  return {
+    id: game.id,
+    status: game.status,
+    turn: game.turn,
+    scores: game.scores,
+    revision: game.revision,
+    updatedAt: Date.now(),
+  };
+}
+function addGame(batch, game, pairId = "family") {
   const { racks, bag, ...shared } = game;
   const ref = db.doc(`games/${game.id}`);
   batch.set(ref, {
     ...shared,
+    pairId,
     rackCounts: { mom: racks.mom.length, aunt: racks.aunt.length },
     bagCount: bag.length,
   });
@@ -84,11 +96,16 @@ function addGame(batch, game) {
   batch.set(ref.collection("private").doc("state"), { bag });
 }
 async function issueCode(slot) {
-  if (!slots.includes(slot)) throw new Error("--slot must be mom or aunt.");
+  if (!slot || !/^[A-Za-z0-9_-]{1,100}$/.test(slot))
+    throw new Error("Provide --player with a valid player ID.");
   if (!(await db.doc(`players/${slot}`).get()).exists)
     throw new Error("Run prepare first.");
   const pair = (await db.doc("pairs/family").get()).data();
-  const playerName = pair?.names?.[slot] || defaultNames[slot];
+  const playerName =
+    (await db.doc(`players/${slot}`).get()).data()?.displayName ||
+    pair?.names?.[slot] ||
+    defaultNames[slot] ||
+    slot;
   let vocabulary;
   try {
     vocabulary = await import("../functions/lib/functions/setup-words.js");
@@ -125,7 +142,12 @@ async function issueCode(slot) {
         if (!record.data().consumedUid && record.data().expiresAt > 0)
           tx.update(record.ref, { expiresAt: 0, revokedAt: Date.now() });
       }
-      tx.create(candidateRef, { slot, expiresAt, consumedUid: null });
+      tx.create(candidateRef, {
+        playerId: slot,
+        slot,
+        expiresAt,
+        consumedUid: null,
+      });
       tx.delete(db.doc(vocabulary.WORD_FAILURE_BUCKET));
       if (player.data()?.uid)
         tx.delete(db.doc(`enrollmentAttempts/${hash(player.data().uid)}`));
@@ -156,20 +178,27 @@ async function issueCode(slot) {
 async function resolvePlayer() {
   const requested = option("player");
   if (!requested)
-    throw new Error("Provide --player Elizabeth|Rita (or mom|aunt).");
+    throw new Error("Provide --player with a player ID or display name.");
+  const players = await db.collection("players").get();
   const pair = (await db.doc("pairs/family").get()).data();
-  if (!pair) throw new Error("Run prepare first.");
-  const names = pair.names || defaultNames;
-  const matches = slots.filter(
-    (slot) =>
-      requested.toLowerCase() === slot ||
-      requested.trim().toLowerCase() === names[slot]?.toLowerCase(),
+  const matches = players.docs.filter(
+    (player) =>
+      player.id === requested ||
+      (
+        player.data().loginName ||
+        player.data().displayName ||
+        pair?.names?.[player.id] ||
+        ""
+      ).toLowerCase() === requested.trim().toLowerCase(),
   );
   if (matches.length !== 1)
-    throw new Error("Choose one configured player by name, or use mom|aunt.");
+    throw new Error(
+      "Choose one configured player by ID or unique display name.",
+    );
+  const player = matches[0];
   return {
-    slot: matches[0],
-    name: names[matches[0]] || defaultNames[matches[0]],
+    slot: player.id,
+    name: player.data().displayName || pair?.names?.[player.id] || player.id,
   };
 }
 async function issueLogin(numericCode = false) {
@@ -197,7 +226,8 @@ async function issueLogin(numericCode = false) {
     : null;
   if (signInUrl)
     signInUrl.hash = new URLSearchParams({
-      player: name,
+      player: slot,
+      name,
       code: passphrase,
     }).toString();
   const credential = await createCredential(passphrase);
@@ -224,9 +254,10 @@ async function revokeLogin() {
   await db.runTransaction(async (tx) => {
     const ref = db.doc(`players/${slot}`);
     const player = await tx.get(ref);
-    const bindings = await tx.get(
-      db.collection("bindings").where("slot", "==", slot),
-    );
+    const [bindings, modernBindings] = await Promise.all([
+      tx.get(db.collection("bindings").where("slot", "==", slot)),
+      tx.get(db.collection("bindings").where("playerId", "==", slot)),
+    ]);
     if (!player.exists) throw new Error("Run prepare first.");
     tx.update(ref, { sessionVersion: (player.data().sessionVersion ?? 0) + 1 });
     tx.set(
@@ -234,7 +265,8 @@ async function revokeLogin() {
       { enabled: false, revokedAt: Date.now() },
       { merge: true },
     );
-    for (const binding of bindings.docs) tx.delete(binding.ref);
+    for (const binding of [...bindings.docs, ...modernBindings.docs])
+      tx.delete(binding.ref);
   });
   console.log(
     `${name}'s reusable sign-in is revoked and all her sessions are disconnected. Issue a new login or invitation to reconnect her.`,
@@ -248,14 +280,25 @@ async function prepare() {
     const batch = db.batch();
     addGame(batch, game);
     batch.create(pairRef, {
+      schemaVersion: 2,
+      memberIds: ["mom", "aunt"],
+      seatPlayers: { mom: "mom", aunt: "aunt" },
       activeGameId: game.id,
+      activeGame: gameSummary(game),
       names: {
         mom: option("mom-name") || defaultNames.mom,
         aunt: option("aunt-name") || defaultNames.aunt,
       },
     });
     for (const slot of slots)
-      batch.create(db.doc(`players/${slot}`), { uid: null });
+      batch.create(db.doc(`players/${slot}`), {
+        uid: null,
+        displayName: option(`${slot}-name`) || defaultNames[slot],
+        loginName: (option(`${slot}-name`) || defaultNames[slot])
+          .trim()
+          .toLowerCase(),
+        sessionVersion: 0,
+      });
     await batch.commit();
   }
   for (const slot of slots) await issueCode(slot);
@@ -302,18 +345,170 @@ async function fixture() {
   }
   const batch = db.batch();
   addGame(batch, game);
-  batch.update(pair.ref, { activeGameId: game.id });
+  batch.update(pair.ref, {
+    activeGameId: game.id,
+    activeGame: gameSummary(game),
+  });
   await batch.commit();
   console.log(
     `Fixture ${game.id}: ${pair.data().names?.mom || defaultNames.mom} has CATEIOR; ${pair.data().names?.aunt || defaultNames.aunt} has SENLADU.${args.includes("--finish") ? " Game finished for rematch testing." : ""}`,
   );
 }
 
+async function addPlayer(id = option("id"), name = option("name")) {
+  if (
+    !id ||
+    !/^[A-Za-z0-9_-]{1,100}$/.test(id) ||
+    !name?.trim() ||
+    name.trim().length > 30
+  )
+    throw new Error(
+      "Provide --id PLAYER_ID and --name DISPLAY_NAME (1-30 characters).",
+    );
+  name = name.trim();
+  const loginName = name.toLowerCase();
+  await db.runTransaction(async (tx) => {
+    const ref = db.doc(`players/${id}`);
+    const [existing, names] = await Promise.all([
+      tx.get(ref),
+      tx.get(db.collection("players")),
+    ]);
+    if (existing.exists) {
+      if (existing.data().displayName !== name)
+        throw new Error(`Player ${id} already exists with a different name.`);
+      return;
+    }
+    const identifiers = [id.toLowerCase(), loginName];
+    if (
+      names.docs.some(
+        (player) =>
+          player.id !== id &&
+          [
+            player.id.toLowerCase(),
+            String(player.data().loginName || player.data().displayName || "")
+              .trim()
+              .toLowerCase(),
+          ].some((value) => identifiers.includes(value)),
+      )
+    )
+      throw new Error(
+        "Player IDs and display names must be unique across both sign-in identifiers.",
+      );
+    tx.create(ref, {
+      displayName: name,
+      loginName,
+      sessionVersion: 0,
+      uid: null,
+      createdAt: Date.now(),
+    });
+  });
+  console.log(`Player ready: ${name} (${id}).`);
+}
+async function createPair(
+  first = option("player-a"),
+  second = option("player-b"),
+) {
+  if (
+    !first ||
+    !second ||
+    first === second ||
+    ![first, second].every((id) => /^[A-Za-z0-9_-]{1,100}$/.test(id))
+  )
+    throw new Error("Provide two distinct IDs with --player-a and --player-b.");
+  const memberIds = [first, second].sort();
+  const pairId =
+    memberIds.join(",") === "aunt,mom"
+      ? "family"
+      : `pair-${hash(JSON.stringify(memberIds)).slice(0, 40)}`;
+  const seats =
+    pairId === "family"
+      ? { mom: "mom", aunt: "aunt" }
+      : { mom: memberIds[0], aunt: memberIds[1] };
+  const { createGame } = await engine();
+  await db.runTransaction(async (tx) => {
+    const ref = db.doc(`pairs/${pairId}`);
+    const [existing, mom, aunt] = await tx.getAll(
+      ref,
+      db.doc(`players/${seats.mom}`),
+      db.doc(`players/${seats.aunt}`),
+    );
+    if (!mom.exists || !aunt.exists)
+      throw new Error("Add both player profiles before creating their pair.");
+    if (existing.exists) return;
+    const game = createGame(randomUUID(), cryptoRandom);
+    addGame(tx, game, pairId);
+    tx.create(ref, {
+      schemaVersion: 2,
+      memberIds,
+      seatPlayers: seats,
+      names: {
+        mom: mom.data().displayName || seats.mom,
+        aunt: aunt.data().displayName || seats.aunt,
+      },
+      activeGameId: game.id,
+      activeGame: gameSummary(game),
+      createdAt: Date.now(),
+    });
+  });
+  console.log(`Pair ready: ${pairId} (${first}, ${second}).`);
+  return pairId;
+}
+async function listPlayers() {
+  const [players, pairs] = await Promise.all([
+    db.collection("players").get(),
+    db.collection("pairs").get(),
+  ]);
+  for (const player of players.docs)
+    console.log(
+      `Player ${player.id}: ${player.data().displayName || player.id}`,
+    );
+  for (const pair of pairs.docs)
+    console.log(
+      `Pair ${pair.id}: ${(pair.data().memberIds || []).join(", ")} - game ${pair.data().activeGameId}`,
+    );
+}
+async function prepareMultiplayer() {
+  if (cloud)
+    throw new Error("prepare-multiplayer is restricted to local emulators.");
+  if (!(await db.doc("pairs/family").get()).exists) await prepare();
+  await upgradeMultiplayer(db, { apply: true });
+  for (const [id, name] of [
+    ["test-alex", "Alex"],
+    ["test-jamie", "Jamie"],
+    ["test-sam", "Sam"],
+  ]) {
+    await addPlayer(id, name);
+    await createPair("mom", id);
+    const credential = await db.doc(`playerCredentials/${id}`).get();
+    if (!credential.exists) {
+      const { createCredential } =
+        await import("../functions/lib/functions/player-login.js");
+      await credential.ref.create({
+        ...(await createCredential("246810")),
+        enabled: true,
+        updatedAt: Date.now(),
+      });
+      console.log(`LOCAL TEST ONLY: ${name} sign-in code 246810`);
+    }
+  }
+  await createPair("test-alex", "test-jamie");
+  await createPair("test-alex", "test-sam");
+  await listPlayers();
+}
+
 export async function run() {
   console.log(`Target: ${projectId} (${cloud ? "CLOUD" : "local emulators"})`);
-  if (command === "prepare") await prepare();
+  if (command === "upgrade-multiplayer")
+    await upgradeMultiplayer(db, { apply: args.includes("--apply") });
+  else if (command === "prepare-multiplayer") await prepareMultiplayer();
+  else if (command === "add-player") await addPlayer();
+  else if (command === "create-pair") await createPair();
+  else if (command === "list" || command === "list-players")
+    await listPlayers();
+  else if (command === "prepare") await prepare();
   else if (command === "reset") await reset();
-  else if (command === "issue-code") await issueCode(option("slot"));
+  else if (command === "issue-code")
+    await issueCode(option("slot") || (await resolvePlayer()).slot);
   else if (command === "issue-login") await issueLogin();
   else if (command === "issue-pin") await issueLogin(true);
   else if (command === "revoke-login") await revokeLogin();
@@ -334,7 +529,7 @@ export async function run() {
     await db.doc("pairs/family").update({ names });
   } else
     throw new Error(
-      "Usage: node scripts/admin.mjs prepare|reset|issue-code|issue-login|issue-pin|revoke-login|fixture|names --project ID [--slot mom|aunt] [--player Elizabeth|Rita] [--app-url URL] [--cloud]",
+      "Usage: node scripts/admin.mjs prepare|prepare-multiplayer|upgrade-multiplayer|add-player|create-pair|list|reset|issue-code|issue-login|issue-pin|revoke-login|fixture|names --project ID [--slot mom|aunt] [--player Elizabeth|Rita] [--app-url URL] [--cloud]",
     );
 }
 if (

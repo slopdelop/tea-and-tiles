@@ -1,7 +1,9 @@
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { assertCloudTestTarget, cloudTest } from "./cloud-test-project.mjs";
+import { requireCloudTestDeployment } from "./cloud-test-deployment.mjs";
 assertCloudTestTarget();
+requireCloudTestDeployment();
 const turns = Number(process.env.SOAK_TURNS || 60);
 if (!Number.isInteger(turns) || turns < 1 || turns > 100)
   throw new Error("Cloud SOAK_TURNS must be 1–100.");

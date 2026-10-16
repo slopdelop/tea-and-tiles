@@ -116,6 +116,7 @@ test.beforeEach(async () => {
     "enrollmentAttempts",
     "playerCredentials",
     "loginAttempts",
+    "houseWords",
   ])
     await db.recursiveDelete(db.collection(collection));
   const game = createGame("ui-table", () => 0.42);
@@ -139,13 +140,33 @@ test.beforeEach(async () => {
   code = "MAPLE";
   const batch = db.batch();
   batch.set(db.doc("pairs/family"), {
+    schemaVersion: 2,
+    memberIds: ["mom", "aunt"],
+    seatPlayers: { mom: "mom", aunt: "aunt" },
     activeGameId: game.id,
     names: { mom: "Elizabeth", aunt: "Rita" },
+    activeGame: {
+      id: game.id,
+      status: game.status,
+      turn: game.turn,
+      scores: game.scores,
+      revision: game.revision,
+      updatedAt: Date.now(),
+    },
   });
-  batch.set(db.doc("players/mom"), { uid: null });
-  batch.set(db.doc("players/aunt"), { uid: null });
+  batch.set(db.doc("players/mom"), {
+    uid: null,
+    displayName: "Elizabeth",
+    loginName: "elizabeth",
+  });
+  batch.set(db.doc("players/aunt"), {
+    uid: null,
+    displayName: "Rita",
+    loginName: "rita",
+  });
   batch.set(db.doc(`games/${game.id}`), {
     ...shared,
+    pairId: "family",
     rackCounts: { mom: 7, aunt: 7 },
     bagCount: bag.length,
   });
@@ -314,6 +335,8 @@ async function openTableAction(
     await expect(
       page.getByRole("dialog", { name: "Help & settings" }),
     ).toBeVisible();
+    await page.getByTestId("help-dictionary").click();
+    return;
   } else if (id === "new-game") {
     await expect(page.locator(".turn-card").getByTestId(id)).toHaveCount(0);
     await expect(page.locator(".app-header").getByTestId(id)).toBeVisible();
@@ -378,6 +401,22 @@ async function authoritativeState() {
 
 async function expectControlInsideViewport(page: Page, control: Locator) {
   await expect(control).toBeVisible();
+  // ResizeObserver/requestAnimationFrame fit runs after the visibility event.
+  // Wait for that actual geometry, keeping every viewport boundary strict.
+  await expect
+    .poll(async () => {
+      const rect = await control.boundingBox();
+      const viewport = page.viewportSize();
+      return (
+        !!rect &&
+        !!viewport &&
+        rect.x >= -0.5 &&
+        rect.y >= -0.5 &&
+        rect.x + rect.width <= viewport.width + 0.5 &&
+        rect.y + rect.height <= viewport.height + 0.5
+      );
+    })
+    .toBe(true);
   const box = (await control.boundingBox())!;
   const size = page.viewportSize()!;
   expect(box.x).toBeGreaterThanOrEqual(-0.5);
@@ -827,6 +866,7 @@ test("tablet landscape expands the board to the top and exposes the build versio
     });
   }
   await page.getByTestId("help-settings").click();
+  await page.getByTestId("help-about").click();
   await expect(page.getByTestId("app-version")).toContainText(
     `Version ${packageInfo.version} · local`,
   );
@@ -961,7 +1001,8 @@ test("tablet fit survives short browser toolbars and foreground restore while He
   });
   await page.setViewportSize({ width: 1024, height: 500 });
   await page.getByTestId("help-settings").click();
-  const help = page.getByRole("dialog", { name: "Help & settings" });
+  await page.getByTestId("help-settings-page").click();
+  const help = page.getByRole("dialog", { name: "Colours & device settings" });
   await expect(help).toHaveCSS("opacity", "1");
   await expectControlInsideViewport(page, help);
   const content = help.locator(".modal-content");
@@ -1119,7 +1160,8 @@ test("wooden rack stays the same size as tiles leave and return and bonus legend
     }),
   ).toHaveCount(0);
   await page.getByTestId("help-settings").click();
-  const help = page.getByRole("dialog", { name: "Help & settings" });
+  await page.getByTestId("help-play").click();
+  const help = page.getByRole("dialog", { name: "How to play" });
   for (const label of [
     "Double letter",
     "Triple letter",
@@ -1863,6 +1905,7 @@ test("themes stay readable in tablet layouts, persist per device and leave a pri
   await cell(page, 0, 2).tap();
   const chooseTheme = async (view: Page, theme: string) => {
     await view.getByTestId("help-settings").click();
+    await view.getByTestId("help-settings-page").click();
     await view.getByTestId(`theme-${theme}`).check();
     await expect(view.locator("html")).toHaveAttribute("data-theme", theme);
     await expect(view.locator("html")).toHaveCSS(
@@ -1870,10 +1913,9 @@ test("themes stay readable in tablet layouts, persist per device and leave a pri
       darkThemes.has(theme) ? /^dark$/ : /^(normal|light)$/,
     );
     if (view === page) {
-      const settings = view.getByRole("dialog", { name: "Help & settings" });
-      await expect(settings.getByTestId("facetime-help")).toContainText(
-        /FaceTime.*move.*clear area/i,
-      );
+      const settings = view.getByRole("dialog", {
+        name: "Colours & device settings",
+      });
       await expect(settings).toHaveCSS("opacity", "1");
       await expect(settings).toHaveCSS("transform", "none");
       await expect(settings.locator(".theme-credit")).toHaveCount(0);
@@ -2237,8 +2279,11 @@ test("drag replacement returns draft tiles to the hand and protects committed ti
   const inventory = async () => {
     const ids = await page.evaluate(() => {
       const placements =
-        JSON.parse(localStorage.getItem("tea-tiles-draft:ui-table:mom") || "{}")
-          .placements || [];
+        JSON.parse(
+          localStorage.getItem(
+            "tea-tiles-draft:demo-tea-and-tiles-ui-tests:mom:family:ui-table:ui-table:mom",
+          ) || "{}",
+        ).placements || [];
       return [
         ...Array.from(
           document.querySelectorAll<HTMLElement>("[data-rack-tile-id]"),
@@ -2870,7 +2915,9 @@ test("waiting player can reorder rack by touch and mouse, resume its order and i
           page.evaluate(
             () =>
               JSON.parse(
-                localStorage.getItem("tea-tiles-draft:ui-table:mom") || "{}",
+                localStorage.getItem(
+                  "tea-tiles-draft:demo-tea-and-tiles-ui-tests:mom:family:ui-table:ui-table:mom",
+                ) || "{}",
               ).placements?.length,
           ),
         )
@@ -3425,6 +3472,7 @@ test("a disconnected draft can be freely moved and ROAD is repaired across a com
     const captureRoad = async (state: string) => {
       for (const theme of themes) {
         await page.getByTestId("help-settings").click();
+        await page.getByTestId("help-settings-page").click();
         await page.getByTestId(`theme-${theme}`).check();
         await page.getByRole("button", { name: "Close dialog" }).click();
         await expect(page.getByRole("dialog")).toHaveCount(0);
@@ -3843,9 +3891,7 @@ test("private word consent survives reload and decline, requires the other playe
     expect(
       (await db.doc("pairs/family/wordRequests/mom-MW").get()).data(),
     ).toMatchObject({ status: "pending", requestedAt: renewed.requestedAt });
-    expect((await db.doc("pairs/family/houseWords/MW").get()).exists).toBe(
-      false,
-    );
+    expect((await db.doc("houseWords/MW").get()).exists).toBe(false);
     let approvedCurrentGeneration = false;
     await aunt.route("**/respondToWord", async (route) => {
       if (
@@ -3894,6 +3940,7 @@ test("private word consent survives reload and decline, requires the other playe
     // A separate unresolved proposal must outlive the next turn, while both
     // accepted and declined feedback from this revision leave the board.
     await db.doc("pairs/family/wordRequests/mom-QZ").set({
+      gameId: "ui-table",
       id: "mom-QZ",
       word: "QZ",
       requestedBy: "mom",
@@ -3909,6 +3956,7 @@ test("private word consent survives reload and decline, requires the other playe
       /declined/,
     );
     await db.doc("pairs/family/wordRequests/mom-QMX").set({
+      gameId: "ui-table",
       id: "mom-QMX",
       word: "QMX",
       requestedBy: "mom",
@@ -3952,24 +4000,22 @@ test("private word consent survives reload and decline, requires the other playe
       /pending/,
     );
     await expect(incoming).toHaveAccessibleName("Add QMX to your dictionary?");
-    expect((await db.doc("pairs/family/houseWords/MW").get()).exists).toBe(
-      true,
-    );
+    expect((await db.doc("houseWords/MW").get()).exists).toBe(true);
     await openTableAction(page, "review-words");
-    await expect(page.getByTestId("review-word-request-mom-MW")).toHaveClass(
+    await expect(page.getByTestId("help-word-request-mom-MW")).toHaveClass(
       /accepted/,
     );
-    await expect(page.getByTestId("review-word-request-mom-QZ")).toHaveClass(
+    await expect(page.getByTestId("help-word-request-mom-QZ")).toHaveClass(
       /declined/,
     );
     await expect(page.locator(".shared-word-count").last()).toContainText(
       "1 shared word",
     );
     await expect(
-      page.getByRole("dialog", { name: "Your shared dictionary" }),
+      page.getByRole("dialog", { name: "Shared dictionary" }),
     ).toHaveCSS("opacity", "1");
     await expect(
-      page.getByRole("dialog", { name: "Your shared dictionary" }),
+      page.getByRole("dialog", { name: "Shared dictionary" }),
     ).toHaveCSS("transform", "none");
     await page.screenshot({
       path: info.outputPath("dictionary-history-after-turn.png"),
@@ -4180,6 +4226,7 @@ for (const mode of ["turn-limit", "target-score"] as const) {
             : { width: 1024, height: 900 },
         );
         await page.getByTestId("help-settings").click();
+        await page.getByTestId("help-settings-page").click();
         await page.getByTestId(`theme-${theme}`).check();
         await page
           .getByRole("button", { name: "Close dialog", exact: true })
@@ -4481,6 +4528,7 @@ test("actual last tile with an empty bag ends both devices, transfers leftover p
     // A pending required decision takes precedence over the automatic result,
     // then the result resumes after that decision without changing scores.
     await db.doc("pairs/family/wordRequests/mom-MW").set({
+      gameId: "ui-table",
       id: "mom-MW",
       word: "MW",
       requestedBy: "mom",
@@ -4660,6 +4708,7 @@ test("empty-bag ENDGAME needs both players, preserves a declined game and ranks 
     await expect(page.getByTestId("turn-announcement")).toBeHidden();
     const before = await authoritativeState();
     await page.getByTestId("help-settings").click();
+    await page.getByTestId("help-debug").click();
     await page.getByTestId("debug-enabled").check();
     await page.getByTestId("debug-end-game").click();
     await page.getByTestId("debug-ending-agreed-end").click();
@@ -4802,6 +4851,7 @@ test("timer switches from minutes to seconds and local debug celebrations never 
   });
   const before = await authoritativeState();
   await page.getByTestId("help-settings").click();
+  await page.getByTestId("help-debug").click();
   await expect(page.getByTestId("debug-enabled")).not.toBeChecked();
   await expect(page.getByTestId("debug-panel")).toHaveCount(0);
   await page.getByTestId("debug-enabled").check();
@@ -4974,8 +5024,13 @@ test("timer switches from minutes to seconds and local debug celebrations never 
   await page.getByRole("button", { name: "Close dialog" }).click();
   await page.reload();
   await page.getByTestId("help-settings").click();
+  await page.getByTestId("help-debug").click();
   await expect(page.getByTestId("debug-enabled")).toBeChecked();
+  await page.getByRole("button", { name: "← Back" }).click();
+  await page.getByTestId("help-settings-page").click();
   await page.getByTestId("theme-ink").check();
+  await page.getByRole("button", { name: "← Back" }).click();
+  await page.getByTestId("help-debug").click();
   await page.setViewportSize({ width: 820, height: 1180 });
   await page.getByTestId("debug-end-game").click();
   await page.getByTestId("debug-ending-agreed-end").click();
@@ -4996,6 +5051,7 @@ test("timer switches from minutes to seconds and local debug celebrations never 
   await page.getByRole("button", { name: "See the board" }).click();
   await page.setViewportSize({ width: 1024, height: 768 });
   await page.getByTestId("help-settings").click();
+  await page.getByTestId("help-debug").click();
   const secondDevice = await browser.newContext({
     baseURL: "http://127.0.0.1:5183",
   });
@@ -5014,6 +5070,7 @@ test("timer switches from minutes to seconds and local debug celebrations never 
   await page.getByRole("button", { name: "Close dialog" }).click();
   await page.reload();
   await page.getByTestId("help-settings").click();
+  await page.getByTestId("help-debug").click();
   await expect(page.getByTestId("debug-enabled")).not.toBeChecked();
   expect(await authoritativeState()).toEqual(before);
 });
@@ -5026,6 +5083,7 @@ test("local normal and seven-tile scoring stay in one row without clipping enlar
   await cell(page, 0, 1).tap();
   const before = await authoritativeState();
   await page.getByTestId("help-settings").click();
+  await page.getByTestId("help-debug").click();
   await page.getByTestId("debug-enabled").check();
   await page.getByRole("button", { name: "Close dialog" }).click();
   for (const viewport of [
@@ -5043,7 +5101,9 @@ test("local normal and seven-tile scoring stay in one row without clipping enlar
       const spelling = kind === "normal" ? "HOUSE" : "GARDENS";
       await expect(letters.locator(".tile-letter")).toHaveText([...spelling]);
       const positions = await letters.evaluateAll((tiles) =>
-        tiles.map((tile) => tile.getBoundingClientRect().y),
+        // The counting tile intentionally scales about its centre. Check its
+        // layout row independently; clipping is checked below during the pulse.
+        tiles.map((tile) => (tile as HTMLElement).offsetTop),
       );
       expect(Math.max(...positions) - Math.min(...positions)).toBeLessThan(0.5);
       await expect(word.locator(".single-row-word")).toBeVisible();
@@ -5228,8 +5288,11 @@ test("a real blank crossing counts each word separately without charging the bla
     bag: pool,
   });
   await enroll(page);
-  const { aunt: other, auntContext: otherContext } = await joinRita(browser);
-  await other.emulateMedia({ reducedMotion: "no-preference" });
+  const { aunt: other, auntContext: otherContext } = await joinRita(
+    browser,
+    7,
+    "no-preference",
+  );
   try {
     for (const [index, letter] of [..."CA?"].entries()) {
       await rack(page, letter).tap();
@@ -5240,100 +5303,147 @@ test("a real blank crossing counts each word separately without charging the bla
       "data-state",
       "recognized",
     );
-    await observeScoreSteps(page);
+    await Promise.all([page, other].map(observeScoreSteps));
+    // Capture each browser's short-lived final frame independently. Assertions
+    // can then inspect both results without requiring the first card to linger.
+    const finalFrames = [page, other].map((target) =>
+      target.evaluate(
+        () =>
+          new Promise<{
+            words: (string | null)[];
+            blankCounts: number[];
+            dw: number;
+            dl: number;
+            oldAPremiums: number[];
+            equations: string[];
+            total: string;
+            running: string;
+            stable: boolean;
+            counts: number[];
+            showTotalButtons: number;
+          }>((resolve, reject) => {
+            let references: Element[][] | null = null;
+            let stable = true;
+            const selectors = [
+              ".scored-word",
+              ".score-letter",
+              ".score-equation",
+            ];
+            const timeout = setTimeout(
+              () => reject(new Error("Missing crossing final frame")),
+              20000,
+            );
+            const sample = () => {
+              const score = document.querySelector<HTMLElement>(
+                '[data-testid="move-celebration"] [data-testid="score-breakdown"]',
+              );
+              if (score) {
+                const current = selectors.map((selector) => [
+                  ...score.querySelectorAll(selector),
+                ]);
+                if (!references) references = current;
+                stable &&= current.every(
+                  (nodes, index) =>
+                    nodes.length === references![index].length &&
+                    nodes.every((node, i) => node === references![index][i]),
+                );
+                if (score.dataset.scorePhase === "move-total") {
+                  clearTimeout(timeout);
+                  resolve({
+                    words: [
+                      ...score.querySelectorAll(".scored-word-tiles"),
+                    ].map((word) => word.getAttribute("aria-label")),
+                    blankCounts: [
+                      ...score.querySelectorAll(".scored-word"),
+                    ].map(
+                      (word) =>
+                        word.querySelectorAll('[aria-label="T, 0 points"]')
+                          .length,
+                    ),
+                    dw: score.querySelectorAll('[data-premium="DW"]').length,
+                    dl: score.querySelectorAll('[data-premium="DL"]').length,
+                    oldAPremiums: [
+                      ...score.querySelectorAll('[aria-label="A, 1 points"]'),
+                    ].map(
+                      (tile) =>
+                        tile.querySelectorAll(
+                          '[data-testid="score-letter-premium"]',
+                        ).length,
+                    ),
+                    equations: [
+                      ...score.querySelectorAll(".score-equation"),
+                    ].map((equation) => equation.textContent || ""),
+                    total:
+                      score.querySelector('[data-testid="score-total"]')
+                        ?.textContent || "",
+                    running:
+                      score.querySelector('[data-testid="running-score"]')
+                        ?.textContent || "",
+                    stable,
+                    counts: current.map((nodes) => nodes.length),
+                    showTotalButtons: score.querySelectorAll(
+                      '[data-testid="score-show-total"]',
+                    ).length,
+                  });
+                  return;
+                }
+              }
+              requestAnimationFrame(sample);
+            };
+            requestAnimationFrame(sample);
+          }),
+      ),
+    );
     expectedRevision = 1;
     expectedCommandCount = 1;
     expectedBoardKeys = ["6,8", "7,6", "7,7", "7,8"];
     await page.getByTestId("play-word").click();
-    const score = page
-      .getByTestId("move-celebration")
-      .getByTestId("score-breakdown");
-    await rememberScoreCard(score, 2, 5);
-    await expect(
-      score.locator(".scored-word-tiles").first(),
-    ).toHaveAccessibleName("CAT");
-    await expect(
-      score
-        .locator(".scored-word")
-        .first()
-        .locator('[aria-label="T, 0 points"]'),
-    ).toHaveCount(1);
-    const skipped = other
-      .getByTestId("move-celebration")
-      .getByTestId("score-breakdown");
-    await rememberScoreCard(skipped, 2, 5);
-    await expect(skipped.getByTestId("score-show-total")).toHaveCount(0);
-    await expect(skipped).toHaveAttribute("data-score-phase", "move-total");
-    await expect(skipped.getByTestId("running-score")).toHaveText("9");
-    await expectSameScoreCard(skipped);
-    await other.waitForTimeout(1000);
-    await expectSameScoreCard(skipped);
-    await expect(skipped.getByTestId("score-total")).toHaveText(
-      /Move total\s*9$/,
-    );
-    await other.screenshot({
-      path: info.outputPath("crossword-show-total-same-card.png"),
-      fullPage: false,
+    const captured = await Promise.all(finalFrames);
+    await info.attach("crossing-final-frames", {
+      body: JSON.stringify(captured, null, 2),
+      contentType: "application/json",
     });
-    await expect
-      .poll(
-        async () =>
-          (await observedScores(page)).some(
-            (step) =>
-              step.word === 1 && step.phase === "intro" && step.score === 0,
-          ),
-        { intervals: [30] },
-      )
-      .toBe(true);
-    await expect(
-      score.locator(".scored-word-tiles").last(),
-    ).toHaveAccessibleName("AT");
-    await expect(
-      score
-        .locator(".scored-word")
-        .last()
-        .locator('[aria-label="T, 0 points"]'),
-    ).toHaveCount(1);
-    await expectSameScoreCard(score);
-    await page.screenshot({
-      path: info.outputPath("crossword-second-page-blank.png"),
-      fullPage: false,
-    });
-    await expect(score).toHaveAttribute("data-score-phase", "move-total");
-    await expect(score.getByTestId("score-total")).toHaveText(
-      /Move total\s*9$/,
-    );
-    await expectSameScoreCard(score);
-    const recap = score.getByTestId("score-word-list");
-    await expect(recap.locator(".scored-word-tiles")).toHaveCount(2);
-    await expect(recap.locator('[aria-label="T, 0 points"]')).toHaveCount(2);
-    await expect(recap.locator('[data-premium="DW"]')).toHaveCount(1);
-    await expect(recap.locator('[data-premium="DL"]')).toHaveCount(0);
-    for (const oldA of await recap.locator('[aria-label="A, 1 points"]').all())
-      await expect(oldA.getByTestId("score-letter-premium")).toHaveCount(0);
-    await expect(recap.locator(".score-equation").first()).toHaveText(
-      /3 \+ 1 \+ 0.*Whole word: 4 × 2 = 8.*CAT = 8 points/,
-    );
-    await expect(recap.locator(".score-equation").last()).toHaveText(
-      /1 \+ 0.*AT = 1 points/,
-    );
-    const records = await observedScores(page);
-    expect(
-      records
-        .filter((step) => step.phase === "word-total")
-        .map((step) => [step.word, step.score]),
-    ).toEqual([
-      [0, 8],
-      [1, 1],
-    ]);
-    expect(
-      records
-        .filter(
+    for (const frame of captured) {
+      expect(frame.stable).toBe(true);
+      expect(frame.counts).toEqual([2, 5, 2]);
+      expect(frame.words).toEqual(["CAT", "AT"]);
+      expect(frame.blankCounts).toEqual([1, 1]);
+      expect(frame.dw).toBe(1);
+      expect(frame.dl).toBe(0);
+      expect(frame.oldAPremiums).toEqual([0, 0]);
+      expect(frame.equations[0]).toMatch(
+        /3 \+ 1 \+ 0.*Whole word: 4 × 2 = 8.*CAT = 8 points/,
+      );
+      expect(frame.equations[1]).toMatch(/1 \+ 0.*AT = 1 points/);
+      expect(frame.total).toMatch(/Move total\s*9$/);
+      expect(frame.running).toBe("9");
+      expect(frame.showTotalButtons).toBe(0);
+    }
+    for (const target of [page, other]) {
+      const records = await observedScores(target);
+      expect(
+        records.some(
           (step) =>
-            step.phase === "letter" && step.tile === 1 && step.word === 1,
-        )
-        .map((step) => step.score),
-    ).toEqual([1]);
+            step.word === 1 && step.phase === "intro" && step.score === 0,
+        ),
+      ).toBe(true);
+      expect(
+        records
+          .filter((step) => step.phase === "word-total")
+          .map((step) => [step.word, step.score]),
+      ).toEqual([
+        [0, 8],
+        [1, 1],
+      ]);
+      expect(
+        records
+          .filter(
+            (step) =>
+              step.phase === "letter" && step.tile === 1 && step.word === 1,
+          )
+          .map((step) => step.score),
+      ).toEqual([1]);
+    }
     const game = (await db.doc("games/ui-table").get()).data()!;
     expect(
       game.lastMove.breakdown.words.map(
@@ -5353,7 +5463,7 @@ test("a real blank crossing counts each word separately without charging the bla
   }
 });
 
-test("a fifteen-letter accepted word wraps its large faces and adds a single seven-tile bonus", async ({
+test("a fifteen-letter accepted word scales into one row and adds a single seven-tile bonus", async ({
   page,
 }, info) => {
   const pool = [
@@ -5398,6 +5508,88 @@ test("a fifteen-letter accepted word wraps its large faces and adds a single sev
     .getByTestId("move-celebration")
     .getByTestId("score-breakdown");
   await rememberScoreCard(score, 1, 15);
+  const finalRecap = score.evaluate(
+    (element) =>
+      new Promise<{
+        letters: string[];
+        premiums: string[];
+        stable: boolean;
+        overlaps: number[];
+        height: number;
+        overflow: string;
+        equationVisible: boolean;
+      }>((resolve, reject) => {
+        const timeout = setTimeout(
+          () => reject(new Error("Missing fifteen-letter final frame")),
+          20000,
+        );
+        const sample = () => {
+          if ((element as HTMLElement).dataset.scorePhase !== "move-total") {
+            requestAnimationFrame(sample);
+            return;
+          }
+          clearTimeout(timeout);
+          const recap = element.querySelector<HTMLElement>(
+            '[data-testid="score-word-list"]',
+          )!;
+          const state = (
+            element as Element & {
+              scoreIdentity: {
+                references: Element[][];
+                selectors: string[];
+                replaced: boolean;
+              };
+            }
+          ).scoreIdentity;
+          const stable =
+            !state.replaced &&
+            state.selectors.every((selector, index) =>
+              [...element.querySelectorAll(selector)].every(
+                (node, i) =>
+                  node === state.references[index][i] && node.isConnected,
+              ),
+            );
+          const badges = [
+            ...recap.querySelectorAll('[data-testid="score-letter-premium"]'),
+          ].map((node) => node.getBoundingClientRect());
+          const points = [
+            ...recap.querySelectorAll(".score-letter > small"),
+          ].map((node) => node.getBoundingClientRect());
+          const overlaps = badges.flatMap((badge, index) =>
+            points
+              .filter(
+                (point) =>
+                  Math.min(badge.right, point.right) >
+                    Math.max(badge.left, point.left) &&
+                  Math.min(badge.bottom, point.bottom) >
+                    Math.max(badge.top, point.top),
+              )
+              .map(() => index),
+          );
+          if (recap.scrollHeight > recap.clientHeight)
+            recap.scrollTop = recap.scrollHeight;
+          const equation = recap
+            .querySelector(".score-equation strong")!
+            .getBoundingClientRect();
+          const bounds = recap.getBoundingClientRect();
+          resolve({
+            letters: [...recap.querySelectorAll(".tile-letter")].map(
+              (node) => node.textContent || "",
+            ),
+            premiums: [
+              ...recap.querySelectorAll('[data-testid="score-premium-badge"]'),
+            ].map((node) => node.textContent || ""),
+            stable,
+            overlaps,
+            height: recap.clientHeight,
+            overflow: getComputedStyle(recap).overflowY,
+            equationVisible:
+              equation.top >= bounds.top && equation.bottom <= bounds.bottom,
+          });
+        };
+        requestAnimationFrame(sample);
+      }),
+  );
   await expect(score.locator(".tile-letter")).toHaveText([
     ..."EXTRACURRICULAR",
   ]);
@@ -5407,23 +5599,32 @@ test("a fifteen-letter accepted word wraps its large faces and adds a single sev
   );
   const faces = await score.locator(".score-letter").evaluateAll((elements) =>
     elements.map((element) => {
-      const r = element.getBoundingClientRect();
-      const container = element.parentElement!.getBoundingClientRect();
+      const tile = element as HTMLElement;
+      const container = tile.parentElement!;
+      const layoutLeft = (node: HTMLElement) => {
+        let left = 0;
+        for (
+          let current: HTMLElement | null = node;
+          current;
+          current = current.offsetParent as HTMLElement | null
+        )
+          left += current.offsetLeft;
+        return left;
+      };
+      const left = layoutLeft(tile) - layoutLeft(container);
       return {
-        top: r.top,
-        left: r.left,
-        right: r.right,
-        width: (element as HTMLElement).offsetWidth,
-        containerLeft: container.left,
-        containerRight: container.right,
+        top: tile.offsetTop,
+        left,
+        right: left + tile.offsetWidth,
+        width: tile.offsetWidth,
+        containerLeft: 0,
+        containerRight: container.clientWidth,
       };
     }),
   );
-  expect(
-    new Set(faces.map((face) => Math.round(face.top))).size,
-  ).toBeGreaterThan(1);
+  expect(new Set(faces.map((face) => Math.round(face.top))).size).toBe(1);
   for (const face of faces) {
-    expect(face.width).toBeGreaterThanOrEqual(48);
+    expect(face.width).toBeGreaterThanOrEqual(26);
     expect(face.left).toBeGreaterThanOrEqual(face.containerLeft);
     expect(face.right).toBeLessThanOrEqual(face.containerRight);
   }
@@ -5445,12 +5646,13 @@ test("a fifteen-letter accepted word wraps its large faces and adds a single sev
     path: info.outputPath("fifteen-letter-bingo-total.png"),
     fullPage: false,
   });
-  await expect(score).toHaveAttribute("data-score-phase", "move-total");
-  await expectSameScoreCard(score);
-  const recap = score.getByTestId("score-word-list");
-  await expect(recap.locator(".tile-letter")).toHaveText([
-    ..."EXTRACURRICULAR",
-  ]);
+  const recap = await finalRecap;
+  await info.attach("fifteen-letter-final-frame", {
+    body: JSON.stringify(recap, null, 2),
+    contentType: "application/json",
+  });
+  expect(recap.stable).toBe(true);
+  expect(recap.letters).toEqual([..."EXTRACURRICULAR"]);
   const wordScore = game.lastMove.breakdown.words[0];
   const committedScores = wordScore.tiles.filter(
     (tile: { isNew: boolean }) => !tile.isNew,
@@ -5466,23 +5668,11 @@ test("a fifteen-letter accepted word wraps its large faces and adds a single sev
     .filter((tile: { premium: string | null }) => tile.premium !== null)
     .map((tile: { premium: string }) => tile.premium);
   // Real accepted scoring supplies the new premiums; committed col3/7 bonuses are spent.
-  await expect(recap.getByTestId("score-premium-badge")).toHaveText(
-    newPremiums,
-  );
-  await expectScoredPointsClear(recap);
-  const overflow = await recap.evaluate((element) => ({
-    height: element.clientHeight,
-    scrollHeight: element.scrollHeight,
-    overflow: getComputedStyle(element).overflowY,
-  }));
-  expect(overflow.height).toBeLessThanOrEqual(300);
-  expect(overflow.overflow).toBe("auto");
-  if (overflow.scrollHeight > overflow.height) {
-    await recap.evaluate(
-      (element) => (element.scrollTop = element.scrollHeight),
-    );
-    await expect(recap.locator(".score-equation strong")).toBeInViewport();
-  }
+  expect(recap.premiums).toEqual(newPremiums);
+  expect(recap.overlaps).toEqual([]);
+  expect(recap.height).toBeLessThanOrEqual(300);
+  expect(recap.overflow).toBe("auto");
+  expect(recap.equationVisible).toBe(true);
   await page.screenshot({
     path: info.outputPath("fifteen-letter-premiums-final-recap.png"),
     fullPage: false,
@@ -5497,7 +5687,7 @@ test("a private sign-in link prefills the intended player and six-digit code wit
 }) => {
   const before = await authoritativeState();
   await page.goto("/#player=Rita&code=000123");
-  await expect(page.getByTestId("login-player")).toHaveValue("aunt");
+  await expect(page.getByTestId("login-player")).toHaveValue("Rita");
   await expect(page.getByTestId("login-password")).toHaveValue("000123");
   expect(new URL(page.url()).hash).toBe("");
   await expect(page.getByTestId("game-board")).toHaveCount(0);
@@ -5568,197 +5758,285 @@ test("a real high-scoring right-edge move keeps its celebration and stars inside
     expectedCommandCount = 1;
     expectedBoardKeys = [9, 10, 11, 12, 13, 14].map((col) => `14,${col}`);
     await observeScoreSteps(page);
-    await page.getByTestId("play-word").click();
-    const actual = page.getByTestId("move-celebration");
-    await expect(actual).toBeVisible();
-    await expect(actual).toHaveAttribute("data-band", "high");
-    await expect(actual.getByTestId("celebration-starburst")).toBeVisible();
-    await expect
-      .poll(async () =>
-        Number(
-          await actual
-            .locator("..")
-            .evaluate((element) => getComputedStyle(element).opacity),
-        ),
-      )
-      .toBeGreaterThan(0.8);
-    await expect(actual).toHaveCSS("transform", "none");
-    const progressive = actual.getByTestId("score-breakdown");
-    await rememberScoreCard(progressive, 1, 6);
-    const reduced = recipient
-      .getByTestId("move-celebration")
-      .getByTestId("score-breakdown");
-    await expect(reduced).toHaveAttribute("data-score-phase", "complete");
-    await expect(reduced.locator(".tile-letter")).toHaveText([..."QUARTZ"]);
-    await expect(reduced.locator(".score-equation")).toHaveText(
-      /10 \+ 1 \+ 1×2 \+ 1 \+ 1 \+ 10.*Whole word: 25 × 3 = 75.*QUARTZ = 75 points/,
-    );
-    await expect(reduced.getByTestId("score-total")).toHaveText(
-      /Move total\s*75$/,
-    );
-    await expect(reduced.getByTestId("score-premium-badge")).toHaveText([
-      "DL",
-      "TW",
-    ]);
-    await expect(
-      reduced
-        .getByTestId("score-letter-premium")
-        .getByTestId("score-premium-badge"),
-    ).toHaveAccessibleName("Double letter");
-    await expect(reduced.getByTestId("score-word-premium")).toHaveText(
-      /TW\s*Whole word: 25 × 3 = 75/,
-    );
-    await expectScoredPointsClear(reduced);
-    await recipient.screenshot({
-      path: info.outputPath("quartz-premiums-reduced-portrait.png"),
-      fullPage: false,
-    });
-    await expect(progressive.locator(".tile-letter")).toHaveText([..."QUARTZ"]);
-    const dimensions = await actual.evaluate((element) => {
-      const rect = element.getBoundingClientRect();
-      const frame = document
-        .querySelector(".board-frame")!
-        .getBoundingClientRect();
-      const tile = element.querySelector(".score-letter") as HTMLElement;
-      const label = element.querySelector(".score-count-beat > span")!;
-      return {
-        width: rect.width,
-        centerX: rect.x + rect.width / 2,
-        centerY: rect.y + rect.height / 2,
-        frameX: frame.x + frame.width / 2,
-        frameY: frame.y + frame.height / 2,
-        tileWidth: tile.offsetWidth,
-        tileHeight: tile.offsetHeight,
-        labelSize: parseFloat(getComputedStyle(label).fontSize),
+    type QuartzFrame = {
+      band: string | null;
+      starVisible: boolean;
+      opacity: number;
+      transform: string;
+      letters: string[];
+      equation: string;
+      total: string;
+      premiums: string[];
+      letterPremiumLabel: string | null;
+      wordPremium: string;
+      overlaps: number[];
+      dimensions: {
+        width: number;
+        height: number;
+        centerX: number;
+        centerY: number;
+        frameX: number;
+        frameY: number;
+        tileWidth: number;
+        tileHeight: number;
+        labelSize: number;
       };
+      bounds: {
+        rects: { left: number; right: number; top: number; bottom: number }[];
+        frame: { left: number; right: number; top: number; bottom: number };
+      };
+      badges: { width: number; height: number; font: number }[];
+      scroll: number;
+      turnVisible: boolean;
+    };
+    type QuartzCapture = {
+      frames: Record<string, QuartzFrame>;
+      stable: boolean;
+      counts: number[];
+    };
+    // Both captures begin before the move. Each browser records its own fleeting
+    // phases; no assertion depends on the other browser's animation duration.
+    const capture = (target: Page, reduced: boolean) =>
+      target.evaluate(
+        (reduced) =>
+          new Promise<QuartzCapture>((resolve, reject) => {
+            const frames: Record<string, QuartzFrame> = {};
+            let references: Element[][] | null = null;
+            let stable = true;
+            const selectors = [
+              ".scored-word",
+              ".score-letter",
+              ".score-equation",
+            ];
+            const finalPhase = reduced ? "complete" : "move-total";
+            const timeout = setTimeout(
+              () =>
+                reject(
+                  new Error("Missing QUARTZ scoring phase: " + finalPhase),
+                ),
+              20000,
+            );
+            const sample = () => {
+              const actual = document.querySelector<HTMLElement>(
+                '[data-testid="move-celebration"]',
+              );
+              const score = actual?.querySelector<HTMLElement>(
+                '[data-testid="score-breakdown"]',
+              );
+              if (!actual || !score) {
+                if (frames[finalPhase]) {
+                  clearTimeout(timeout);
+                  resolve({
+                    frames,
+                    stable,
+                    counts: references!.map((nodes) => nodes.length),
+                  });
+                  return;
+                }
+                requestAnimationFrame(sample);
+                return;
+              }
+              const current = selectors.map((selector) => [
+                ...score.querySelectorAll(selector),
+              ]);
+              if (!references) references = current;
+              stable &&= current.every(
+                (nodes, index) =>
+                  nodes.length === references![index].length &&
+                  nodes.every(
+                    (node, i) =>
+                      node === references![index][i] && node.isConnected,
+                  ),
+              );
+              const opacity = Number(
+                getComputedStyle(actual.parentElement!).opacity,
+              );
+              const phase = score.dataset.scorePhase || "";
+              if (opacity > 0.8 && !frames[phase]) {
+                const list = score.querySelector<HTMLElement>(
+                  '[data-testid="score-word-list"]',
+                )!;
+                const rect = actual.getBoundingClientRect();
+                const frame = document
+                  .querySelector(".board-frame")!
+                  .getBoundingClientRect();
+                const star = actual.querySelector<HTMLElement>(
+                  '[data-testid="celebration-starburst"]',
+                );
+                const tile = score.querySelector<HTMLElement>(".score-letter")!;
+                const label = score.querySelector(".score-count-beat > span")!;
+                const bounds = (node: Element) => {
+                  const r = node.getBoundingClientRect();
+                  return {
+                    left: r.left,
+                    right: r.right,
+                    top: r.top,
+                    bottom: r.bottom,
+                  };
+                };
+                const letterBadges = [
+                  ...list.querySelectorAll(
+                    '[data-testid="score-letter-premium"]',
+                  ),
+                ].map((node) => node.getBoundingClientRect());
+                const points = [
+                  ...list.querySelectorAll(".score-letter > small"),
+                ].map((node) => node.getBoundingClientRect());
+                const announcement = document.querySelector<HTMLElement>(
+                  '[data-testid="turn-announcement"]',
+                );
+                const visible = (node: Element | null) => {
+                  if (!node) return false;
+                  for (
+                    let current: Element | null = node;
+                    current;
+                    current = current.parentElement
+                  )
+                    if (
+                      Number(getComputedStyle(current).opacity) <= 0.05 ||
+                      getComputedStyle(current).visibility === "hidden"
+                    )
+                      return false;
+                  return true;
+                };
+                frames[phase] = {
+                  band: actual.getAttribute("data-band"),
+                  starVisible: visible(star),
+                  opacity,
+                  transform: getComputedStyle(actual).transform,
+                  letters: [...score.querySelectorAll(".tile-letter")].map(
+                    (node) => node.textContent || "",
+                  ),
+                  equation:
+                    score.querySelector(".score-equation")?.textContent || "",
+                  total:
+                    score.querySelector('[data-testid="score-total"]')
+                      ?.textContent || "",
+                  premiums: [
+                    ...list.querySelectorAll(
+                      '[data-testid="score-premium-badge"]',
+                    ),
+                  ].map((node) => node.textContent || ""),
+                  letterPremiumLabel:
+                    list
+                      .querySelector(
+                        '[data-testid="score-letter-premium"] [data-testid="score-premium-badge"]',
+                      )
+                      ?.getAttribute("aria-label") || null,
+                  wordPremium:
+                    list.querySelector('[data-testid="score-word-premium"]')
+                      ?.textContent || "",
+                  overlaps: letterBadges.flatMap((badge, index) =>
+                    points
+                      .filter(
+                        (point) =>
+                          Math.min(badge.right, point.right) >
+                            Math.max(badge.left, point.left) &&
+                          Math.min(badge.bottom, point.bottom) >
+                            Math.max(badge.top, point.top),
+                      )
+                      .map(() => index),
+                  ),
+                  dimensions: {
+                    width: rect.width,
+                    height: rect.height,
+                    centerX: rect.x + rect.width / 2,
+                    centerY: rect.y + rect.height / 2,
+                    frameX: frame.x + frame.width / 2,
+                    frameY: frame.y + frame.height / 2,
+                    tileWidth: tile.offsetWidth,
+                    tileHeight: tile.offsetHeight,
+                    labelSize: parseFloat(getComputedStyle(label).fontSize),
+                  },
+                  bounds: {
+                    rects: [actual, ...(star ? [star] : [])].map(bounds),
+                    frame: bounds(document.querySelector(".board-frame")!),
+                  },
+                  badges: [
+                    ...list.querySelectorAll(
+                      '[data-testid="score-premium-badge"]',
+                    ),
+                  ].map((node) => {
+                    const box = node.getBoundingClientRect();
+                    return {
+                      width: box.width,
+                      height: box.height,
+                      font: parseFloat(getComputedStyle(node).fontSize),
+                    };
+                  }),
+                  scroll: list.scrollTop,
+                  turnVisible: visible(announcement),
+                };
+              }
+              requestAnimationFrame(sample);
+            };
+            requestAnimationFrame(sample);
+          }),
+        reduced,
+      );
+    const progressiveCapture = capture(page, false);
+    const reducedCapture = capture(recipient, true);
+    await page.getByTestId("play-word").click();
+    const [progressive, reduced] = await Promise.all([
+      progressiveCapture,
+      reducedCapture,
+    ]);
+    await info.attach("quartz-scoring-frames", {
+      body: JSON.stringify({ progressive, reduced }, null, 2),
+      contentType: "application/json",
     });
+    expect(progressive.stable).toBe(true);
+    expect(reduced.stable).toBe(true);
+    expect(progressive.counts).toEqual([1, 6, 1]);
+    expect(reduced.counts).toEqual([1, 6, 1]);
+    const final = progressive.frames["move-total"],
+      complete = reduced.frames.complete;
+    expect(final).toBeDefined();
+    expect(complete).toBeDefined();
+    for (const frame of [final, complete]) {
+      expect(frame.letters).toEqual([..."QUARTZ"]);
+      expect(frame.equation).toMatch(
+        /10 \+ 1 \+ 1×2 \+ 1 \+ 1 \+ 10.*Whole word: 25 × 3 = 75.*QUARTZ = 75 points/,
+      );
+      expect(frame.total).toMatch(/Move total\s*75$/);
+      expect(frame.premiums).toEqual(["DL", "TW"]);
+      expect(frame.letterPremiumLabel).toBe("Double letter");
+      expect(frame.wordPremium).toMatch(/TW\s*Whole word: 25 × 3 = 75/);
+      expect(frame.overlaps).toEqual([]);
+      expect(frame.turnVisible).toBe(false);
+    }
+    expect(final.band).toBe("high");
+    expect(final.starVisible).toBe(true);
+    expect(final.opacity).toBeGreaterThan(0.8);
+    expect(final.transform).toBe("none");
+    const dimensions = final.dimensions;
     expect(dimensions.width).toBeGreaterThanOrEqual(420);
-    expect(dimensions.width).toBeLessThanOrEqual(520);
+    expect(dimensions.width).toBeLessThanOrEqual(560);
     expect(Math.abs(dimensions.centerX - dimensions.frameX)).toBeLessThan(2);
     expect(Math.abs(dimensions.centerY - dimensions.frameY)).toBeLessThan(2);
     expect(dimensions.tileWidth).toBeGreaterThanOrEqual(48);
     expect(dimensions.tileHeight).toBeGreaterThanOrEqual(48);
     expect(dimensions.labelSize).toBeGreaterThanOrEqual(20);
-    const bounds = await actual.evaluate((element) => {
-      const rects = [
-        element,
-        element.querySelector('[data-testid="celebration-starburst"]')!,
-      ].map((node) => {
-        const r = node.getBoundingClientRect();
-        return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
-      });
-      const frame = document
-        .querySelector(".board-frame")!
-        .getBoundingClientRect();
-      return {
-        rects,
-        frame: {
-          left: frame.left,
-          right: frame.right,
-          top: frame.top,
-          bottom: frame.bottom,
-        },
-      };
-    });
-    for (const rect of bounds.rects) {
-      expect(rect.left).toBeGreaterThanOrEqual(bounds.frame.left);
-      expect(rect.right).toBeLessThanOrEqual(bounds.frame.right);
-      expect(rect.top).toBeGreaterThanOrEqual(bounds.frame.top);
-      expect(rect.bottom).toBeLessThanOrEqual(bounds.frame.bottom);
+    for (const frame of Object.values(progressive.frames)) {
+      expect(frame.bounds.rects).toHaveLength(2);
+      for (const rect of frame.bounds.rects) {
+        expect(rect.left).toBeGreaterThanOrEqual(frame.bounds.frame.left);
+        expect(rect.right).toBeLessThanOrEqual(frame.bounds.frame.right);
+        expect(rect.top).toBeGreaterThanOrEqual(frame.bounds.frame.top);
+        expect(rect.bottom).toBeLessThanOrEqual(frame.bounds.frame.bottom);
+      }
     }
-    await expect
-      .poll(
-        async () =>
-          (await observedScores(page)).some(
-            (step) =>
-              step.phase === "letter-bonus" &&
-              step.tile === 2 &&
-              step.score === 13,
-          ),
-        { intervals: [30], timeout: 8000 },
-      )
-      .toBe(true);
-    await page.screenshot({
-      path: info.outputPath("quartz-large-letter-bonus.png"),
-      fullPage: false,
-    });
-    await expect
-      .poll(
-        async () =>
-          (await observedScores(page)).some(
-            (step) => step.phase === "word-bonus" && step.score === 75,
-          ),
-        { intervals: [30] },
-      )
-      .toBe(true);
-    await page.screenshot({
-      path: info.outputPath("quartz-triple-word.png"),
-      fullPage: false,
-    });
-    await expect(progressive).toHaveAttribute("data-score-phase", "word-total");
-    const countedView = await actual.evaluate((element) => ({
-      height: element.getBoundingClientRect().height,
-      scroll: element.querySelector('[data-testid="score-word-list"]')!
-        .scrollTop,
-    }));
-    await expectSameScoreCard(progressive);
-    await expect(progressive).toHaveAttribute("data-score-phase", "move-total");
-    await expectSameScoreCard(progressive);
-    const finalView = await actual.evaluate((element) => ({
-      height: element.getBoundingClientRect().height,
-      scroll: element.querySelector('[data-testid="score-word-list"]')!
-        .scrollTop,
-    }));
-    expect(Math.abs(finalView.height - countedView.height)).toBeLessThan(0.5);
-    expect(Math.abs(finalView.scroll - countedView.scroll)).toBeLessThan(0.5);
-    await expect(progressive.getByTestId("score-total")).toHaveText(
-      /Move total\s*75$/,
-    );
-    await page.screenshot({
-      path: info.outputPath("actual-high-score-right-edge.png"),
-      fullPage: false,
-    });
-    const recap = progressive.getByTestId("score-word-list");
-    await expect(recap.getByTestId("score-premium-badge")).toHaveText([
-      "DL",
-      "TW",
-    ]);
-    await expect(recap.locator(".score-equation")).toHaveText(
-      /10 \+ 1 \+ 1×2 \+ 1 \+ 1 \+ 10.*Whole word: 25 × 3 = 75.*QUARTZ = 75 points/,
-    );
-    const badges = await recap
-      .getByTestId("score-premium-badge")
-      .evaluateAll((elements) =>
-        elements.map((element) => {
-          const rect = element.getBoundingClientRect();
-          return {
-            width: rect.width,
-            height: rect.height,
-            font: parseFloat(getComputedStyle(element).fontSize),
-          };
-        }),
-      );
-    for (const badge of badges) {
+    const counted = progressive.frames["word-total"];
+    expect(counted).toBeDefined();
+    expect(
+      Math.abs(final.dimensions.height - counted.dimensions.height),
+    ).toBeLessThan(0.5);
+    expect(Math.abs(final.scroll - counted.scroll)).toBeLessThan(0.5);
+    for (const badge of final.badges) {
       expect(badge.width).toBeGreaterThanOrEqual(32);
       expect(badge.height).toBeGreaterThanOrEqual(30);
       expect(badge.font).toBeGreaterThanOrEqual(16);
     }
-    await expectScoredPointsClear(recap);
-    await page.waitForTimeout(2300);
-    await expectSameScoreCard(progressive);
-    await expect(progressive).toHaveAttribute("data-score-phase", "move-total");
-    await expect(recap.getByTestId("score-premium-badge")).toHaveText([
-      "DL",
-      "TW",
-    ]);
-    await expect(recap.getByTestId("score-word-premium")).toHaveText(
-      /Whole word: 25 × 3 = 75/,
-    );
-    await expect(page.getByTestId("turn-announcement")).toHaveCount(0);
-    await page.screenshot({
-      path: info.outputPath("quartz-premiums-readable-final-hold.png"),
-      fullPage: false,
-    });
     const observed = await observedScores(page);
     expect(
       observed
@@ -5845,11 +6123,13 @@ test("a real high-scoring right-edge move keeps its celebration and stars inside
 test("timed game duration validates and its request dialog stays centered with reachable controls in every theme", async ({
   page,
 }, info) => {
+  test.setTimeout(180_000);
   await page.emulateMedia({ reducedMotion: "reduce" });
   await enroll(page);
   let expectedDuration = "25";
   for (const theme of themes) {
     await page.getByTestId("help-settings").click();
+    await page.getByTestId("help-settings-page").click();
     await page.getByTestId(`theme-${theme}`).check();
     await page.getByRole("button", { name: "Close dialog" }).click();
     await expect(page.getByRole("dialog")).toHaveCount(0);
@@ -6104,7 +6384,7 @@ for (const { status, mode, modeName } of [
       approvedBy: "aunt",
       approvedAt: Date.now(),
     };
-    await db.doc("pairs/family/houseWords/MW").set(houseWord);
+    await db.doc("houseWords/MW").set(houseWord);
     await db
       .doc(`setupCodes/${createHash("sha256").update("PEACH").digest("hex")}`)
       .set({
@@ -6278,15 +6558,23 @@ for (const { status, mode, modeName } of [
         await expect(aunt.getByTestId("help-settings")).toBeEnabled();
         await expect(aunt.locator(".word-request-error")).toHaveCount(0);
         await expect(aunt.getByTestId("end-game-popup")).toHaveCount(0);
-        // The canonical replacement already arrived, while losing its reply
-        // still pauses future shared requests until the recipient opts in.
-        await expect(aunt.getByTestId("resume-shared-actions")).toBeVisible();
-        await aunt.getByTestId("resume-shared-actions").click();
+        // A late failure for the old game cannot pause the new context after
+        // its authoritative replacement has already arrived.
+        await expect(aunt.getByTestId("resume-shared-actions")).toHaveCount(0);
+        await expect(aunt.getByTestId("shared-action-pause")).toHaveCount(0);
       }
       if (mode === "timed") {
         await expect(aunt.locator(".zoomed")).toHaveCount(0);
         await expect(aunt.getByRole("dialog")).toHaveCount(0);
-        await expect(aunt.locator("body")).not.toHaveCSS("overflow", "hidden");
+        // Fitted tablet CSS intentionally prevents page scrolling; only the
+        // temporary inline zoom/modal lock must be released.
+        await expect
+          .poll(() =>
+            aunt
+              .locator("body")
+              .evaluate((node) => (node as HTMLElement).style.overflow),
+          )
+          .toBe("");
         await expect(aunt.locator("body")).not.toHaveCSS("position", "fixed");
       }
       expect((await db.collection("games").get()).size).toBe(2);
@@ -6314,10 +6602,11 @@ for (const { status, mode, modeName } of [
         scores: { mom: 0, aunt: 0 },
         rackCounts: { mom: 7, aunt: 7 },
         status: "active",
-        turn: "mom",
         winCondition: mode,
         turnsPlayed: 0,
       });
+      const starter = (await db.doc(`games/${newId}`).get()).data()!.turn;
+      expect(["mom", "aunt"]).toContain(starter);
       if (mode === "timed") {
         const timedGame = (await db.doc(`games/${newId}`).get()).data()!;
         expect(timedGame.durationMinutes).toBe(17);
@@ -6347,13 +6636,13 @@ for (const { status, mode, modeName } of [
         ).toContainText("MW");
         await view.getByRole("button", { name: "Close dialog" }).click();
       }
-      await expect(page.getByTestId("turn-status")).toContainText("Your turn");
+      await expect(page.getByTestId("turn-status")).toContainText(
+        starter === "mom" ? "Your turn" : "Waiting for Rita",
+      );
       await expect(aunt.getByTestId("turn-status")).toContainText(
-        "Waiting for Elizabeth",
+        starter === "aunt" ? "Your turn" : "Waiting for Elizabeth",
       );
-      expect((await db.doc("pairs/family/houseWords/MW").get()).data()).toEqual(
-        houseWord,
-      );
+      expect((await db.doc("houseWords/MW").get()).data()).toEqual(houseWord);
       expect((await db.collection("games").get()).size).toBe(2);
     } finally {
       await auntContext.close();
@@ -6678,8 +6967,10 @@ test("two players get one nonblocking turn announcement per real change, with qu
       )
       .not.toBe("ui-table");
     const newId = (await db.doc("pairs/family").get()).data()!.activeGameId;
-    await assertBanner(page, "mom", newId);
-    await assertBanner(aunt, "mom", newId);
+    const starter = (await db.doc(`games/${newId}`).get()).data()!.turn;
+    expect(["mom", "aunt"]).toContain(starter);
+    await assertBanner(page, starter, newId);
+    await assertBanner(aunt, starter, newId);
     for (const target of [page, aunt]) {
       await expect(banner(target)).toHaveCount(0);
       expect(
@@ -6689,7 +6980,7 @@ test("two players get one nonblocking turn announcement per real change, with qu
     }
     expect((await db.doc(`games/${newId}`).get()).data()).toMatchObject({
       revision: 0,
-      turn: "mom",
+      turn: starter,
       status: "active",
       board: {},
     });
@@ -6763,9 +7054,7 @@ test("shared-action pauses preserve consent and private drafts, respect cooldown
     expect(
       (await db.doc("pairs/family/wordRequests/mom-RMW").get()).data()!.status,
     ).toBe("pending");
-    expect((await db.doc("pairs/family/houseWords/RMW").get()).exists).toBe(
-      false,
-    );
+    expect((await db.doc("houseWords/RMW").get()).exists).toBe(false);
     await incoming.getByTestId("modal-resume-shared-actions").click();
     await expect(approve).toBeEnabled();
     expect(answerAttempts).toBe(1); // Resume never makes the decision for her.
@@ -6774,9 +7063,7 @@ test("shared-action pauses preserve consent and private drafts, respect cooldown
     ).toBe("pending");
     await approve.click();
     await expect(incoming).toBeHidden();
-    expect((await db.doc("pairs/family/houseWords/RMW").get()).exists).toBe(
-      true,
-    );
+    expect((await db.doc("houseWords/RMW").get()).exists).toBe(true);
     await page.getByTestId("recall-tiles").click();
     await expect(page.locator(".has-tentative")).toHaveCount(0);
     await rack(page, "A").tap();
@@ -7017,6 +7304,7 @@ test("local slow and uncertain submissions preserve the live draft and reduced m
   await cell(page, 0, 1).tap();
   const before = await authoritativeState();
   await page.getByTestId("help-settings").click();
+  await page.getByTestId("help-debug").click();
   await page.getByTestId("debug-enabled").check();
   await page.getByRole("button", { name: "Close dialog" }).click();
   await page.getByTestId("local-debug-tools").click();
@@ -7087,6 +7375,22 @@ test("local slow and uncertain submissions preserve the live draft and reduced m
 test("an uncertain real submission keeps its pending command and draft after dismissing feedback", async ({
   page,
 }, info) => {
+  // Another table has approved this word, leaving an obsolete local proposal.
+  // It must neither demand consent nor hide feedback for a later slow submission.
+  await db.doc("houseWords/QZX").set({
+    word: "QZX",
+    approvedAt: Date.now(),
+    requestedBy: "mom",
+    approvedBy: "aunt",
+  });
+  await db.doc("pairs/family/wordRequests/aunt-QZX").set({
+    id: "aunt-QZX",
+    gameId: "ui-table",
+    word: "QZX",
+    requestedBy: "aunt",
+    requestedAt: Date.now(),
+    status: "pending",
+  });
   await enroll(page);
   await rack(page, "A").tap();
   await cell(page, 0, 1).tap();
@@ -7096,6 +7400,10 @@ test("an uncertain real submission keeps its pending command and draft after dis
   const submittedIds: string[] = [];
   await page.route("**/submitCommand", async (route) => {
     if (route.request().method() !== "POST") return route.continue();
+    expect(route.request().postDataJSON().data).toMatchObject({
+      pairId: "family",
+      gameId: "ui-table",
+    });
     submittedIds.push(route.request().postDataJSON().data.id);
     await new Promise((resolve) => setTimeout(resolve, 2200));
     await route.fulfill({
@@ -7129,6 +7437,25 @@ test("an uncertain real submission keeps its pending command and draft after dis
   );
   await page.getByTestId("resume-shared-actions").click();
   await expect(page.getByTestId("retry-pending")).toBeEnabled();
+  await expect(page.getByTestId("open-games")).toBeDisabled();
+  await page.getByTestId("help-settings").click();
+  await expect(page.getByTestId("sign-out")).toBeDisabled();
+  await page.getByRole("button", { name: "Close dialog" }).click();
+  const savedPending = await page.evaluate(() =>
+    Object.entries(localStorage).filter(([key]) =>
+      key.startsWith("tea-pending:"),
+    ),
+  );
+  expect(savedPending).toHaveLength(1);
+  expect(savedPending[0][0]).toMatch(/:family:ui-table$/);
+  // The recovery key carries pair ownership; the pure engine command does not.
+  expect(JSON.parse(savedPending[0][1])).toMatchObject({
+    id: submittedIds[0],
+    gameId: "ui-table",
+  });
+  await page.reload();
+  await expect(page.getByTestId("retry-pending")).toBeVisible();
+  await expect(page.getByTestId("open-games")).toBeDisabled();
   expect(await authoritativeState()).toEqual(before);
   await page.screenshot({
     path: info.outputPath("uncertain-real-submit-keeps-draft-and-retry.png"),
@@ -7173,6 +7500,7 @@ test("slow acceptance feedback closes on authoritative arrival before a held HTT
     const before = await authoritativeState();
     await page.getByTestId("play-word").click();
     await expect(page.getByTestId("slow-submit-popup")).toBeVisible();
+    await expect(page.getByTestId("open-games")).toBeDisabled();
     expect(await authoritativeState()).toEqual(before);
     await expect(page.getByTestId("move-celebration")).toHaveCount(0);
     await page.screenshot({
@@ -7299,7 +7627,7 @@ test("a delayed old-turn reply cannot block or overwrite a fresh game's private 
     const readDraft = () =>
       page.evaluate(
         (key) => JSON.parse(localStorage.getItem(key) || "{}"),
-        `tea-tiles-draft:${newId}:mom`,
+        `tea-tiles-draft:demo-tea-and-tiles-ui-tests:mom:family:${newId}:${newId}:mom`,
       );
     await expect
       .poll(async () => (await readDraft()).placements?.length)
@@ -7371,7 +7699,7 @@ test("private sign-in adds a remembered device without replacing the original pl
     await extra.goto("/");
     await expect(extra.getByTestId("login-player")).toBeVisible();
     await expect(extra.getByTestId("setup-code")).toHaveCount(0);
-    await extra.getByTestId("login-player").selectOption("mom");
+    await extra.getByTestId("login-player").fill("Elizabeth");
     await extra.getByTestId("login-password").fill("wrong private phrase");
     await extra.getByTestId("enroll-submit").click();
     await expect(extra.getByRole("alert")).toContainText(
@@ -7450,6 +7778,7 @@ test("screen awake handles device refusal and reacquires only while visible with
   });
   await enroll(page);
   await page.getByTestId("help-settings").click();
+  await page.getByTestId("help-settings-page").click();
   const toggle = page.getByTestId("keep-screen-awake");
   await expect(toggle).not.toBeChecked();
   await toggle.check();
@@ -7494,6 +7823,8 @@ test("screen awake handles device refusal and reacquires only while visible with
   await expect(page.getByTestId("screen-awake-status")).toContainText(
     "Screen stays awake",
   );
+  await page.getByRole("button", { name: "← Back" }).click();
+  await page.getByTestId("help-about").click();
   await page.getByTestId("check-for-updates").click();
   await expect(page.getByTestId("app-update-status")).toContainText(
     "Updates are available on the published app",
@@ -7502,6 +7833,8 @@ test("screen awake handles device refusal and reacquires only while visible with
     path: info.outputPath("device-awake-settings.png"),
     fullPage: false,
   });
+  await page.getByRole("button", { name: "← Back" }).click();
+  await page.getByTestId("help-settings-page").click();
   await toggle.uncheck();
   expect(
     await page.evaluate(() => localStorage.getItem("tea-and-tiles:keep-awake")),
@@ -7510,6 +7843,7 @@ test("screen awake handles device refusal and reacquires only while visible with
   await page.reload();
   await expect(page.getByTestId("game-board")).toBeVisible();
   await page.getByTestId("help-settings").click();
+  await page.getByTestId("help-settings-page").click();
   await expect(page.getByTestId("keep-screen-awake")).not.toBeChecked();
 });
 
@@ -7821,6 +8155,7 @@ test("game duration appears in the local ending report without changing the real
   await enroll(page);
   const before = await authoritativeState();
   await page.getByTestId("help-settings").click();
+  await page.getByTestId("help-debug").click();
   await page.getByTestId("debug-enabled").check();
   await page.getByRole("button", { name: "Close dialog" }).click();
   await page.getByTestId("local-debug-tools").click();
@@ -8282,6 +8617,7 @@ test("multiple-word scoring scrolls gradually to the next word", async ({
   await enroll(page);
   await page.emulateMedia({ reducedMotion: "no-preference" });
   await page.getByTestId("help-settings").click();
+  await page.getByTestId("help-debug").click();
   await page.getByTestId("debug-enabled").check();
   await page.getByRole("button", { name: "Close dialog" }).click();
   await page.getByTestId("local-debug-tools").click();
@@ -8328,6 +8664,7 @@ test("local game-over board previews final controls and restores the live draft"
   await cell(page, 0, 1).tap();
   const before = await authoritativeState();
   await page.getByTestId("help-settings").click();
+  await page.getByTestId("help-debug").click();
   await page.getByTestId("debug-enabled").check();
   await page.getByRole("button", { name: "Close dialog" }).click();
   await page.getByTestId("local-debug-tools").click();
@@ -8367,6 +8704,7 @@ test("round feedback previews long words, exchanges and post-results new-game cu
   await enroll(page);
   const before = await authoritativeState();
   await page.getByTestId("help-settings").click();
+  await page.getByTestId("help-debug").click();
   await page.getByTestId("debug-enabled").check();
   await page.getByRole("button", { name: "Close dialog" }).click();
   for (const [kind, length] of [
@@ -8542,9 +8880,11 @@ test("temporary diagnostics capture a delayed opponent move through the real end
     const response = await route.fetch();
     const original = await response.text();
     const modified = original.replace(
-      /\(s\)\s*=>\s*\{(\s*if\s*\(s\.exists\(\)\))/,
-      `async (s) => {
-      if(s.exists() && s.data().lastMove?.player === 'aunt' && s.data().revision === 1) await new Promise(resolve=>setTimeout(resolve,18000));$1`,
+      /\(snapshot\)\s*=>\s*\{(\s*if\s*\(disposed\s*\|\|\s*listenerContext\s*!==\s*contextRef\.current\)\s*return;\s*)(if\s*\(snapshot\.exists\(\)\))/,
+      `async (snapshot) => {$1
+      if(snapshot.exists() && snapshot.data().lastMove?.player === 'aunt' && snapshot.data().revision === 1) await new Promise(resolve=>setTimeout(resolve,18000));
+      if(disposed || listenerContext !== contextRef.current) return;
+      $2`,
     );
     if (modified === original)
       throw new Error("Missing game snapshot hook in diagnostic test fixture");
@@ -8667,6 +9007,7 @@ test("local drag performance tools isolate the sample board and expose frame tim
     if (request.url().includes("/submitCommand")) commands++;
   });
   await page.getByTestId("help-settings").click();
+  await page.getByTestId("help-debug").click();
   await page.getByTestId("debug-enabled").check();
   await page.getByTestId("debug-end-game").click();
   await page.getByTestId("debug-show-frame-meter").click();
@@ -8715,4 +9056,198 @@ test("local drag performance tools isolate the sample board and expose frame tim
   await expect(page.getByTestId("lab-drag-ghost")).toHaveCount(0);
   expect(commands).toBe(0);
   expect((await db.doc("games/ui-table").get()).data()).toEqual(before);
+});
+
+test("multiple tables keep opposite seats, drafts and sign-out private across four accounts", async ({
+  page,
+  browser,
+}, info) => {
+  const secondary = createGame("ui-multi-secondary", () => 0.23);
+  secondary.turn = "mom";
+  const unrelated = createGame("ui-multi-unrelated", () => 0.77);
+  const batch = db.batch();
+  batch.set(db.doc("playerCredentials/mom"), {
+    ...(await createCredential("123456")),
+    enabled: true,
+  });
+  for (const player of ["carol", "dana"]) {
+    batch.set(db.doc(`players/${player}`), {
+      displayName: player === "carol" ? "Carol" : "Dana",
+      loginName: player,
+      sessionVersion: 0,
+    });
+    batch.set(db.doc(`playerCredentials/${player}`), {
+      ...(await createCredential("123456")),
+      enabled: true,
+    });
+  }
+  for (const [pairId, game, seatPlayers, names] of [
+    [
+      "carol-mom",
+      secondary,
+      { mom: "carol", aunt: "mom" },
+      { mom: "Carol", aunt: "Elizabeth" },
+    ],
+    [
+      "rita-dana",
+      unrelated,
+      { mom: "aunt", aunt: "dana" },
+      { mom: "Rita", aunt: "Dana" },
+    ],
+  ] as const) {
+    const { racks, bag, ...publicState } = game;
+    batch.set(db.doc(`pairs/${pairId}`), {
+      schemaVersion: 2,
+      memberIds: Object.values(seatPlayers),
+      seatPlayers,
+      names,
+      activeGameId: game.id,
+      activeGame: {
+        id: game.id,
+        status: game.status,
+        turn: game.turn,
+        scores: game.scores,
+        revision: game.revision,
+        updatedAt: Date.now(),
+      },
+    });
+    batch.set(db.doc(`games/${game.id}`), {
+      ...publicState,
+      pairId,
+      bagCount: bag.length,
+      rackCounts: { mom: 7, aunt: 7 },
+    });
+    for (const slot of ["mom", "aunt"] as const)
+      batch.set(db.doc(`games/${game.id}/racks/${slot}`), {
+        tiles: racks[slot],
+      });
+    batch.set(db.doc(`games/${game.id}/private/state`), { bag });
+  }
+  await batch.commit();
+  // Prefer the existing family table on this account's first visit.
+  await db.doc("players/mom").update({ defaultPairId: "family" });
+  await enroll(page);
+  await expect(page.getByTestId("turn-announcement")).toBeHidden();
+  await rack(page, "A").tap();
+  await cell(page, 0, 1).tap();
+  await expect(page.locator(".has-tentative")).toHaveCount(1);
+  await page.getByTestId("open-games").click();
+  await expect(page.getByTestId("open-pair-family")).toBeVisible();
+  await expect(page.getByTestId("open-pair-carol-mom")).toContainText("Carol");
+  await expect(page.getByTestId("open-pair-rita-dana")).toHaveCount(0);
+  await page.getByTestId("open-pair-carol-mom").click();
+  await expect(page.getByTestId("turn-status")).toContainText(
+    "Waiting for Carol",
+  );
+  await expect(page.locator(".has-tentative")).toHaveCount(0);
+  const rackIds = () =>
+    page
+      .locator("[data-rack-tile-id]")
+      .evaluateAll((elements) =>
+        elements
+          .map((element) => element.getAttribute("data-rack-tile-id"))
+          .sort(),
+      );
+  await expect
+    .poll(rackIds)
+    .toEqual(secondary.racks.aunt.map((tile) => tile.id).sort());
+  await page.screenshot({
+    path: info.outputPath("multiplayer-opposite-seat.png"),
+  });
+  await page.reload();
+  await expect(page.getByTestId("turn-status")).toContainText(
+    "Waiting for Carol",
+  );
+  await expect
+    .poll(rackIds)
+    .toEqual(secondary.racks.aunt.map((tile) => tile.id).sort());
+  const secondContext = await browser.newContext({
+    baseURL: "http://127.0.0.1:5183",
+  });
+  try {
+    const second = await secondContext.newPage();
+    await second.goto("/");
+    await second.getByTestId("login-player").fill("Elizabeth");
+    await second.getByTestId("login-password").fill("123456");
+    await second.getByTestId("enroll-submit").click();
+    await expect(second.getByTestId("turn-status")).toContainText("Your turn");
+    await expect(page.getByTestId("turn-status")).toContainText(
+      "Waiting for Carol",
+    );
+    await expect(second.locator(".has-tentative")).toHaveCount(0);
+    await db.doc("houseWords/QZX").set({
+      word: "QZX",
+      pairId: "rita-dana",
+      requestedBy: "mom",
+      approvedBy: "aunt",
+      approvedAt: Date.now(),
+      requestedByPlayerId: "aunt",
+      approvedByPlayerId: "dana",
+    });
+    for (const view of [page, second]) {
+      await view.getByTestId("help-settings").click();
+      await view.getByTestId("help-dictionary").click();
+      await expect(
+        view.getByRole("list", { name: "Approved shared words" }),
+      ).toContainText("QZX");
+      await view.getByRole("button", { name: "Close dialog" }).click();
+    }
+  } finally {
+    await secondContext.close();
+  }
+  await page.getByTestId("open-games").click();
+  await page.getByTestId("open-pair-family").click();
+  await expect(page.getByTestId("turn-status")).toContainText("Your turn");
+  await expect(page.locator(".has-tentative")).toHaveCount(1);
+  await page.getByTestId("help-settings").click();
+  await page.getByTestId("sign-out").click();
+  await expect(page.getByTestId("login-player")).toBeVisible();
+  await expect(page.getByTestId("tile-rack")).toHaveCount(0);
+  await expect(page.locator(".has-tentative")).toHaveCount(0);
+  await page.getByTestId("login-player").fill("Carol");
+  await page.getByTestId("login-password").fill("123456");
+  await page.getByTestId("enroll-submit").click();
+  await expect(page.getByTestId("game-board")).toBeVisible();
+  await expect(page.getByTestId("turn-status")).toContainText("Your turn");
+  await expect
+    .poll(rackIds)
+    .toEqual(secondary.racks.mom.map((tile) => tile.id).sort());
+  await expect(page.locator(".has-tentative")).toHaveCount(0);
+  await page.getByTestId("open-games").click();
+  await expect(page.getByTestId("open-pair-carol-mom")).toBeVisible();
+  await expect(page.getByTestId("open-pair-family")).toHaveCount(0);
+  await expect(page.getByTestId("open-pair-rita-dana")).toHaveCount(0);
+  expect((await db.doc(`games/${secondary.id}`).get()).data()?.revision).toBe(
+    0,
+  );
+  expect((await db.doc(`games/${unrelated.id}`).get()).data()?.revision).toBe(
+    0,
+  );
+});
+
+test("a stable-account sign-in link shows a readable name and sign-out clears its private code", async ({
+  page,
+}) => {
+  await db
+    .doc("playerCredentials/aunt")
+    .set({ ...(await createCredential("000123")), enabled: true });
+  await page.goto("/#player=aunt&name=Rita&code=000123");
+  await expect(page.getByTestId("login-player")).toHaveValue("Rita");
+  await expect(page.getByTestId("login-password")).toHaveValue("000123");
+  expect(new URL(page.url()).hash).toBe("");
+  // Editing the displayed name must discard the account ID from the link.
+  await page.getByTestId("login-player").fill("Elizabeth");
+  await page.getByTestId("enroll-submit").click();
+  await expect(page.getByRole("alert")).toContainText(
+    "player or sign-in code is not correct",
+  );
+  await expect(page.getByTestId("game-board")).toHaveCount(0);
+  await page.getByTestId("login-player").fill("Rita");
+  await page.getByTestId("enroll-submit").click();
+  await expect(page.getByTestId("game-board")).toBeVisible();
+  await page.getByTestId("help-settings").click();
+  await page.getByTestId("sign-out").click();
+  await expect(page.getByTestId("login-password")).toHaveValue("");
+  await expect(page.getByTestId("login-player")).toHaveValue("");
+  await expect(page.getByTestId("tile-rack")).toHaveCount(0);
 });

@@ -75,9 +75,10 @@ The cloud runner is separate from the emulator suite. It is restricted to
 It rejects production IDs, mismatched app/configuration and emulator environment
 variables. It never clears collections or imports development data.
 
-The cloud frontend and deployed backend use the released **1.6.1 / d71f386**
-source, extracted into ignored `.tools/cloud-test-release/`. Pending workspace
-changes, including the online-time tracker, are not part of that snapshot.
+By default, the cloud frontend uses the released **1.6.1 / d71f386**
+source, extracted into ignored `.tools/cloud-test-release/`, against the baseline
+test deployment. Workspace changes are not part of that snapshot. Candidate
+testing requires the explicit preparation and matching test deployment below.
 The frontend is a production build served locally on port **5185**; its Auth,
 Firestore and Functions calls use the real test project in London. No GitHub Pages
 changes or production deployments are required.
@@ -95,6 +96,49 @@ After initial preparation and backend deployment, run:
 ```powershell
 npm run test:soak:cloud
 ```
+
+### Testing the current candidate
+
+Use a separate terminal without emulator environment variables. These commands
+snapshot the current allowlisted sources, build that exact snapshot's Functions
+and dictionary, and deploy only its Functions, Firestore rules and indexes to
+**tea-and-tiles-test**. The deploy helper rejects other projects and uses an
+explicit target rather than Firebase CLI's selected project.
+
+```powershell
+$env:TEA_CLOUD_TEST_SOURCE = 'candidate'
+node scripts/prepare-cloud-test.mjs --source-only
+# If the test project's private App Check token has not been prepared:
+node scripts/prepare-cloud-test.mjs
+node scripts/deploy-cloud-test-candidate.mjs
+npm run test:soak:cloud
+```
+
+Preparation stores the source snapshot in ignored `.tools/cloud-test-candidate/`
+with a content hash. An existing snapshot with different contents is rejected;
+preserve or remove that owned snapshot before preparing another candidate.
+`--source-only` performs no cloud operations. The deployment command above does
+perform a real, billable test-project deployment; merely preparing a candidate
+does not deploy it.
+
+Only a successful deploy writes complete ignored
+`.tools/cloud-test-deployment.json` evidence containing the exact source revision,
+test-project identity, and applied Functions/rules/indexes. Starting another deploy
+invalidates prior evidence first, and a failed deployment leaves failed evidence.
+Candidate soak, frontend startup and direct test entry all check the snapshot and
+matching evidence locally before token exchange, browser startup or fixture writes.
+Missing, partial, wrong-project or stale evidence stops the run. This records the
+guarded helper's successful deployment; it cannot detect later manual cloud changes.
+
+To return the runner to baseline source selection:
+
+```powershell
+Remove-Item Env:TEA_CLOUD_TEST_SOURCE -ErrorAction SilentlyContinue
+```
+
+That only changes source selection; it does not restore a baseline backend after
+a candidate deployment. Restore the separately managed baseline deployment before
+using baseline mode to compare results.
 
 `SOAK_TURNS`, `SOAK_HEADED` and `SOAK_CPU_RATE` also apply to cloud runs. The default
 is 60 turns, the maximum is 100, and the overall runner is limited to 32 minutes.

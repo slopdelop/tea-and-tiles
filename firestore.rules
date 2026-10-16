@@ -5,15 +5,27 @@ service cloud.firestore {
       return request.auth != null
         && exists(/databases/$(database)/documents/bindings/$(request.auth.uid));
     }
-    function slot() {
-      return get(/databases/$(database)/documents/bindings/$(request.auth.uid)).data.slot;
+    function playerId() {
+      let binding = get(/databases/$(database)/documents/bindings/$(request.auth.uid)).data;
+      return binding.get('playerId', binding.get('slot', ''));
     }
     function member() {
-      return bound() && slot() in ['mom', 'aunt']
-        && validSession(
-          get(/databases/$(database)/documents/bindings/$(request.auth.uid)).data,
-          get(/databases/$(database)/documents/players/$(slot())).data
-        );
+      return bound() && validSession(
+        get(/databases/$(database)/documents/bindings/$(request.auth.uid)).data,
+        get(/databases/$(database)/documents/players/$(playerId())).data
+      );
+    }
+    function pairMember(pairId) {
+      let pair = get(/databases/$(database)/documents/pairs/$(pairId)).data;
+      return member() && playerId() in pair.get('memberIds', pairId == 'family' ? ['mom', 'aunt'] : [])
+        && playerId() in pair.get('seatPlayers', pairId == 'family' ? {'mom': 'mom', 'aunt': 'aunt'} : {}).values();
+    }
+    function slot(pairId) {
+      let pair = get(/databases/$(database)/documents/pairs/$(pairId)).data;
+      return pair.get('seatPlayers', {'mom': 'mom', 'aunt': 'aunt'}).mom == playerId() ? 'mom' : 'aunt';
+    }
+    function gamePair(gameId) {
+      return get(/databases/$(database)/documents/games/$(gameId)).data.get('pairId', 'family');
     }
     function validSession(binding, player) {
       return player.get('sessionVersion', 0) is int
@@ -26,19 +38,22 @@ service cloud.firestore {
       allow get: if request.auth != null && request.auth.uid == uid;
     }
     match /players/{player} {
-      allow get: if member() && slot() == player;
+      allow get: if member() && playerId() == player;
     }
-    match /pairs/family {
-      allow get: if member();
-      match /houseWords/{word} { allow get, list: if member(); }
-      match /wordRequests/{requestId} { allow get, list: if member(); }
-      match /gameRequests/{requestId} { allow get, list: if member(); }
-      match /endGameRequests/{requestId} { allow get, list: if member(); }
+    match /houseWords/{word} { allow get, list: if member(); }
+    match /pairs/{pairId} {
+      allow get: if pairMember(pairId);
+      // The client must constrain this query with memberIds array-contains.
+      allow list: if member() && playerId() in resource.data.memberIds;
+      match /houseWords/{word} { allow get, list: if pairMember(pairId); }
+      match /wordRequests/{requestId} { allow get, list: if pairMember(pairId); }
+      match /gameRequests/{requestId} { allow get, list: if pairMember(pairId); }
+      match /endGameRequests/{requestId} { allow get, list: if pairMember(pairId); }
       match /presence/{uid} {
         function validHeartbeat() {
           return request.resource.data.keys().hasAll(['slot', 'lastSeen'])
             && request.resource.data.keys().hasOnly(['slot', 'lastSeen', 'onlineSince', 'onlineTrackedFrom', 'onlineIntervals'])
-            && request.resource.data.slot == slot()
+            && request.resource.data.slot == slot(pairId)
             && request.resource.data.lastSeen is timestamp
             && request.resource.data.lastSeen == request.time
             && (!request.resource.data.keys().hasAny(['onlineSince', 'onlineTrackedFrom', 'onlineIntervals'])
@@ -50,21 +65,21 @@ service cloud.firestore {
                 && request.resource.data.onlineIntervals is list
                 && request.resource.data.onlineIntervals.size() <= 256));
         }
-        allow get, list: if member();
-        allow create: if member() && uid == request.auth.uid && validHeartbeat();
-        allow update: if member() && uid == request.auth.uid && validHeartbeat()
+        allow get, list: if pairMember(pairId);
+        allow create: if pairMember(pairId) && uid == request.auth.uid && validHeartbeat();
+        allow update: if pairMember(pairId) && uid == request.auth.uid && validHeartbeat()
           && request.time >= resource.data.lastSeen + duration.value(55, 's');
         // Hidden devices expire naturally; deletion cannot bypass throttling.
         allow delete: if false;
       }
     }
     match /games/{gameId} {
-      allow get: if member();
-      match /racks/{player} { allow get: if member() && slot() == player; }
+      allow get: if pairMember(gamePair(gameId));
+      match /racks/{player} { allow get: if pairMember(gamePair(gameId)) && slot(gamePair(gameId)) == player; }
       match /commands/{commandId} {
         // A member can listen for her not-yet-written receipt. Once it exists,
         // only its submitting UID may read it (including through a listener).
-        allow get: if member() && (
+        allow get: if pairMember(gamePair(gameId)) && (
           !exists(/databases/$(database)/documents/games/$(gameId)/commands/$(commandId))
           || resource.data.uid == request.auth.uid
         );

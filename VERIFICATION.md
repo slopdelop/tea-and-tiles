@@ -453,3 +453,75 @@ Configured the user-created tea-and-tiles-test project (905106894114), default N
 Added npm run test:soak:cloud using the same browser scenario as the emulator test. The cloud runner rejects other project IDs/numbers/apps/API configurations, conflicting cloud targets and emulator variables. It preflights debug-token exchange, serves a production frontend build only on 127.0.0.1:5185, uses normal anonymous player enrollment, and leaves administrator credentials in memory. Browser-level production URL/API-key blocking does not intercept test traffic. An exclusive expiring lease and marked table protect against overlapping runs/unmarked data; games are fresh per run and collections are never wiped. Private tokens, reports and snapshots remain ignored. Archived duplicate tests were excluded from the private release snapshot to preserve ordinary Vitest discovery.
 
 Validation passed: 190 unit tests including target safeguards; focused TypeScript checks; shared-scenario three-turn emulator regression; three-turn cloud smoke; and a 60-turn real-Firebase Chrome run with normal animations, App Check enforcement and default Chrome transport. The eight-minute cloud run reached 95 committed tiles. Play-to-opponent DOM arrival: median487ms, p95 675ms, maximum762ms; maximum acknowledgement-to-board195ms. Clock-calibrated server-move-to-board maximum522ms with211ms calibration uncertainty. No browser exceptions or long delivery stalls occurred. Network instrumentation retained32 ERR_ABORTED events on Firestore Listen/Write channels; these did not coincide with a failed move or long arrival and are not classified as proven listener errors. The final game remained active at the requested60-turn cap, and the test released its lease and closed browser sessions. Report: test-results/cloud-soak/cloud-soak-isolated-real-Firebase-back-and-forth/soak-results.json; summary and deployment audit in ignored .tools/cloud-soak-summary.json and .tools/cloud-test-deployment.json. Passing Chrome does not rule out intermittent WebKit, iPad, longer-lived-session or background/resume delivery issues.
+
+## Local multiplayer candidate (not published)
+
+Recovery tags: `checkpoint/published-1.6.1` points to the published `d71f386`
+source; `checkpoint/pre-multiplayer-local` includes the online-time tracker and
+isolated soak tools (`f25212a`). Implementation branch: `codex/multiple-players`.
+The private production database/Auth backup remains separate under `.tools/backups/`.
+
+### Manual check
+
+Start the usual local emulators (`npm run emulators`) and frontend (`npm run dev`).
+Run `node scripts/admin.mjs prepare-multiplayer --project demo-tea-and-tiles` once
+(or again safely). It adds profiles/table metadata and test opponents; it does not
+reset the family board or rotate existing credentials. Alex, Jamie and Sam have
+local-only code `246810` when first created. Never use this fixture command in cloud.
+
+Open `http://127.0.0.1:5173/#player=Alex&code=246810`, then press Sign in. The fragment
+is removed immediately. Alex can open tables with Jamie, Sam and the existing
+Elizabeth account. Two local frontends may be run on ports 5173 and 5174 to give each player independent browser storage.
+
+- Open **Games**, choose Jamie, arrange an unsubmitted tile, then choose Sam.
+  Confirm the hands and drafts are independent; return to Jamie to recover the draft.
+- Reload on Sam's table: it should reopen directly without a game chooser.
+- In **Help & settings**, check the four short submenus and **Sign out**.
+  Sign out and enter Jamie / `246810`; Alex's private hand/draft must disappear.
+- Use another browser profile/incognito window for the opponent. Tabs in the same
+  browser profile share Firebase Auth, so they are not separate account sessions.
+- Play, exchange, pass, ask to approve an unfamiliar word, and request a new game.
+  These actions apply only to the open table. A globally approved custom word is
+  usable at all tables. No public registration or player directory is provided.
+- Check tablet landscape layout, theme retention, keyboard/focus behavior, and
+  sign-out/table-switch buttons while a move is waiting for confirmation.
+
+### Administration and eventual upgrade
+
+All admin commands require an explicit `--project`. Non-demo projects additionally
+require `--cloud`; no cloud commands have been run for this candidate.
+
+- `node scripts/admin.mjs add-player --project demo-tea-and-tiles --id PLAYER_ID --name NAME`
+- `node scripts/admin.mjs issue-pin --project demo-tea-and-tiles --player PLAYER_ID`
+- `node scripts/admin.mjs create-pair --project demo-tea-and-tiles --player-a ID_A --player-b ID_B`
+- `node scripts/admin.mjs list --project demo-tea-and-tiles`
+- `node scripts/upgrade-multiplayer.mjs --project demo-tea-and-tiles` is a dry run;
+  add `--apply` for the additive upgrade. It preserves credential hashes, session
+  versions, Auth users, bindings and existing game data. Engine seat keys remain
+  internal legacy IDs; account identity and displayed names are separate.
+
+Before a future production release, review the upgrade dry run, apply it with the
+coordinated backend/rules/client release, and test existing signed-in devices.
+The admin upgrade does not sign users out or change their reusable codes. A stale
+old client is not promised full multi-table compatibility; do not deploy this
+frontend alone against the old backend/rules.
+
+Validation for this local candidate (2026-10-16):
+
+- Unit tests: 197 passed, including seven cloud source/deployment guards.
+- Dedicated backend emulator suite: 90 passed.
+- Browser coverage: all 71 active scenarios passed across the full regression run
+  and targeted reruns after corrections; the opt-in soak scenario was skipped.
+  Final reruns also cover readable stable-ID links, cleared codes after sign-out,
+  obsolete globally approved proposals during a slow submission, and delayed-move
+  diagnostics through the real local callable endpoint.
+- Drag performance: no board-cell renders or word-preview recomputations while
+  crossing 60 drop targets; immediate touch-coordinate tracking retained. The
+  instrumentation now includes the keyed game component as well as the account wrapper.
+- Build, PWA install/update/offline-shell checks and admin script syntax checks pass.
+- No cloud candidate deployment, production migration, production deployment or
+  real-iPad verification was performed. Local-only accounts/data were prepared.
+
+Implementation checkpoint: `checkpoint/multiplayer-local` on
+`codex/multiple-players`. The production and pre-multiplayer tags above remain
+unchanged. Keep production deployment as a separate reviewed step.

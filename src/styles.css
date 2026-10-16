@@ -5396,3 +5396,81 @@ html.tablet-page-fitted,
   text-align: center;
   margin: 10px 0;
 }
+
+/* Account navigation stays with the page utilities, apart from turn actions. */
+.help-menu,
+.games-list {
+  display: grid;
+  gap: 12px;
+}
+.help-menu > button {
+  min-height: 54px;
+  text-align: left;
+}
+.help-account {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line, #c5c8b8);
+}
+.help-back {
+  margin-bottom: 18px;
+}
+.game-choice {
+  display: grid;
+  gap: 6px;
+  padding: 18px;
+  min-height: 86px;
+  text-align: left;
+  border-radius: 12px;
+  background: var(--surface, #faf8ef);
+  color: inherit;
+  border: 2px solid var(--line, #c5c8b8);
+  font: inherit;
+  cursor: pointer;
+}
+.game-choice strong {
+  font-size: 1.3rem;
+}
+.game-choice.chosen {
+  border-color: var(--accent, #376344);
+}
+.game-choice small {
+  font-weight: 700;
+}
+.games-control {
+  white-space: nowrap;
+}
+@media (max-width: 600px) {
+  .games-control {
+    padding-inline: 12px;
+  }
+}
+
+.drawer-backdrop {
+  justify-content: flex-end;
+  padding: 12px;
+}
+.modal.games-drawer {
+  width: min(440px, 100%);
+  align-self: stretch;
+  max-height: calc(100dvh - 24px);
+}
+.help-menu > button {
+  font-size: 17px;
+}
+.game-choice > span {
+  font-size: 16px;
+}
+@media (max-width: 600px) {
+  .drawer-backdrop {
+    padding: 8px;
+  }
+  .modal.games-drawer {
+    max-height: calc(100dvh - 16px);
+  }
+}
+
+/* Small final-report notes need full contrast in every table palette. */
+.modal :is(.ending-phase, .history-note) {
+  color: var(--ink);
+}

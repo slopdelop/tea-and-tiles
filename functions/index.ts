@@ -1,5 +1,5 @@
 import { initializeApp } from "firebase-admin/app";
-import { getFirestore } from "firebase-admin/firestore";
+import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { info, warn } from "firebase-functions/logger";
 import {
@@ -73,6 +73,7 @@ export function validateCommand(data: unknown): Command {
   onlyKeys(d, [
     "id",
     "gameId",
+    "pairId",
     "expectedRevision",
     "kind",
     "placements",
@@ -171,9 +172,14 @@ export function publicGame(game: Game) {
     bagCount: bag.length,
   };
 }
-function writeGame(tx: FirebaseFirestore.Transaction, game: Game) {
+function writeGame(
+  tx: FirebaseFirestore.Transaction,
+  game: Game,
+  pairId: string,
+) {
   const ref = db.doc(`games/${game.id}`);
-  tx.set(ref, publicGame(game));
+  tx.set(ref, { ...publicGame(game), pairId });
+  updateSummary(tx, game, pairId);
   tx.set(ref.collection("racks").doc("mom"), { tiles: game.racks.mom });
   tx.set(ref.collection("racks").doc("aunt"), { tiles: game.racks.aunt });
   tx.set(ref.collection("private").doc("state"), { bag: game.bag });
@@ -184,7 +190,9 @@ async function readOnlineGameTime(
   game: FirebaseFirestore.DocumentData,
   endedAt: number,
 ) {
-  const presence = await tx.get(db.collection("pairs/family/presence"));
+  const presence = await tx.get(
+    db.collection(`pairs/${game.pairId ?? "family"}/presence`),
+  );
   const devices = presence.docs.flatMap((doc) => {
     const data = doc.data();
     const activity = slots.includes(data.slot)
@@ -214,13 +222,15 @@ function writeGameChanges(
   tx: FirebaseFirestore.Transaction,
   before: Game,
   after: Game,
+  pairId: string,
 ) {
   if (before.id !== after.id) {
-    writeGame(tx, after);
+    writeGame(tx, after, pairId);
     return;
   }
   const ref = db.doc(`games/${after.id}`);
-  tx.set(ref, publicGame(after));
+  tx.set(ref, { ...publicGame(after), pairId });
+  updateSummary(tx, after, pairId);
   for (const slot of slots) {
     if (!sameTiles(before.racks[slot], after.racks[slot]))
       tx.set(ref.collection("racks").doc(slot), { tiles: after.racks[slot] });
@@ -248,21 +258,49 @@ function currentBinding(
 export async function login(
   uidInput: string | undefined,
   data: unknown,
-): Promise<{ slot: Slot }> {
+): Promise<{ playerId: string; slot: string }> {
   const uid = uidRequired(uidInput);
   const d = object(data);
   onlyKeys(d, ["playerId", "passphrase"]);
-  if (!slots.includes(d.playerId as Slot) || !validLoginSecret(d.passphrase))
+  if (
+    typeof d.playerId !== "string" ||
+    !d.playerId.trim() ||
+    d.playerId.length > 100 ||
+    !validLoginSecret(d.passphrase)
+  )
     throw new HttpsError(
       "invalid-argument",
       "Choose your player and enter your private six-digit code or existing passphrase.",
     );
-  const slot = d.playerId as Slot,
-    passphrase = d.passphrase;
+  const input = (d.playerId as string).trim();
+  let slot = input;
+  const direct = validId(input) ? await db.doc(`players/${input}`).get() : null;
+  let resolved = direct?.exists === true;
+  if (!resolved) {
+    const matches = await db
+      .collection("players")
+      .where("loginName", "==", input.toLowerCase())
+      .limit(2)
+      .get();
+    if (matches.size === 1 && validId(matches.docs[0].id)) {
+      slot = matches.docs[0].id;
+      resolved = true;
+    } else {
+      const legacy = (await db.doc("pairs/family").get()).data()?.names;
+      const found = slots.find(
+        (seat) =>
+          String(legacy?.[seat] ?? "").toLowerCase() === input.toLowerCase(),
+      );
+      resolved = found !== undefined;
+      // Invalid as a public PlayerId, and never eligible for authentication.
+      slot = found ?? "!unresolved";
+    }
+  }
+  const passphrase = d.passphrase;
   const outcome = await db.runTransaction(async (tx) => {
     const bindingRef = db.doc(`bindings/${uid}`),
       attemptRef = db.doc(`enrollmentAttempts/${hash(uid)}`),
-      sharedRef = db.doc(`loginAttempts/${slot}`);
+      sharedRef = db.doc(`loginAttempts/${resolved ? slot : "!unknown-names"}`);
     const [binding, player, credential, attempt, shared] = await tx.getAll(
       bindingRef,
       db.doc(`players/${slot}`),
@@ -270,7 +308,7 @@ export async function login(
       attemptRef,
       sharedRef,
     );
-    if (binding.exists && binding.data()?.slot !== slot)
+    if (binding.exists && bindingPlayer(binding.data()) !== slot)
       throw new HttpsError(
         "failed-precondition",
         "This browser is signed in as the other player. Use a different browser or device.",
@@ -285,7 +323,8 @@ export async function login(
       };
     });
     const alreadyBound =
-      binding.data()?.slot === slot &&
+      resolved &&
+      bindingPlayer(binding.data()) === slot &&
       currentBinding(binding.data(), player.data(), uid);
     const exhausted = limits.filter((limit) => limit.count >= 10);
     if (exhausted.length && !alreadyBound)
@@ -301,6 +340,7 @@ export async function login(
         ),
       };
     if (
+      !resolved ||
       !player.exists ||
       !credential.exists ||
       credential.data()?.enabled !== true ||
@@ -318,11 +358,12 @@ export async function login(
     }
     if (!alreadyBound)
       tx.set(bindingRef, {
-        slot,
+        playerId: slot,
+        ...(slots.includes(slot as Slot) ? { slot } : {}),
         sessionVersion: player.data()!.sessionVersion ?? 0,
         signedInAt: now,
       });
-    return { slot };
+    return { playerId: slot, slot };
   });
   if ("error" in outcome)
     throw new HttpsError(
@@ -334,14 +375,14 @@ export async function login(
         ? { rule: "rate-limit", retryAfterSeconds: outcome.retryAfterSeconds }
         : undefined,
     );
-  return { slot };
+  return { playerId: slot, slot };
 }
 
 /** Redeeming a replacement code atomically revokes the previous device's membership. */
 export async function enroll(
   uidInput: string | undefined,
   data: unknown,
-): Promise<{ slot: Slot }> {
+): Promise<{ playerId: string; slot: string }> {
   const uid = uidRequired(uidInput);
   const d = object(data);
   onlyKeys(d, ["code"]);
@@ -378,18 +419,19 @@ export async function enroll(
     const sameWindow = prior && now - prior.windowStart < 60 * 60 * 1000;
     const count = sameWindow ? Number(prior.count) : 0;
     const record = setup.data();
-    const knownSlot = record && slots.includes(record.slot);
+    const accountId = record?.playerId ?? record?.slot;
+    const knownSlot = validId(accountId);
     let player: FirebaseFirestore.DocumentSnapshot | undefined;
-    if (knownSlot) player = await tx.get(db.doc(`players/${record.slot}`));
+    if (knownSlot) player = await tx.get(db.doc(`players/${accountId}`));
     // An already accepted redemption is a receipt, so its bound owner can retry
     // even when failures have exhausted a bucket or the original ticket expired.
     if (
       knownSlot &&
-      record.consumedUid === uid &&
-      binding.data()?.slot === record.slot &&
+      record?.consumedUid === uid &&
+      bindingPlayer(binding.data()) === accountId &&
       currentBinding(binding.data(), player?.data(), uid)
     )
-      return { slot: record.slot as Slot };
+      return { playerId: accountId!, slot: accountId! };
     const shared = sharedAttempt?.data();
     const sharedWindow = shared && now - shared.windowStart < 60 * 60 * 1000;
     const sharedCount = sharedWindow ? Number(shared.count) : 0;
@@ -413,8 +455,8 @@ export async function enroll(
     });
     if (
       !knownSlot ||
-      !(record.expiresAt > now) ||
-      record.consumedUid ||
+      !(record!.expiresAt > now) ||
+      record?.consumedUid ||
       !player?.exists
     ) {
       if (isWord)
@@ -424,8 +466,8 @@ export async function enroll(
         });
       return { error: "permission-denied" as const };
     }
-    const slot = record.slot as Slot;
-    if (binding.exists && binding.data()?.slot !== slot) {
+    const slot = accountId!;
+    if (binding.exists && bindingPlayer(binding.data()) !== slot) {
       if (isWord)
         tx.set(db.doc(WORD_FAILURE_BUCKET), {
           windowStart: sharedWindow ? shared.windowStart : now,
@@ -436,12 +478,13 @@ export async function enroll(
     const oldUid = player.data()?.uid;
     if (oldUid && oldUid !== uid) tx.delete(db.doc(`bindings/${oldUid}`));
     tx.set(bindingRef, {
-      slot,
+      playerId: slot,
+      ...(slots.includes(slot as Slot) ? { slot } : {}),
       sessionVersion: player.data()?.sessionVersion ?? 0,
     });
     tx.set(player.ref, { uid }, { merge: true });
     tx.update(codeRef, { consumedUid: uid, consumedAt: now });
-    return { slot };
+    return { playerId: slot, slot };
   });
   if ("error" in outcome)
     throw new HttpsError(
@@ -453,35 +496,100 @@ export async function enroll(
         ? { rule: "rate-limit", retryAfterSeconds: outcome.retryAfterSeconds }
         : undefined,
     );
-  return { slot: outcome.slot! };
+  return { playerId: outcome.playerId!, slot: outcome.slot! };
 }
 
+function requestedPair(data: Record<string, unknown>): string {
+  const pairId = data.pairId ?? "family";
+  if (!validId(pairId))
+    throw new HttpsError("invalid-argument", "Choose a valid opponent.");
+  return pairId;
+}
+function bindingPlayer(
+  binding: FirebaseFirestore.DocumentData | undefined,
+): string | undefined {
+  return binding?.playerId ?? binding?.slot;
+}
+function assertGamePair(
+  game: FirebaseFirestore.DocumentData | undefined,
+  pairId: string,
+) {
+  if (game && (game.pairId ?? "family") !== pairId)
+    throw new HttpsError(
+      "permission-denied",
+      "This game belongs to another table.",
+    );
+}
+function opponentId(
+  pair: FirebaseFirestore.DocumentSnapshot,
+  slot: Slot,
+): string {
+  const other = slot === "mom" ? "aunt" : "mom";
+  return pair.data()?.seatPlayers?.[other] ?? other;
+}
+function summary(game: FirebaseFirestore.DocumentData) {
+  return {
+    id: game.id,
+    status: game.status,
+    turn: game.turn,
+    scores: game.scores,
+    revision: game.revision,
+    updatedAt: Date.now(),
+  };
+}
+function updateSummary(
+  tx: FirebaseFirestore.Transaction,
+  game: FirebaseFirestore.DocumentData,
+  pairId = game.pairId ?? "family",
+) {
+  tx.update(db.doc(`pairs/${pairId}`), {
+    activeGame: summary(game),
+    ...(game.status === "finished"
+      ? {
+          pendingEndGameRequestId: null,
+          "actionNeededBy.endGame": FieldValue.delete(),
+        }
+      : {}),
+  });
+}
 async function requireMember(
   tx: FirebaseFirestore.Transaction,
   uid: string,
-): Promise<{ slot: Slot; pair: FirebaseFirestore.DocumentSnapshot }> {
+  pairId: string,
+): Promise<{
+  slot: Slot;
+  playerId: string;
+  pair: FirebaseFirestore.DocumentSnapshot;
+}> {
   const binding = await tx.get(db.doc(`bindings/${uid}`));
-  const slot = binding.data()?.slot as Slot;
-  if (!slots.includes(slot))
+  const playerId = bindingPlayer(binding.data());
+  if (!validId(playerId))
     throw new HttpsError(
       "permission-denied",
       "This device is not connected to a player.",
     );
   const [player, pair] = await tx.getAll(
-    db.doc(`players/${slot}`),
-    db.doc("pairs/family"),
+    db.doc(`players/${playerId}`),
+    db.doc(`pairs/${pairId}`),
   );
   if (!currentBinding(binding.data(), player.data(), uid))
     throw new HttpsError(
       "permission-denied",
       "This session has been revoked. Please sign in again.",
     );
-  if (!pair.exists)
+  const value = pair.data();
+  const seats =
+    value?.seatPlayers ??
+    (pairId === "family" ? { mom: "mom", aunt: "aunt" } : {});
+  const members =
+    value?.memberIds ?? (pairId === "family" ? ["mom", "aunt"] : []);
+  const slot = slots.find((seat) => seats[seat] === playerId);
+  if (!pair.exists || !members.includes(playerId) || !slot)
     throw new HttpsError(
-      "failed-precondition",
-      "The family game has not been prepared yet.",
+      "permission-denied",
+      "You are not a member of this table.",
     );
-  return { slot, pair };
+  return { slot, playerId, pair };
 }
 
 function normalizeWord(value: unknown): string {
@@ -506,29 +614,60 @@ export async function requestHouseWord(
 ): Promise<{ id: string }> {
   const uid = uidRequired(uidInput);
   const d = object(data);
-  onlyKeys(d, ["word"]);
+  const pairId = requestedPair(d);
+  onlyKeys(d, ["pairId", "gameId", "word"]);
   const word = normalizeWord(d.word);
   return db.runTransaction(async (tx) => {
-    const { slot } = await requireMember(tx, uid);
+    const { slot, pair } = await requireMember(tx, uid, pairId);
+    const gameId = pair.data()?.activeGameId;
+    if (d.gameId !== undefined && d.gameId !== gameId)
+      throw new HttpsError(
+        "failed-precondition",
+        "Please use the current board for this word request.",
+      );
+    if (!validId(gameId))
+      throw new HttpsError(
+        "failed-precondition",
+        "This table has no active game.",
+      );
+    assertGamePair((await tx.get(db.doc(`games/${gameId}`))).data(), pairId);
     if (dictionary.has(word))
       throw new HttpsError(
         "failed-precondition",
         `${word} is already in our dictionary.`,
       );
     const id = `${slot}-${word}`;
-    const ref = db.doc(`pairs/family/wordRequests/${id}`);
+    const ref = db.doc(`pairs/${pairId}/wordRequests/${id}`);
     const [saved, approved] = await tx.getAll(
       ref,
-      db.doc(`pairs/family/houseWords/${word}`),
+      db.doc(`houseWords/${word}`),
     );
-    const existing = saved.data() as WordRequest | undefined;
-    if (existing?.status === "pending" || existing?.status === "accepted")
-      return { id };
-    if (approved.exists)
+    const existing = saved.data() as
+      (WordRequest & { gameId?: string }) | undefined;
+    if (approved.exists) {
+      if (existing?.status === "pending") {
+        tx.update(ref, {
+          status: "accepted",
+          resolvedByGlobalApproval: true,
+          respondedAt: Date.now(),
+        });
+        tx.update(pair.ref, {
+          [`actionNeededBy.word-${id}`]: FieldValue.delete(),
+        });
+        return { id };
+      }
+      if (existing?.status === "accepted") return { id };
       throw new HttpsError(
         "failed-precondition",
         `${word} is already accepted in your house dictionary.`,
       );
+    }
+    if (
+      (existing?.status === "pending" &&
+        (existing.gameId ?? gameId) === gameId) ||
+      existing?.status === "accepted"
+    )
+      return { id };
     const request: WordRequest = {
       id,
       word,
@@ -537,7 +676,10 @@ export async function requestHouseWord(
       requestedAt: Math.max(Date.now(), (existing?.requestedAt ?? 0) + 1),
     };
     // Replacement clears an earlier decline's response fields.
-    tx.set(ref, request);
+    tx.set(ref, { ...request, gameId });
+    tx.update(pair.ref, {
+      [`actionNeededBy.word-${id}`]: opponentId(pair, slot),
+    });
     return { id };
   });
 }
@@ -548,7 +690,14 @@ export async function respondHouseWord(
 ): Promise<{ status: "accepted" | "declined" }> {
   const uid = uidRequired(uidInput);
   const d = object(data);
-  onlyKeys(d, ["requestId", "approve", "expectedRequestedAt"]);
+  const pairId = requestedPair(d);
+  onlyKeys(d, [
+    "pairId",
+    "gameId",
+    "requestId",
+    "approve",
+    "expectedRequestedAt",
+  ]);
   if (
     typeof d.requestId !== "string" ||
     !/^(mom|aunt)-[A-Z]{2,15}$/.test(d.requestId) ||
@@ -570,12 +719,25 @@ export async function respondHouseWord(
   const approve = d.approve;
   const expectedRequestedAt = d.expectedRequestedAt;
   return db.runTransaction(async (tx) => {
-    const { slot } = await requireMember(tx, uid);
-    const ref = db.doc(`pairs/family/wordRequests/${requestId}`);
+    const { slot, pair } = await requireMember(tx, uid, pairId);
+    const ref = db.doc(`pairs/${pairId}/wordRequests/${requestId}`);
     const saved = await tx.get(ref);
     if (!saved.exists)
       throw new HttpsError("not-found", "This word request no longer exists.");
-    const request = saved.data() as WordRequest;
+    const request = saved.data() as WordRequest & { gameId?: string };
+    if (
+      d.gameId !== undefined &&
+      d.gameId !== (request.gameId ?? pair.data()?.activeGameId)
+    )
+      throw new HttpsError(
+        "failed-precondition",
+        "This word request belongs to another game.",
+      );
+    if (request.gameId)
+      assertGamePair(
+        (await tx.get(db.doc(`games/${request.gameId}`))).data(),
+        pairId,
+      );
     if (
       !slots.includes(request.requestedBy) ||
       request.id !== requestId ||
@@ -595,7 +757,15 @@ export async function respondHouseWord(
         "failed-precondition",
         "This word has been requested again. Please review the new request before answering.",
       );
-    const status = approve ? ("accepted" as const) : ("declined" as const);
+    const houseRef = db.doc(`houseWords/${request.word}`);
+    const house = await tx.get(houseRef);
+    const status =
+      approve ||
+      (house.exists &&
+        (request.status === "pending" ||
+          saved.data()?.resolvedByGlobalApproval === true))
+        ? ("accepted" as const)
+        : ("declined" as const);
     if (request.status !== "pending") {
       if (request.status === status) return { status };
       throw new HttpsError(
@@ -603,10 +773,16 @@ export async function respondHouseWord(
         "This request has already received a different answer.",
       );
     }
-    const houseRef = db.doc(`pairs/family/houseWords/${request.word}`);
-    const house = approve ? await tx.get(houseRef) : null;
     const at = Date.now();
-    tx.update(ref, { status, respondedBy: slot, respondedAt: at });
+    tx.update(ref, {
+      status,
+      respondedBy: slot,
+      respondedAt: at,
+      ...(house.exists ? { resolvedByGlobalApproval: true } : {}),
+    });
+    tx.update(pair.ref, {
+      [`actionNeededBy.word-${requestId}`]: FieldValue.delete(),
+    });
     if (approve && !house?.exists) {
       const accepted: HouseWord = {
         word: request.word,
@@ -614,7 +790,14 @@ export async function respondHouseWord(
         approvedBy: slot,
         approvedAt: at,
       };
-      tx.create(houseRef, accepted);
+      tx.create(houseRef, {
+        ...accepted,
+        pairId,
+        requestedByPlayerId:
+          pair.data()?.seatPlayers?.[request.requestedBy] ??
+          request.requestedBy,
+        approvedByPlayerId: pair.data()?.seatPlayers?.[slot] ?? slot,
+      });
     }
     return { status };
   });
@@ -627,7 +810,8 @@ export async function requestGameRestart(
 ): Promise<{ id: string }> {
   const uid = uidRequired(uidInput);
   const d = object(data);
-  onlyKeys(d, ["id", "gameId", "winCondition", "durationMinutes"]);
+  const pairId = requestedPair(d);
+  onlyKeys(d, ["pairId", "id", "gameId", "winCondition", "durationMinutes"]);
   if (!validId(d.id) || d.id.length < 8 || !validId(d.gameId))
     throw new HttpsError(
       "invalid-argument",
@@ -662,10 +846,11 @@ export async function requestGameRestart(
       ? ((d.durationMinutes ?? 25) as number)
       : undefined;
   return db.runTransaction(async (tx) => {
-    const { slot, pair } = await requireMember(tx, uid);
-    const pairRef = db.doc("pairs/family");
-    const ref = db.doc(`pairs/family/gameRequests/${id}`);
+    const { slot, pair } = await requireMember(tx, uid, pairId);
+    const pairRef = db.doc(`pairs/${pairId}`);
+    const ref = db.doc(`pairs/${pairId}/gameRequests/${id}`);
     const [saved, current] = await tx.getAll(ref, db.doc(`games/${gameId}`));
+    assertGamePair(current.data(), pairId);
     if (saved.exists) {
       const previous = saved.data() as NewGameRequest;
       if (
@@ -694,7 +879,7 @@ export async function requestGameRestart(
     const pendingId = pair.data()?.pendingNewGameRequestId;
     if (typeof pendingId === "string") {
       const pending = await tx.get(
-        db.doc(`pairs/family/gameRequests/${pendingId}`),
+        db.doc(`pairs/${pairId}/gameRequests/${pendingId}`),
       );
       const existing = pending.data() as NewGameRequest | undefined;
       if (existing?.status === "pending" && existing.gameId === gameId)
@@ -710,7 +895,10 @@ export async function requestGameRestart(
       ...(winCondition === "timed" ? { durationMinutes } : {}),
     };
     tx.create(ref, request);
-    tx.update(pairRef, { pendingNewGameRequestId: id });
+    tx.update(pairRef, {
+      pendingNewGameRequestId: id,
+      "actionNeededBy.newGame": opponentId(pair, slot),
+    });
     return { id };
   });
 }
@@ -722,7 +910,8 @@ export async function respondGameRestart(
 ): Promise<NewGameResponse> {
   const uid = uidRequired(uidInput);
   const d = object(data);
-  onlyKeys(d, ["requestId", "approve"]);
+  const pairId = requestedPair(d);
+  onlyKeys(d, ["pairId", "gameId", "requestId", "approve"]);
   if (
     !validId(d.requestId) ||
     d.requestId.length < 8 ||
@@ -735,9 +924,9 @@ export async function respondGameRestart(
   const { requestId, approve } = d;
   const newGameId = randomUUID();
   return db.runTransaction(async (tx) => {
-    const { slot, pair } = await requireMember(tx, uid);
-    const pairRef = db.doc("pairs/family");
-    const ref = db.doc(`pairs/family/gameRequests/${requestId}`);
+    const { slot, pair } = await requireMember(tx, uid, pairId);
+    const pairRef = db.doc(`pairs/${pairId}`);
+    const ref = db.doc(`pairs/${pairId}/gameRequests/${requestId}`);
     const saved = await tx.get(ref);
     if (!saved.exists)
       throw new HttpsError(
@@ -745,6 +934,11 @@ export async function respondGameRestart(
         "This new game request no longer exists.",
       );
     const request = saved.data() as NewGameRequest;
+    if (d.gameId !== undefined && d.gameId !== request.gameId)
+      throw new HttpsError(
+        "failed-precondition",
+        "This request belongs to another game.",
+      );
     if (
       request.id !== requestId ||
       !slots.includes(request.requestedBy) ||
@@ -754,6 +948,10 @@ export async function respondGameRestart(
         "internal",
         "The saved new game request is incomplete. Please contact the administrator.",
       );
+    assertGamePair(
+      (await tx.get(db.doc(`games/${request.gameId}`))).data(),
+      pairId,
+    );
     if (request.requestedBy === slot)
       throw new HttpsError(
         "permission-denied",
@@ -781,6 +979,7 @@ export async function respondGameRestart(
       );
     const oldRef = db.doc(`games/${request.gameId}`);
     const old = await tx.get(oldRef);
+    assertGamePair(old.data(), pairId);
     if (!old.exists || !["active", "finished"].includes(old.data()?.status))
       throw new HttpsError(
         "failed-precondition",
@@ -808,7 +1007,10 @@ export async function respondGameRestart(
       ...(approve ? { newGameId } : {}),
     });
     if (!approve) {
-      tx.update(pairRef, { pendingNewGameRequestId: null });
+      tx.update(pairRef, {
+        pendingNewGameRequestId: null,
+        "actionNeededBy.newGame": FieldValue.delete(),
+      });
       return { status };
     }
     const winCondition = request.winCondition ?? "classic";
@@ -826,7 +1028,7 @@ export async function respondGameRestart(
       request.durationMinutes ?? 25,
       at,
     );
-    writeGame(tx, next);
+    writeGame(tx, next, pairId);
     // Preserve the old board, scores, private tiles and receipts as history.
     // This is an agreed replacement, not a scored win or a rack deduction.
     tx.update(oldRef, {
@@ -847,6 +1049,8 @@ export async function respondGameRestart(
     tx.update(pairRef, {
       activeGameId: newGameId,
       pendingNewGameRequestId: null,
+      pendingEndGameRequestId: null,
+      actionNeededBy: {},
     });
     return { status, newGameId };
   });
@@ -859,7 +1063,8 @@ export async function requestGameEnd(
 ): Promise<{ id: string }> {
   const uid = uidRequired(uidInput);
   const d = object(data);
-  onlyKeys(d, ["id", "gameId", "expectedRevision"]);
+  const pairId = requestedPair(d);
+  onlyKeys(d, ["pairId", "id", "gameId", "expectedRevision"]);
   if (
     !validId(d.id) ||
     d.id.length < 8 ||
@@ -874,16 +1079,17 @@ export async function requestGameEnd(
   const { id, gameId } = d;
   const expectedRevision = d.expectedRevision as number;
   return db.runTransaction(async (tx) => {
-    const { slot, pair } = await requireMember(tx, uid);
-    const pairRef = db.doc("pairs/family");
-    const ref = db.doc(`pairs/family/endGameRequests/${id}`);
-    const retryRef = db.doc(`endGameRequestReceipts/${id}`);
+    const { slot, pair } = await requireMember(tx, uid, pairId);
+    const pairRef = db.doc(`pairs/${pairId}`);
+    const ref = db.doc(`pairs/${pairId}/endGameRequests/${id}`);
+    const retryRef = db.doc(`pairs/${pairId}/endGameRequestReceipts/${id}`);
     const [saved, current, secret, retry] = await tx.getAll(
       ref,
       db.doc(`games/${gameId}`),
       db.doc(`games/${gameId}/private/state`),
       retryRef,
     );
+    assertGamePair(current.data(), pairId);
     // A simultaneous proposal can be coalesced into someone else's pending
     // UUID. Preserve that result even if its response was lost until after
     // the opponent declined, played another turn, or replaced the table.
@@ -943,7 +1149,7 @@ export async function requestGameEnd(
     const pendingId = pair.data()?.pendingEndGameRequestId;
     if (typeof pendingId === "string") {
       const pending = (
-        await tx.get(db.doc(`pairs/family/endGameRequests/${pendingId}`))
+        await tx.get(db.doc(`pairs/${pairId}/endGameRequests/${pendingId}`))
       ).data() as EndGameRequest | undefined;
       if (
         pending?.status === "pending" &&
@@ -968,7 +1174,10 @@ export async function requestGameEnd(
       requestedAt: Date.now(),
     };
     tx.create(ref, request);
-    tx.update(pairRef, { pendingEndGameRequestId: id });
+    tx.update(pairRef, {
+      pendingEndGameRequestId: id,
+      "actionNeededBy.endGame": opponentId(pair, slot),
+    });
     return { id };
   });
 }
@@ -979,7 +1188,8 @@ export async function respondGameEnd(
 ): Promise<EndGameResponse> {
   const uid = uidRequired(uidInput);
   const d = object(data);
-  onlyKeys(d, ["requestId", "approve"]);
+  const pairId = requestedPair(d);
+  onlyKeys(d, ["pairId", "gameId", "requestId", "approve"]);
   if (
     !validId(d.requestId) ||
     d.requestId.length < 8 ||
@@ -991,9 +1201,9 @@ export async function respondGameEnd(
     );
   const { requestId, approve } = d;
   return db.runTransaction(async (tx) => {
-    const { slot, pair } = await requireMember(tx, uid);
-    const ref = db.doc(`pairs/family/endGameRequests/${requestId}`);
-    const pairRef = db.doc("pairs/family");
+    const { slot, pair } = await requireMember(tx, uid, pairId);
+    const ref = db.doc(`pairs/${pairId}/endGameRequests/${requestId}`);
+    const pairRef = db.doc(`pairs/${pairId}`);
     const saved = await tx.get(ref);
     if (!saved.exists)
       throw new HttpsError(
@@ -1001,6 +1211,11 @@ export async function respondGameEnd(
         "This end-game request no longer exists.",
       );
     const request = saved.data() as EndGameRequest;
+    if (d.gameId !== undefined && d.gameId !== request.gameId)
+      throw new HttpsError(
+        "failed-precondition",
+        "This request belongs to another game.",
+      );
     if (
       request.id !== requestId ||
       !slots.includes(request.requestedBy) ||
@@ -1011,6 +1226,10 @@ export async function respondGameEnd(
         "internal",
         "The saved end-game request is incomplete.",
       );
+    assertGamePair(
+      (await tx.get(db.doc(`games/${request.gameId}`))).data(),
+      pairId,
+    );
     if (request.requestedBy === slot)
       throw new HttpsError(
         "permission-denied",
@@ -1031,6 +1250,7 @@ export async function respondGameEnd(
     }
     const gameRef = db.doc(`games/${request.gameId}`);
     const game = await tx.get(gameRef);
+    assertGamePair(game.data(), pairId);
     if (
       pair.data()?.activeGameId !== request.gameId ||
       pair.data()?.pendingEndGameRequestId !== requestId ||
@@ -1099,8 +1319,14 @@ export async function respondGameEnd(
       respondedAt: at,
       ...(approve ? { finishedRevision: revision } : {}),
     });
-    tx.update(pairRef, { pendingEndGameRequestId: null });
-    if (fields) tx.update(gameRef, fields);
+    tx.update(pairRef, {
+      pendingEndGameRequestId: null,
+      "actionNeededBy.endGame": FieldValue.delete(),
+    });
+    if (fields) {
+      tx.update(gameRef, fields);
+      updateSummary(tx, { ...game.data(), ...fields }, pairId);
+    }
     return { status, gameId: request.gameId, revision };
   });
 }
@@ -1188,6 +1414,7 @@ async function finishLateSubmission(
   if (timerExpired(game, now)) {
     const fields = await timerFinishFields(tx, ref, game, now);
     tx.update(ref, fields);
+    updateSummary(tx, { ...game, ...fields });
     return { expired: true, gameId: ref.id, revision: fields.revision };
   }
   if (
@@ -1207,14 +1434,16 @@ export async function finishGameTimer(
 ): Promise<TimedGameResult> {
   const uid = uidRequired(uidInput);
   const d = object(data);
-  onlyKeys(d, ["gameId"]);
+  const pairId = requestedPair(d);
+  onlyKeys(d, ["pairId", "gameId"]);
   if (!validId(d.gameId))
     throw new HttpsError("invalid-argument", "Choose the current timed game.");
   const gameId = d.gameId;
   return db.runTransaction(async (tx) => {
-    const { pair } = await requireMember(tx, uid);
+    const { pair } = await requireMember(tx, uid, pairId);
     const ref = db.doc(`games/${gameId}`);
     const saved = await tx.get(ref);
+    assertGamePair(saved.data(), pairId);
     if (!saved.exists)
       throw new HttpsError("not-found", "This timed game no longer exists.");
     const game = saved.data()!;
@@ -1235,6 +1464,7 @@ export async function finishGameTimer(
       return { gameId, revision: game.revision, status: "active", serverNow };
     const fields = await timerFinishFields(tx, ref, game, serverNow);
     tx.update(ref, fields);
+    updateSummary(tx, { ...game, ...fields });
     return { gameId, revision: fields.revision, status: "finished", serverNow };
   });
 }
@@ -1244,6 +1474,7 @@ export async function submit(
   data: unknown,
 ): Promise<CommandResult> {
   const uid = uidRequired(uidInput);
+  const pairId = requestedPair(object(data));
   const command = validateCommand(data);
   const payloadHash = hash(JSON.stringify(command));
   const newGameId = randomUUID();
@@ -1256,27 +1487,12 @@ export async function submit(
       async (tx) => {
         transactionAttempts++;
         replayed = false;
-        const binding = await tx.get(db.doc(`bindings/${uid}`));
-        const slot = binding.data()?.slot as Slot;
+        const { slot, pair } = await requireMember(tx, uid, pairId);
         diagnosticSlot = slot;
-        if (!slots.includes(slot))
-          throw new HttpsError(
-            "permission-denied",
-            "This device is not connected to a player.",
-          );
         const gameRef = db.doc(`games/${command.gameId}`);
         const resultRef = gameRef.collection("commands").doc(command.id);
-        const [player, pair, saved, recorded] = await tx.getAll(
-          db.doc(`players/${slot}`),
-          db.doc("pairs/family"),
-          gameRef,
-          resultRef,
-        );
-        if (!currentBinding(binding.data(), player.data(), uid))
-          throw new HttpsError(
-            "permission-denied",
-            "This device has been replaced. Please use a new setup code.",
-          );
+        const [saved, recorded] = await tx.getAll(gameRef, resultRef);
+        assertGamePair(saved.data(), pairId);
         // This check deliberately precedes revision, active-game and turn validation.
         if (recorded.exists) {
           replayed = true;
@@ -1304,7 +1520,9 @@ export async function submit(
         const endRequestId = pair.data()?.pendingEndGameRequestId;
         if (typeof endRequestId === "string") {
           const endRequest = (
-            await tx.get(db.doc(`pairs/family/endGameRequests/${endRequestId}`))
+            await tx.get(
+              db.doc(`pairs/${pairId}/endGameRequests/${endRequestId}`),
+            )
           ).data() as EndGameRequest | undefined;
           if (
             saved.data()!.status === "active" &&
@@ -1375,7 +1593,7 @@ export async function submit(
             ...new Set(formed.filter((word) => !dictionary.has(word))),
           ];
           const house = await tx.getAll(
-            ...missing.map((word) => db.doc(`pairs/family/houseWords/${word}`)),
+            ...missing.map((word) => db.doc(`houseWords/${word}`)),
           );
           serverNow = Date.now();
           const expiredAfterDictionary = await finishLateSubmission(
@@ -1439,11 +1657,13 @@ export async function submit(
           revision: next.revision,
           score: command.kind === "play" ? (next.lastMove?.score ?? 0) : 0,
         };
-        writeGameChanges(tx, game, next);
+        writeGameChanges(tx, game, next, pairId);
         if (command.kind === "rematch")
           tx.update(pair.ref, {
             activeGameId: next.id,
             pendingNewGameRequestId: null,
+            pendingEndGameRequestId: null,
+            actionNeededBy: {},
           });
         tx.create(resultRef, { uid, payloadHash, result });
         return result;
@@ -1499,13 +1719,19 @@ export async function receiveMoveDiagnostics(
   if (!diagnosticsEnabled())
     return { enabled: false, serverNow: Date.now(), accepted: false };
   const data = object(input);
-  onlyKeys(data, data.action === "clock" ? ["action"] : ["action", "report"]);
+  const pairId = requestedPair(data);
+  onlyKeys(
+    data,
+    data.action === "clock"
+      ? ["action", "pairId"]
+      : ["action", "report", "pairId"],
+  );
   if (data.action !== "clock" && data.action !== "report")
     throw new HttpsError("invalid-argument", "Invalid diagnostic action.");
   const report =
     data.action === "report" ? validateDiagnosticReport(data.report) : null;
   const result = await db.runTransaction(async (tx) => {
-    const { slot } = await requireMember(tx, uid);
+    const { slot, pair } = await requireMember(tx, uid, pairId);
     if (!report) return { slot, accepted: false };
     const day = new Date().toISOString().slice(0, 10);
     const limitRef = db.doc(`diagnosticLimits/${hash(uid)}`);
@@ -1513,6 +1739,7 @@ export async function receiveMoveDiagnostics(
       limitRef,
       db.doc(`games/${report.gameId}`),
     );
+    assertGamePair(saved.data(), pairId);
     if (!saved.exists)
       throw new HttpsError("not-found", "Unknown diagnostic game.");
     const ids: string[] =

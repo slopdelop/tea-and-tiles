@@ -12,6 +12,7 @@ import { createHash, randomBytes, randomUUID, randomInt } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { SETUP_WORDS, WORD_FAILURE_BUCKET } from "../functions/setup-words";
 import { createCredential } from "../functions/player-login";
+import { multiplayerBackendTests } from "./backend-multiplayer";
 import {
   initializeTestEnvironment,
   assertFails,
@@ -231,6 +232,23 @@ describe.skipIf(!enabled)(
       await env?.cleanup();
     });
 
+    multiplayerBackendTests(
+      () => env,
+      () => ({
+        login,
+        submit,
+        publicGame,
+        requestHouseWord,
+        respondHouseWord,
+        requestGameRestart,
+        respondGameRestart,
+        requestGameEnd,
+        respondGameEnd,
+        finishGameTimer,
+        receiveMoveDiagnostics,
+      }),
+    );
+
     it("authorizes diagnostic clocks without writes and keeps diagnostic budgets private", async () => {
       const db = getFirestore();
       const before = (await db.doc(`games/${game.id}`).get()).data();
@@ -325,7 +343,7 @@ describe.skipIf(!enabled)(
             playerId: "mom",
             passphrase: "MAPLE-APPLE-RIVER-7kq2",
           }),
-        ).toEqual({ slot: "mom" });
+        ).toEqual({ playerId: "mom", slot: "mom" });
       expect((await db.doc("players/mom").get()).data()?.uid).toBe(uids.mom);
       for (const uid of [uids.mom, "mom-ipad", "mom-iphone"]) {
         const client = env.authenticatedContext(uid).firestore();
@@ -426,7 +444,7 @@ describe.skipIf(!enabled)(
           playerId: "mom",
           passphrase: "000123",
         }),
-      ).toEqual({ slot: "mom" });
+      ).toEqual({ playerId: "mom", slot: "mom" });
       await db
         .doc("loginAttempts/mom")
         .set({ windowStart: Date.now(), count: 10 });
@@ -435,8 +453,95 @@ describe.skipIf(!enabled)(
           playerId: "mom",
           passphrase: "000123",
         }),
-      ).toEqual({ slot: "mom" });
+      ).toEqual({ playerId: "mom", slot: "mom" });
     }, 15000);
+    it("bounds unknown-name guesses across fresh names and UIDs without throttling known accounts", async () => {
+      const db = getFirestore();
+      await db
+        .doc("playerCredentials/mom")
+        .set({ ...(await createCredential("123456")), enabled: true });
+      for (let index = 0; index < 10; index++) {
+        await expect(
+          login(`unknown-name-device-${index}`, {
+            playerId: `Nobody ${index}`,
+            passphrase: "123456",
+          }),
+        ).rejects.toMatchObject({ code: "permission-denied" });
+      }
+      await expect(
+        login("unknown-name-eleventh-device", {
+          playerId: "Another unknown name",
+          passphrase: "123456",
+        }),
+      ).rejects.toMatchObject({
+        code: "resource-exhausted",
+        details: { rule: "rate-limit", retryAfterSeconds: expect.any(Number) },
+      });
+      const attempts = await db.collection("loginAttempts").get();
+      expect(attempts.docs.map((record) => record.id)).toEqual([
+        "!unknown-names",
+      ]);
+      expect(attempts.docs[0].data().count).toBe(10);
+      expect((await db.collection("enrollmentAttempts").get()).size).toBe(10);
+      await expect(
+        login("known-id-after-unknown-flood", {
+          playerId: "mom",
+          passphrase: "123456",
+        }),
+      ).resolves.toEqual({ playerId: "mom", slot: "mom" });
+      await expect(
+        login("known-name-after-unknown-flood", {
+          playerId: "Elizabeth",
+          passphrase: "123456",
+        }),
+      ).resolves.toEqual({ playerId: "mom", slot: "mom" });
+      expect(
+        (await db.collection("loginAttempts").get()).docs.map(
+          (record) => record.id,
+        ),
+      ).toEqual(["!unknown-names"]);
+    }, 15000);
+
+    it("cannot authenticate an unresolved name through a seeded internal sentinel profile or binding", async () => {
+      const db = getFirestore();
+      await db
+        .doc("players/!unresolved")
+        .set({ uid: "sentinel-device", sessionVersion: 0 });
+      await db
+        .doc("playerCredentials/!unresolved")
+        .set({ ...(await createCredential("123456")), enabled: true });
+      await expect(
+        login("fresh-sentinel-device", {
+          playerId: "No such person",
+          passphrase: "123456",
+        }),
+      ).rejects.toMatchObject({ code: "permission-denied" });
+      expect(
+        (await db.doc("bindings/fresh-sentinel-device").get()).exists,
+      ).toBe(false);
+      await db
+        .doc("bindings/sentinel-device")
+        .set({ playerId: "!unresolved", sessionVersion: 0 });
+      await db
+        .doc("loginAttempts/!unknown-names")
+        .set({ windowStart: Date.now(), count: 10 });
+      await expect(
+        login("sentinel-device", {
+          playerId: "Another missing person",
+          passphrase: "123456",
+        }),
+      ).rejects.toMatchObject({ code: "resource-exhausted" });
+      await expect(
+        login("direct-sentinel-device", {
+          playerId: "!unresolved",
+          passphrase: "123456",
+        }),
+      ).rejects.toMatchObject({ code: "resource-exhausted" });
+      expect(
+        (await db.doc("bindings/direct-sentinel-device").get()).exists,
+      ).toBe(false);
+    });
+
     it("keeps reusable sessions connected when a one-use invitation replaces the legacy device", async () => {
       const db = getFirestore();
       await db.doc("playerCredentials/mom").set({
@@ -557,7 +662,7 @@ describe.skipIf(!enabled)(
       for (const uid of ["pin-ipad", "pin-phone"])
         expect(
           await login(uid, { playerId: "mom", passphrase: " 000123 " }),
-        ).toEqual({ slot: "mom" });
+        ).toEqual({ playerId: "mom", slot: "mom" });
       expect((await db.doc(`bindings/${uids.mom}`).get()).data()).toEqual({
         slot: "mom",
       });
@@ -650,8 +755,9 @@ describe.skipIf(!enabled)(
         expect(link.origin + link.pathname).toBe("https://example.test/tea/");
         expect(link.search).toBe("");
         expect(new URLSearchParams(link.hash.slice(1)).get("player")).toBe(
-          name,
+          slot,
         );
+        expect(new URLSearchParams(link.hash.slice(1)).get("name")).toBe(name);
         expect(new URLSearchParams(link.hash.slice(1)).get("code")).toBe(
           secret,
         );
@@ -674,7 +780,7 @@ describe.skipIf(!enabled)(
             playerId: slot,
             passphrase: secret,
           }),
-        ).toEqual({ slot });
+        ).toEqual({ playerId: slot, slot });
       }
       for (const record of beforeBindings)
         expect((await db.doc(`bindings/${record.id}`).get()).data()).toEqual(
@@ -983,8 +1089,14 @@ describe.skipIf(!enabled)(
     });
     it("redeems single-use expiring credentials and revokes a replaced device", async () => {
       const code = await codeFor("mom");
-      expect(await enroll("replacement", { code })).toEqual({ slot: "mom" });
-      expect(await enroll("replacement", { code })).toEqual({ slot: "mom" });
+      expect(await enroll("replacement", { code })).toEqual({
+        playerId: "mom",
+        slot: "mom",
+      });
+      expect(await enroll("replacement", { code })).toEqual({
+        playerId: "mom",
+        slot: "mom",
+      });
       await expect(enroll("third-device", { code })).rejects.toMatchObject({
         code: "permission-denied",
       });
@@ -1005,8 +1117,9 @@ describe.skipIf(!enabled)(
       expect((await record.get()).data()).not.toHaveProperty("code");
       expect(
         await enroll("short-code-device", { code: "  abcd - 2345  " }),
-      ).toEqual({ slot: "mom" });
+      ).toEqual({ playerId: "mom", slot: "mom" });
       expect(await enroll("short-code-device", { code: "ABCD-2345" })).toEqual({
+        playerId: "mom",
         slot: "mom",
       });
       expect((await record.get()).data()?.consumedUid).toBe(
@@ -1043,9 +1156,11 @@ describe.skipIf(!enabled)(
         .match(/.{1,4}/g)!
         .join("-");
       expect(await enroll("legacy-device", { code: grouped })).toEqual({
+        playerId: "aunt",
         slot: "aunt",
       });
       expect(await enroll("legacy-device", { code: legacy })).toEqual({
+        playerId: "aunt",
         slot: "aunt",
       });
       await expect(
@@ -1066,9 +1181,11 @@ describe.skipIf(!enabled)(
       ).data();
       await codeFor("mom", {}, "MAPLE");
       expect(await enroll("word-device", { code: "  ma p-le " })).toEqual({
+        playerId: "mom",
         slot: "mom",
       });
       expect(await enroll("word-device", { code: "maple" })).toEqual({
+        playerId: "mom",
         slot: "mom",
       });
       await expect(
@@ -1107,6 +1224,7 @@ describe.skipIf(!enabled)(
       );
       await attempt.set({ windowStart: Date.now(), count: 10 });
       expect(await enroll("accepted-word-device", { code: "maple" })).toEqual({
+        playerId: "mom",
         slot: "mom",
       });
       expect(
@@ -1116,6 +1234,7 @@ describe.skipIf(!enabled)(
         .doc(WORD_FAILURE_BUCKET)
         .set({ windowStart: Date.now() - 3600001, count: 10 });
       expect(await enroll("new-valid-word-device", { code: "peach" })).toEqual({
+        playerId: "aunt",
         slot: "aunt",
       });
     });
@@ -1166,6 +1285,7 @@ describe.skipIf(!enabled)(
       });
       await uidBucket.set({ windowStart: Date.now() - 3600001, count: 10 });
       expect(await enroll("throttled-device", { code: "maple" })).toEqual({
+        playerId: "mom",
         slot: "mom",
       });
     });
@@ -1254,6 +1374,7 @@ describe.skipIf(!enabled)(
       expect(auntWord).not.toBe(momWord);
       expect(auntOutput).toContain(`#setup=${auntWord}`);
       expect(await enroll("new-admin-word-device", { code: momWord })).toEqual({
+        playerId: "mom",
         slot: "mom",
       });
     }, 20000);
@@ -1570,7 +1691,7 @@ describe.skipIf(!enabled)(
       });
       expect(updated.history[0]).not.toHaveProperty("placements");
     });
-    it("declines a word without reading or changing its house-dictionary entry", async () => {
+    it("checks global approval before declining a word without changing its house-dictionary entry", async () => {
       const db = getFirestore();
       const request = await requestHouseWord(uids.mom, { word: "MW" });
       const { result, paths } = await captureTransactionReads(() =>
@@ -1580,11 +1701,11 @@ describe.skipIf(!enabled)(
         }),
       );
       expect(result).toEqual({ status: "declined" });
-      expect(paths).not.toContain("pairs/family/houseWords/MW");
-      expect(paths).toHaveLength(4);
-      expect((await db.doc("pairs/family/houseWords/MW").get()).exists).toBe(
-        false,
-      );
+      expect(paths).toContain("houseWords/MW");
+      // Binding, profile, pair, request, exact request-game ownership and global approval.
+      expect(paths).toHaveLength(6);
+      expect(paths).toContain(`games/${game.id}`);
+      expect((await db.doc("houseWords/MW").get()).exists).toBe(false);
       expect(
         await respondCurrentHouseWord(uids.aunt, {
           requestId: request.id,
@@ -1728,9 +1849,7 @@ describe.skipIf(!enabled)(
       await expect(
         respondCurrentHouseWord(uids.aunt, { requestId: id, approve: true }),
       ).rejects.toMatchObject({ code: "failed-precondition" });
-      expect((await db.doc("pairs/family/houseWords/MW").get()).exists).toBe(
-        false,
-      );
+      expect((await db.doc("houseWords/MW").get()).exists).toBe(false);
       expect(await requestHouseWord(uids.mom, { word: "mw" })).toEqual({ id });
       const pending = (
         await db.doc(`pairs/family/wordRequests/${id}`).get()
@@ -1743,9 +1862,7 @@ describe.skipIf(!enabled)(
         respondCurrentHouseWord(uids.aunt, { requestId: id, approve: true }),
       ]);
       expect(answers).toEqual([{ status: "accepted" }, { status: "accepted" }]);
-      const accepted = (
-        await db.doc("pairs/family/houseWords/MW").get()
-      ).data();
+      const accepted = (await db.doc("houseWords/MW").get()).data();
       expect(accepted).toMatchObject({
         word: "MW",
         requestedBy: "mom",
@@ -1758,9 +1875,7 @@ describe.skipIf(!enabled)(
           approve: true,
         }),
       ).toEqual({ status: "accepted" });
-      expect((await db.doc("pairs/family/houseWords/MW").get()).data()).toEqual(
-        accepted,
-      );
+      expect((await db.doc("houseWords/MW").get()).data()).toEqual(accepted);
       await expect(
         respondCurrentHouseWord(uids.aunt, { requestId: id, approve: false }),
       ).rejects.toMatchObject({ code: "failed-precondition" });
@@ -1830,7 +1945,7 @@ describe.skipIf(!enabled)(
         );
       const rematch = await submit(uids.aunt, command("rematch", 6));
       expect(
-        (await getFirestore().doc("pairs/family/houseWords/MW").get()).data(),
+        (await getFirestore().doc("houseWords/MW").get()).data(),
       ).toMatchObject({ word: "MW", requestedBy: "mom", approvedBy: "aunt" });
       game = createGame(rematch.gameId, () => 0.5);
       await prepareHouseWordRack("MW");
@@ -1846,15 +1961,13 @@ describe.skipIf(!enabled)(
       const aunt = env.authenticatedContext(uids.aunt).firestore();
       const stranger = env.authenticatedContext("stranger").firestore();
       for (const client of [mom, aunt]) {
-        await assertSucceeds(
-          getDocs(collection(client, "pairs/family/houseWords")),
-        );
+        await assertSucceeds(getDocs(collection(client, "houseWords")));
         await assertSucceeds(
           getDocs(collection(client, "pairs/family/wordRequests")),
         );
-        await assertSucceeds(getDoc(doc(client, "pairs/family/houseWords/MW")));
+        await assertSucceeds(getDoc(doc(client, "houseWords/MW")));
         await assertFails(
-          setDoc(doc(client, "pairs/family/houseWords/ZZ"), {
+          setDoc(doc(client, "houseWords/ZZ"), {
             word: "ZZ",
             requestedBy: "mom",
             approvedBy: "aunt",
@@ -1869,14 +1982,12 @@ describe.skipIf(!enabled)(
           ),
         );
       }
-      await assertFails(
-        getDocs(collection(stranger, "pairs/family/houseWords")),
-      );
+      await assertFails(getDocs(collection(stranger, "houseWords")));
       await assertFails(
         getDoc(doc(stranger, "pairs/family/wordRequests/mom-MW")),
       );
       await getFirestore().doc("players/mom").set({ uid: "replacement-mom" });
-      await assertFails(getDocs(collection(mom, "pairs/family/houseWords")));
+      await assertFails(getDocs(collection(mom, "houseWords")));
       await assertFails(getDoc(doc(mom, "pairs/family/wordRequests/mom-MW")));
       await expect(
         requestHouseWord(uids.mom, { word: "QMX" }),
@@ -2050,9 +2161,7 @@ describe.skipIf(!enabled)(
           ),
         ).size,
       ).toBe(100);
-      expect((await db.doc("pairs/family/houseWords/MW").get()).exists).toBe(
-        true,
-      );
+      expect((await db.doc("houseWords/MW").get()).exists).toBe(true);
       expect(await respondGameRestart(uids.aunt, answer)).toEqual(first);
       expect(
         (await db.doc(`games/${first.newGameId}`).get()).data()?.turn,

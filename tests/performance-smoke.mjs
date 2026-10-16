@@ -6,6 +6,14 @@ import { chromium } from "@playwright/test";
 // Real React/Motion components, in-memory sessions and fake Firestore only.
 // No server, enrollment, emulator reset or production request is required.
 const fixture = {
+  playerId: "mom",
+  displayName: "Elizabeth",
+  pairId: "family",
+  contextKey: "performance:mom:family",
+  pairs: [],
+  canLeaveTable: true,
+  selectPair() {},
+  signOut: async () => {},
   slot: "mom",
   names: { mom: "Elizabeth", aunt: "Rita" },
   connected: true,
@@ -134,6 +142,14 @@ const appBuild = await bundle(
               "export default function App() {",
               "export default function App() { window.auditStats.appRenders++;",
             );
+          assert(
+            contents.includes("  const [welcomeDefaults] = useState"),
+            "Table render instrumentation marker changed",
+          );
+          contents = contents.replace(
+            "  const [welcomeDefaults] = useState",
+            "  window.auditStats.appRenders++;\n  const [welcomeDefaults] = useState",
+          );
           contents += `\nfunction previewMove(...args){window.auditStats.previewCalls++;return actualPreviewMove(...args)}`;
           return {
             contents,

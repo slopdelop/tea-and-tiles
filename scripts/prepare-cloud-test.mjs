@@ -9,14 +9,22 @@ import {
 import { resolve, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
+  cloudSourceSelection,
+  prepareCandidateSource,
+  releaseRevision,
+} from "./cloud-test-source.mjs";
+import {
   assertCloudTestTarget,
   cloudTest,
   cloudTestAccess,
 } from "./cloud-test-project.mjs";
 
 assertCloudTestTarget();
-const release = "d71f3869388604acf2ec68c00e972490bbd3e70c";
-const root = resolve(".tools/cloud-test-release");
+const selected = cloudSourceSelection();
+const candidate =
+  selected.mode === "candidate" ? prepareCandidateSource() : null;
+const release = candidate?.revision || releaseRevision;
+const root = selected.root;
 const stamp = resolve(root, "cloud-test-source.json");
 if (existsSync(root)) {
   if (
@@ -75,6 +83,16 @@ const archivedTests = resolve(root, "tests");
 if (dirname(archivedTests) !== root)
   throw new Error("Unexpected archived test path.");
 if (existsSync(archivedTests)) rmSync(archivedTests, { recursive: true });
+if (process.argv.includes("--source-only")) {
+  console.log(
+    JSON.stringify({
+      projectId: cloudTest.projectId,
+      release,
+      sourceDirectory: root,
+    }),
+  );
+  process.exit(0);
+}
 const { request } = await cloudTestAccess();
 const service = `https://serviceusage.googleapis.com/v1/projects/${cloudTest.projectNumber}/services/firebaseappcheck.googleapis.com`;
 if ((await request(service)).state !== "ENABLED") {

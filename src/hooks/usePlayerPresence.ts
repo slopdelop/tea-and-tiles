@@ -27,6 +27,7 @@ export function usePlayerPresence(
   enabled: boolean,
   connected: boolean,
   gameStartedAt?: number,
+  pairId: string | null = "family",
 ) {
   const [status, setStatus] = useState(UNKNOWN_PRESENCE);
   const publishedStatus = useRef(status);
@@ -42,8 +43,10 @@ export function usePlayerPresence(
       publishedStatus.current = UNKNOWN_PRESENCE;
       setStatus(UNKNOWN_PRESENCE);
     }
-    if (!uid || !slot || !enabled || !connected) return;
-    const storageKey = `tea-presence:${db.app.options.projectId}:${uid}`;
+    if (!uid || !slot || !pairId || !enabled || !connected) return;
+    inFlight.current = false;
+    pendingOwnWrite.current = false;
+    const storageKey = `tea-presence:${db.app.options.projectId}:${uid}:${pairId}`;
     try {
       lastAttempt.current = Number(localStorage.getItem(storageKey)) || 0;
     } catch {
@@ -74,9 +77,10 @@ export function usePlayerPresence(
         );
     };
     const stop = onSnapshot(
-      collection(db, "pairs", "family", "presence"),
+      collection(db, "pairs", pairId, "presence"),
       { includeMetadataChanges: true },
       (snapshot) => {
+        if (disposed) return;
         const own = snapshot.docs.find((device) => device.id === uid);
         if (own?.metadata.hasPendingWrites) pendingOwnWrite.current = true;
         const ownSeen = own?.data().lastSeen?.toMillis?.();
@@ -158,7 +162,7 @@ export function usePlayerPresence(
         time + serverOffset.current,
         gameStart.current,
       );
-      void setDoc(doc(db, "pairs", "family", "presence", uid), {
+      void setDoc(doc(db, "pairs", pairId, "presence", uid), {
         slot,
         lastSeen: serverTimestamp(),
         onlineSince:
@@ -175,7 +179,7 @@ export function usePlayerPresence(
           /* Presence failure never blocks a game command. */
         })
         .finally(() => {
-          inFlight.current = false;
+          if (!disposed) inFlight.current = false;
         });
       return PRESENCE_HEARTBEAT_MS;
     };
@@ -204,6 +208,6 @@ export function usePlayerPresence(
       window.removeEventListener("pageshow", wake);
       window.removeEventListener("online", wake);
     };
-  }, [db, uid, slot, enabled, connected]);
+  }, [db, uid, slot, pairId, enabled, connected]);
   return connected && enabled ? status : UNKNOWN_PRESENCE;
 }

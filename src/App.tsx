@@ -61,6 +61,7 @@ import "./styles.css";
 
 type Dialog =
   | "help"
+  | "games"
   | "pass"
   | "exchange"
   | "dictionary"
@@ -78,6 +79,12 @@ type Dialog =
   | "debug-end-request"
   | null;
 type Draft = { key: string; revision: number; placements: Placement[] };
+// Session-only presentation memory prevents replaying celebrations when merely
+// revisiting a table. It is partitioned by project/account/table context.
+const announcedTurns = new Set<string>();
+const presentedResults = new Set<string>();
+const dismissedResults = new Map<string, string>();
+
 const themeChoices = [
   ["linen", "Linen & sage"],
   ["coastal", "Coastal blue"],
@@ -280,6 +287,7 @@ const invitationFromLink = new URLSearchParams(
   window.location.hash.slice(1),
 ).get("setup");
 const signInFromLink = readSignInLink(window.location.hash);
+let welcomeLinkConsumed = false;
 if (invitationFromLink !== null || signInFromLink !== null) {
   history.replaceState(
     history.state,
@@ -497,6 +505,7 @@ function Modal({
   testId,
   footer,
   dismissible = true,
+  drawer = false,
 }: {
   title: string;
   children: ReactNode;
@@ -504,6 +513,7 @@ function Modal({
   testId?: string;
   footer?: ReactNode;
   dismissible?: boolean;
+  drawer?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const titleId = useId();
@@ -549,22 +559,24 @@ function Modal({
   }, []);
   return createPortal(
     <motion.div
-      className="modal-backdrop"
+      className={`modal-backdrop ${drawer ? "drawer-backdrop" : ""}`}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
       onClick={dismissible ? close : undefined}
     >
       <motion.div
-        className="modal"
+        className={`modal ${drawer ? "games-drawer" : ""}`}
         data-testid={testId}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
         ref={ref}
-        initial={{ opacity: 0, y: 15, scale: 0.97 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
+        initial={
+          drawer ? { opacity: 0, x: 40 } : { opacity: 0, y: 15, scale: 0.97 }
+        }
+        animate={{ opacity: 1, x: 0, y: 0, scale: 1 }}
         onClick={(event) => event.stopPropagation()}
       >
         <header className="modal-header">
@@ -589,6 +601,54 @@ function Modal({
 
 export default function App() {
   const session = useGameSession();
+  const appUpdate = useAppUpdate();
+  const openedAccounts = useRef(new Set<string>());
+  const entry = useRef({ key: "", initial: false });
+  const key = `${session.playerId || "welcome"}:${session.pairId || "none"}`;
+  if (entry.current.key !== key) {
+    const initial =
+      !!session.playerId &&
+      !!session.pairId &&
+      !openedAccounts.current.has(session.playerId);
+    if (session.playerId && session.pairId)
+      openedAccounts.current.add(session.playerId);
+    entry.current = { key, initial };
+  }
+  // Reset private presentation state when leaving an account/table. The update
+  // manager stays mounted; table navigation is not a new-round boundary.
+  return (
+    <TableApp
+      key={key}
+      session={session}
+      appUpdate={appUpdate}
+      initialTableEntry={entry.current.initial}
+    />
+  );
+}
+
+function TableApp({
+  session,
+  appUpdate,
+  initialTableEntry,
+}: {
+  session: ReturnType<typeof useGameSession>;
+  appUpdate: ReturnType<typeof useAppUpdate>;
+  initialTableEntry: boolean;
+}) {
+  const [welcomeDefaults] = useState(() => {
+    const available = !welcomeLinkConsumed;
+    return {
+      invitation: available ? invitationFromLink : null,
+      name: available
+        ? signInFromLink?.displayName || signInFromLink?.player || ""
+        : "",
+      playerId: available ? signInFromLink?.player || null : null,
+      code: available ? signInFromLink?.code || "" : "",
+    };
+  });
+  useEffect(() => {
+    welcomeLinkConsumed = true;
+  }, []);
   const wordDictionary = useWordDictionary();
   const { game, rack, slot, names, connected, pending } = session;
   useLayoutEffect(() => {
@@ -604,7 +664,6 @@ export default function App() {
       cancelAnimationFrame(second);
     };
   }, [game?.id, game?.revision, session.noteMoveDisplayed]);
-  const appUpdate = useAppUpdate();
   const screenAwake = useScreenAwake(game?.status === "active" && !!slot);
   const sharedActionsPaused = session.sharedActionsPaused;
   const sharedActionMessage =
@@ -615,43 +674,60 @@ export default function App() {
   const gameContext = `${game?.id ?? ""}:${game?.status ?? ""}:${slot ?? ""}`;
   const latestGameContext = useRef(gameContext);
   latestGameContext.current = gameContext;
-  const [code, setCode] = useState((invitationFromLink || "").slice(0, 64));
+  const [code, setCode] = useState(
+    (welcomeDefaults.invitation || "").slice(0, 64),
+  );
   const [welcomeMode, setWelcomeMode] = useState<"join" | "signin">(
-    invitationFromLink ? "join" : "signin",
+    welcomeDefaults.invitation ? "join" : "signin",
   );
-  const [loginPlayer, setLoginPlayer] = useState<Slot>(
-    signInFromLink?.player || "mom",
-  );
-  const [passphrase, setPassphrase] = useState(signInFromLink?.code || "");
+  const [loginPlayer, setLoginPlayer] = useState<string>(welcomeDefaults.name);
+  const [passphrase, setPassphrase] = useState(welcomeDefaults.code);
+  const [linkPlayerId, setLinkPlayerId] = useState(welcomeDefaults.playerId);
   const [enrolling, setEnrolling] = useState(false);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [arrivingMove, setArrivingMove] = useState<string | null>(null);
   const [dialog, setDialog] = useState<Dialog>(null);
+  const [helpPage, setHelpPage] = useState<
+    "root" | "play" | "settings" | "dictionary" | "about" | "debug"
+  >("root");
+  useEffect(() => {
+    if (dialog !== "help") return;
+    const frame = requestAnimationFrame(() => {
+      const heading = document.querySelector<HTMLElement>(".modal h2");
+      if (heading) {
+        heading.tabIndex = -1;
+        heading.focus();
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [helpPage]);
   const latestDialog = useRef(dialog);
   latestDialog.current = dialog;
   const [dictionaryWords, setDictionaryWords] = useState<string[]>([]);
   const [incomingWordId, setIncomingWordId] = useState<string | null>(null);
   const promptedWordRequests = useRef(new Set<string>());
   const observedWordStatuses = useRef(new Map<string, string>());
-  const [wordFeedback, setWordFeedback] = useState<Record<string, string>>(
-    () => {
-      try {
-        const saved: unknown = JSON.parse(
-          localStorage.getItem("tea-tiles-word-feedback") || "{}",
-        );
-        return saved && typeof saved === "object" && !Array.isArray(saved)
+  const [wordFeedback, setWordFeedback] = useState<Record<string, string>>({});
+  useEffect(() => {
+    try {
+      const saved: unknown = JSON.parse(
+        localStorage.getItem(`tea-tiles-word-feedback:${session.contextKey}`) ||
+          "{}",
+      );
+      setWordFeedback(
+        saved && typeof saved === "object" && !Array.isArray(saved)
           ? Object.fromEntries(
               Object.entries(saved).filter(
                 ([, value]) => typeof value === "string",
               ),
             )
-          : {};
-      } catch {
-        return {};
-      }
-    },
-  );
+          : {},
+      );
+    } catch {
+      setWordFeedback({});
+    }
+  }, [session.contextKey]);
   const [wordBusy, setWordBusy] = useState<string | null>(null);
   const [wordError, setWordError] = useState("");
   const wordBusyRef = useRef(false);
@@ -703,6 +779,10 @@ export default function App() {
     gameId: string;
     expectedRevision: number;
   } | null>(null);
+  const houseWords = useMemo(
+    () => new Set(session.houseWords.map((entry) => entry.word)),
+    [session.houseWords],
+  );
   const currentEndRequest = session.endGameRequests.find(
     (request) =>
       game?.status === "active" &&
@@ -723,6 +803,7 @@ export default function App() {
   const incomingWordRequest = session.wordRequests.find(
     (request) =>
       request.id === incomingWordId &&
+      !houseWords.has(request.word) &&
       request.status === "pending" &&
       request.requestedBy !== slot,
   );
@@ -789,7 +870,17 @@ export default function App() {
   >(null);
   const [debugStarter, setDebugStarter] = useState<Slot | null>(null);
   const [debugUpdating, setDebugUpdating] = useState(false);
-  const [resultSeenGame, setResultSeenGame] = useState<string | null>(null);
+  const [resultSeenGame, setResultSeenGameState] = useState<string | null>(
+    () => dismissedResults.get(session.contextKey) || null,
+  );
+  const setResultSeenGame = (id: string | null) => {
+    if (id) dismissedResults.set(session.contextKey, id);
+    else dismissedResults.delete(session.contextKey);
+    setResultSeenGameState(id);
+  };
+  useEffect(() => {
+    setResultSeenGameState(dismissedResults.get(session.contextKey) || null);
+  }, [session.contextKey]);
   const [debugEnding, setDebugEnding] = useState<ReturnType<
     typeof debugEndingGame
   > | null>(null);
@@ -839,7 +930,9 @@ export default function App() {
       !!incomingEndRequest ||
       session.wordRequests.some(
         (request) =>
-          request.status === "pending" && request.requestedBy !== slot,
+          request.status === "pending" &&
+          !houseWords.has(request.word) &&
+          request.requestedBy !== slot,
       ) ||
       session.newGameRequests.some(
         (request) =>
@@ -962,7 +1055,10 @@ export default function App() {
     revision: number;
     lastMoveId?: string;
   } | null>(null);
-  const draftKey = game && slot ? `tea-tiles-draft:${game.id}:${slot}` : "";
+  const draftKey =
+    game && slot
+      ? `tea-tiles-draft:${session.contextKey}:${game.id}:${slot}`
+      : "";
   const rackOrderKey = draftKey ? `${draftKey}:rack-order` : "";
   const orderedIds = rackOrder.key === rackOrderKey ? rackOrder.ids : EMPTY_IDS;
   const placements =
@@ -1188,7 +1284,10 @@ export default function App() {
       setWordFeedback((previous) => {
         const next = { ...previous, ...additions };
         try {
-          localStorage.setItem("tea-tiles-word-feedback", JSON.stringify(next));
+          localStorage.setItem(
+            `tea-tiles-word-feedback:${session.contextKey}`,
+            JSON.stringify(next),
+          );
         } catch {
           /* Feedback is optional when local storage is unavailable. */
         }
@@ -1248,6 +1347,7 @@ export default function App() {
       .find(
         (candidate) =>
           candidate.status === "pending" &&
+          !houseWords.has(candidate.word) &&
           candidate.requestedBy !== slot &&
           !promptedWordRequests.current.has(
             `${candidate.id}:${candidate.requestedAt}`,
@@ -1514,6 +1614,9 @@ export default function App() {
     const previous = observedTurn.current;
     if (previous?.gameId === game.id && previous.turn === game.turn) return;
     observedTurn.current = { gameId: game.id, turn: game.turn };
+    const noticeKey = `${session.contextKey}:${game.id}:${game.revision}:${game.turn}`;
+    if (!previous && announcedTurns.has(noticeKey)) return;
+    announcedTurns.add(noticeKey);
     const afterPlay =
       previous?.gameId === game.id &&
       (game.lastMove?.kind === "play" || game.lastMove?.kind === "exchange");
@@ -1675,6 +1778,8 @@ export default function App() {
       return;
     }
     if (previous?.gameId === game.id && previous.status === "finished") return;
+    if (!previous && presentedResults.has(`${session.contextKey}:${game.id}`))
+      return;
     const finalPlay =
       previous?.gameId === game.id &&
       previous.lastMoveId !== game.lastMove?.id &&
@@ -1692,7 +1797,10 @@ export default function App() {
   const hasIncomingDecision =
     !!incomingEndRequest ||
     session.wordRequests.some(
-      (request) => request.status === "pending" && request.requestedBy !== slot,
+      (request) =>
+        request.status === "pending" &&
+        !houseWords.has(request.word) &&
+        request.requestedBy !== slot,
     ) ||
     session.newGameRequests.some(
       (request) =>
@@ -1732,6 +1840,7 @@ export default function App() {
         timer = setTimeout(present, 40);
         return;
       }
+      presentedResults.add(`${session.contextKey}:${game.id}`);
       setDialog("result");
     };
     timer = setTimeout(present, delay);
@@ -2235,7 +2344,7 @@ export default function App() {
     observedUpdateGame.current = game.id;
     if (
       (previous && previous !== game.id) ||
-      (!previous && game.revision === 0)
+      (!previous && initialTableEntry && game.revision === 0)
     )
       setUpdateBoundary(game.id);
   }, [game?.id]);
@@ -2279,10 +2388,6 @@ export default function App() {
     wordBusy,
     endGameBusy,
   ]);
-  const houseWords = useMemo(
-    () => new Set(session.houseWords.map((entry) => entry.word)),
-    [session.houseWords],
-  );
   const dictionaryReady =
     !!wordDictionary.dictionary && session.dictionaryReady;
   const previewWordsKey = preview?.words.join("|") || "";
@@ -2364,7 +2469,7 @@ export default function App() {
     activeMode === "turn-limit" &&
     (game?.turnsPlayed ?? game?.revision ?? 0) >= 19;
   const pendingWordCount = session.wordRequests.filter(
-    (request) => request.status === "pending",
+    (request) => request.status === "pending" && !houseWords.has(request.word),
   ).length;
   const turnActionReason = currentEndRequest
     ? "Play is paused while you decide whether to end this game."
@@ -2390,7 +2495,7 @@ export default function App() {
       : "");
   const currentWordRequests = session.wordRequests.filter(
     (request) =>
-      request.status === "pending" ||
+      (request.status === "pending" && !houseWords.has(request.word)) ||
       wordFeedback[`${request.id}:${request.status}:${request.respondedAt}`] ===
         `${game?.id}:${game?.revision}:${slot}`,
   );
@@ -2463,7 +2568,12 @@ export default function App() {
                 data-state={request.status}
               >
                 <p>
-                  {request.status === "pending" ? (
+                  {houseWords.has(request.word) ? (
+                    <>
+                      <strong>{request.word}</strong> is in the family
+                      dictionary.
+                    </>
+                  ) : request.status === "pending" ? (
                     own ? (
                       <>
                         Waiting for {partnerName} to add{" "}
@@ -2491,38 +2601,40 @@ export default function App() {
                     </>
                   )}
                 </p>
-                {request.status === "pending" && !own && (
-                  <div className="word-request-actions">
-                    <button
-                      className="primary-button"
-                      data-testid={`${testPrefix}approve-word-${request.id}`}
-                      disabled={!canUseDictionary}
-                      onClick={() =>
-                        void respondToWord(
-                          request.id,
-                          true,
-                          request.requestedAt,
-                        )
-                      }
-                    >
-                      {wordBusy === request.id ? "Saving…" : "Add word"}
-                    </button>
-                    <button
-                      className="secondary-button"
-                      data-testid={`${testPrefix}decline-word-${request.id}`}
-                      disabled={!canUseDictionary}
-                      onClick={() =>
-                        void respondToWord(
-                          request.id,
-                          false,
-                          request.requestedAt,
-                        )
-                      }
-                    >
-                      Don’t add word
-                    </button>
-                  </div>
-                )}
+                {request.status === "pending" &&
+                  !houseWords.has(request.word) &&
+                  !own && (
+                    <div className="word-request-actions">
+                      <button
+                        className="primary-button"
+                        data-testid={`${testPrefix}approve-word-${request.id}`}
+                        disabled={!canUseDictionary}
+                        onClick={() =>
+                          void respondToWord(
+                            request.id,
+                            true,
+                            request.requestedAt,
+                          )
+                        }
+                      >
+                        {wordBusy === request.id ? "Saving…" : "Add word"}
+                      </button>
+                      <button
+                        className="secondary-button"
+                        data-testid={`${testPrefix}decline-word-${request.id}`}
+                        disabled={!canUseDictionary}
+                        onClick={() =>
+                          void respondToWord(
+                            request.id,
+                            false,
+                            request.requestedAt,
+                          )
+                        }
+                      >
+                        Don’t add word
+                      </button>
+                    </div>
+                  )}
                 {request.status === "declined" &&
                   own &&
                   !houseWords.has(request.word) && (
@@ -2540,7 +2652,7 @@ export default function App() {
       </div>
       {!session.wordRequests.length && !session.houseWords.length && (
         <p className="shared-word-count">
-          Words you both allow will appear here.
+          Words approved at any table appear here for everyone.
         </p>
       )}
       {review && pauseNotice(true)}
@@ -2672,6 +2784,24 @@ export default function App() {
             )}
           </div>
         )}
+        {session.playerId && (
+          <button
+            className="secondary-button games-control"
+            data-testid="open-games"
+            disabled={
+              !session.canLeaveTable ||
+              busy ||
+              !!wordBusy ||
+              newGameBusy ||
+              endGameBusy ||
+              hasIncomingDecision ||
+              !!drag
+            }
+            onClick={() => setDialog("games")}
+          >
+            Games
+          </button>
+        )}
         {game && slot && (
           <button
             className={`secondary-button header-new-game ${nextGameCue ? "new-game-next-action" : ""}`}
@@ -2765,7 +2895,10 @@ export default function App() {
         </button>
         <button
           className="icon-button help-control"
-          onClick={() => setDialog("help")}
+          onClick={() => {
+            setHelpPage("root");
+            setDialog("help");
+          }}
           aria-label="Help & settings"
           data-testid="help-settings"
         >
@@ -2799,7 +2932,7 @@ export default function App() {
               <i />
             </span>
           </main>
-        ) : !slot ? (
+        ) : !session.playerId ? (
           <main className="welcome">
             <div className="welcome-art" aria-hidden="true">
               <div className="paper-leaf leaf-one" />
@@ -2865,7 +2998,11 @@ export default function App() {
                 setMessage("");
                 try {
                   if (welcomeMode === "join") await session.enroll(code.trim());
-                  else await session.signInPlayer(loginPlayer, passphrase);
+                  else
+                    await session.signInPlayer(
+                      linkPlayerId || loginPlayer,
+                      passphrase,
+                    );
                   setPassphrase("");
                 } catch (error) {
                   setMessage(
@@ -2897,18 +3034,20 @@ export default function App() {
               ) : (
                 <>
                   <label htmlFor="login-player">Your name</label>
-                  <select
+                  <input
                     id="login-player"
                     data-testid="login-player"
                     value={loginPlayer}
-                    onChange={(event) =>
-                      setLoginPlayer(event.target.value as Slot)
-                    }
+                    onChange={(event) => {
+                      setLinkPlayerId(null);
+                      setLoginPlayer(event.target.value);
+                    }}
                     autoComplete="username"
-                  >
-                    <option value="mom">{names.mom}</option>
-                    <option value="aunt">{names.aunt}</option>
-                  </select>
+                    autoCapitalize="words"
+                    maxLength={64}
+                    required
+                    placeholder="Your name"
+                  />
                   <label htmlFor="login-password">Your private code</label>
                   <input
                     id="login-password"
@@ -2928,7 +3067,9 @@ export default function App() {
                 data-testid="enroll-submit"
                 disabled={
                   enrolling ||
-                  !(welcomeMode === "join" ? code.trim() : passphrase) ||
+                  !(welcomeMode === "join"
+                    ? code.trim()
+                    : loginPlayer.trim() && passphrase) ||
                   sharedActionsPaused
                 }
               >
@@ -2956,10 +3097,10 @@ export default function App() {
         ) : !game ? (
           <main className="welcome">
             <TeaMark large />
-            <h1>Your table is being set.</h1>
+            <h1>Welcome, {session.displayName}.</h1>
             <p>
               {notice ||
-                "Waiting for the saved match. Your administrator can finish setting up the pair."}
+                "There are no games ready yet. Your administrator can set up a table with another player."}
             </p>
             {pauseNotice()}
           </main>
@@ -4926,291 +5067,446 @@ export default function App() {
               <ScoreExplanation move={latest} />
             </Modal>
           )}
+          {dialog === "games" && (
+            <Modal
+              title="Your games"
+              close={() => setDialog(null)}
+              testId="games-drawer"
+              drawer
+            >
+              <p className="setup-note">
+                Choose a table. Your tiles stay saved at each one.
+              </p>
+              <div className="games-list">
+                {session.pairs.map((pair) => {
+                  const ownSeat =
+                    pair.seatPlayers.mom === session.playerId ? "mom" : "aunt";
+                  const opponent = pair.names[other(ownSeat)];
+                  const selectedPair = pair.id === session.pairId;
+                  return (
+                    <button
+                      key={pair.id}
+                      className={`game-choice ${selectedPair ? "chosen" : ""}`}
+                      data-testid={`open-pair-${pair.id}`}
+                      aria-current={selectedPair ? "page" : undefined}
+                      disabled={!session.canLeaveTable}
+                      onClick={() => {
+                        session.selectPair(pair.id);
+                        setDialog(null);
+                      }}
+                    >
+                      <strong>{opponent}</strong>
+                      <span>
+                        {Object.entries(pair.actionNeededBy || {}).some(
+                          ([action, player]) =>
+                            player === session.playerId &&
+                            (!action.startsWith("word-") ||
+                              !houseWords.has(
+                                action.split("-").slice(2).join("-"),
+                              )),
+                        )
+                          ? "Your reply is needed"
+                          : pair.activeGame?.status === "finished"
+                            ? "Game complete"
+                            : pair.activeGame?.turn === ownSeat
+                              ? "Your turn"
+                              : `Waiting for ${opponent}`}
+                      </span>
+                      {selectedPair && <small>Open now</small>}
+                    </button>
+                  );
+                })}
+                {!session.pairs.length && (
+                  <p>No tables have been set up yet.</p>
+                )}
+              </div>
+            </Modal>
+          )}
           {dialog === "help" && (
-            <Modal title="Help & settings" close={() => setDialog(null)}>
-              {game && (
-                <section
-                  className="table-actions"
-                  aria-labelledby="table-actions-title"
+            <Modal
+              title={
+                helpPage === "root"
+                  ? "Help & settings"
+                  : {
+                      play: "How to play",
+                      settings: "Colours & device settings",
+                      dictionary: "Shared dictionary",
+                      about: "About & updates",
+                      debug: "Local preview tools",
+                    }[helpPage]
+              }
+              close={() => setDialog(null)}
+            >
+              {helpPage !== "root" && (
+                <button
+                  className="secondary-button help-back"
+                  onClick={() => setHelpPage("root")}
                 >
-                  <h3 className="help-section-title" id="table-actions-title">
-                    Table actions
-                  </h3>
-                  <div className="dialog-actions">
+                  ← Back
+                </button>
+              )}
+              {helpPage === "root" && (
+                <>
+                  <div className="help-menu">
                     <button
                       className="secondary-button"
-                      data-testid="review-words"
-                      onClick={() => setDialog("word-requests")}
+                      data-testid="help-play"
+                      onClick={() => setHelpPage("play")}
                     >
-                      Shared words
+                      How to play
+                    </button>
+                    <button
+                      className="secondary-button"
+                      data-testid="help-settings-page"
+                      onClick={() => setHelpPage("settings")}
+                    >
+                      Colours & device settings
+                    </button>
+                    <button
+                      className="secondary-button"
+                      data-testid="help-dictionary"
+                      onClick={() => setHelpPage("dictionary")}
+                    >
+                      Shared dictionary
                       {pendingWordCount ? ` (${pendingWordCount})` : ""}
                     </button>
-                  </div>
-                </section>
-              )}
-
-              <section className="device-settings" aria-label="This device">
-                <h3 className="help-section-title">This device</h3>
-                <label className="debug-toggle">
-                  <input
-                    type="checkbox"
-                    data-testid="keep-screen-awake"
-                    checked={screenAwake.enabled}
-                    disabled={!screenAwake.supported}
-                    onChange={(event) =>
-                      void screenAwake.setEnabled(event.target.checked)
-                    }
-                  />{" "}
-                  Keep screen awake
-                </label>
-                <p className="setup-note" data-testid="screen-awake-status">
-                  {!screenAwake.supported
-                    ? "This browser does not support keeping the screen awake."
-                    : !screenAwake.enabled
-                      ? "Off. Your device uses its usual screen timer."
-                      : game?.status !== "active"
-                        ? "This setting applies while an active game is visible."
-                        : screenAwake.status ||
-                          "Your device may ask for permission to keep the screen awake."}
-                </p>
-                <div className="dialog-actions">
-                  <button
-                    className="secondary-button"
-                    data-testid="check-for-updates"
-                    disabled={appUpdate.checking}
-                    onClick={() => void appUpdate.check()}
-                  >
-                    {appUpdate.checking ? "Checking…" : "Check for updates"}
-                  </button>
-                  {appUpdate.available && (
                     <button
                       className="secondary-button"
-                      data-testid="help-apply-update"
-                      disabled={
-                        !!pending ||
-                        busy ||
-                        enrolling ||
-                        !!drag ||
-                        !!settling ||
-                        recallAnimation.active ||
-                        !!wordBusy ||
-                        newGameBusy ||
-                        endGameBusy ||
-                        hasIncomingDecision
-                      }
-                      onClick={() => void appUpdate.apply()}
+                      data-testid="help-about"
+                      onClick={() => setHelpPage("about")}
                     >
-                      Update app
+                      About & updates
                     </button>
-                  )}
-                </div>
-                <p className="setup-note" data-testid="app-update-status">
-                  {appUpdate.error || appUpdate.status}
-                </p>
-              </section>
-              <fieldset className="theme-options">
-                <legend>Your table colours</legend>
-                <p>
-                  Choose a look for this device. Your partner can choose their
-                  own.
-                </p>
-                {themeChoices.map(([value, label]) => (
-                  <label
-                    className={`choice-card theme-choice ${theme === value ? "chosen" : ""}`}
-                    key={value}
-                  >
-                    <input
-                      type="radio"
-                      name="table-theme"
-                      value={value}
-                      checked={theme === value}
-                      onChange={() => setTheme(value)}
-                      data-testid={`theme-${value}`}
-                    />
-                    <span
-                      className={`theme-swatch swatch-${value}`}
-                      aria-hidden="true"
-                    >
-                      <i />
-                      <i />
-                      <i />
-                    </span>
-                    <strong>{label}</strong>
-                  </label>
-                ))}
-              </fieldset>
-              {import.meta.env.DEV && (
-                <section className="debug-settings">
-                  <label className="debug-toggle">
-                    <input
-                      type="checkbox"
-                      checked={debugEnabled}
-                      onChange={(event) =>
-                        setDebugEnabled(event.target.checked)
-                      }
-                      data-testid="debug-enabled"
-                    />{" "}
-                    Enable local preview tools
-                  </label>
-                  {debugEnabled && (
-                    <div className="debug-panel" data-testid="debug-panel">
+                    {import.meta.env.DEV && (
+                      <button
+                        className="secondary-button"
+                        data-testid="help-debug"
+                        onClick={() => setHelpPage("debug")}
+                      >
+                        Local preview tools
+                      </button>
+                    )}
+                  </div>
+                  {session.playerId && (
+                    <section className="help-account">
                       <p>
-                        Preview scoring, game endings and turn announcements
-                        over the board. Sample data never changes your game.
+                        Signed in as <strong>{session.displayName}</strong>
                       </p>
                       <button
                         className="secondary-button"
-                        data-testid="debug-end-game"
-                        onClick={() => setDialog("debug-tools")}
+                        data-testid="sign-out"
+                        disabled={
+                          !session.canLeaveTable ||
+                          busy ||
+                          !!wordBusy ||
+                          newGameBusy ||
+                          endGameBusy ||
+                          hasIncomingDecision
+                        }
+                        onClick={async () => {
+                          setMessage("");
+                          try {
+                            await session.signOut();
+                          } catch (error) {
+                            setMessage(
+                              error instanceof Error
+                                ? error.message
+                                : "Please wait for your move to finish saving.",
+                            );
+                          }
+                        }}
                       >
-                        Open preview tools
+                        Sign out
                       </button>
-                    </div>
+                      {!session.canLeaveTable && (
+                        <p role="status">
+                          Please wait for your move to finish saving.
+                        </p>
+                      )}
+                    </section>
                   )}
-                </section>
+                </>
               )}
-              <h3 className="help-section-title">Playing together</h3>
-              <ol className="help-steps">
-                <li>
-                  <b>Choose a tile.</b> Tap a letter in your rack.
-                </li>
-                <li>
-                  <b>Find its place.</b> Tap an empty square. Your first word
-                  crosses the centre star.
-                </li>
-                <li>
-                  <b>Make a word.</b> Place letters in a straight line, joining
-                  words already on the board.
-                </li>
-                <li>
-                  <b>Play when you’re ready.</b> We check the words and save the
-                  turn for both of you.
-                </li>
-              </ol>
-              <p>
-                To move a tentative tile, tap it and then another square. Tap it
-                twice to return it to your rack. You can also drag tiles onto
-                empty squares or back to the rack. <b>Recall tiles</b> brings
-                them all back.
-              </p>
-              <p>
-                Arrange your tiles on any empty squares, in any order. Red
-                outlines show a draft that needs adjusting: fill its gaps, line
-                up the tiles and connect the word before playing. The first word
-                must cover the centre star. While waiting, your draft stays
-                private until you play it on your turn.
-              </p>
-              <p>
-                Drag a letter between letters in your hand to arrange them in
-                any order, even while waiting. The outlined gap shows where it
-                will go. With a keyboard, focus a rack tile and hold Alt while
-                pressing the left or right arrow. Your order is saved on this
-                device.
-              </p>
-              <p>
-                A blank can be any letter and scores zero. Use all seven tiles
-                in one turn for 50 extra points.
-              </p>
-              <section
-                className="bonus-legend"
-                data-testid="bonus-legend"
-                aria-label="Bonus squares"
-              >
-                <h3 className="help-section-title">Bonus squares</h3>
-                <div>
-                  <span>
-                    <i className="bonus-dl" /> DL · Double letter
-                  </span>
-                  <span>
-                    <i className="bonus-tl" /> TL · Triple letter
-                  </span>
-                  <span>
-                    <i className="bonus-dw" /> DW · Double word
-                  </span>
-                  <span>
-                    <i className="bonus-tw" /> TW · Triple word
-                  </span>
-                </div>
-              </section>
-              <p data-testid="game-ending-help">
-                In every mode, using your last tile ends the game only when the
-                bag is empty; otherwise, you draw replacement tiles. Your
-                partner’s remaining tile values are deducted from their score
-                and added to yours.
-              </p>
-              <p>
-                Six consecutive turns without points also end the game: six
-                turns total, or three passes each if you both keep passing.
-                Passes, exchanges and zero-point words count; a scoring word
-                resets the count. Each player’s remaining tile values are
-                deducted from their score.
-              </p>
-              <p>
-                You can close the app and come back later. Your game is saved
-                after every accepted turn. You need a connection to send a turn.
-              </p>
-              <p data-testid="facetime-help">
-                If you use FaceTime in picture in picture, move its floating
-                window into the clear area beside the game controls. That space
-                is kept free so you can see each other while playing.
-              </p>
-              <p data-testid="presence-help">
-                The dot beside your partner’s name shows whether they are at the
-                table on any device. It updates about once a minute, so Away can
-                take up to two minutes to appear. The indicator is hidden when
-                their status cannot be checked.
-              </p>
-              <p>
-                <b>New game</b> asks your partner to start fresh. Your current
-                board stays until you both agree.
-              </p>
-              <p>
-                Choose Classic, 10 turns each, First to 150, or a timed game. In
-                ten-turn games, all 20 plays, passes or exchanges count; the
-                highest score wins. Reaching a short-game limit keeps scores as
-                played. The usual tile and six-scoreless-turn endings can happen
-                sooner.
-                {game && (
-                  <>
-                    {" "}
-                    Your current game is <b>{gameModes[activeMode].title}</b>.
-                  </>
-                )}
-              </p>
-              <p>
-                A timed game starts when your partner agrees, with 25 minutes by
-                default or a duration you choose. The clock keeps running while
-                the app is closed. When time is up, reconnect to confirm the
-                final score; the highest score wins. In every mode, the game can
-                finish sooner when the bag is empty and a player uses their last
-                tile.
-              </p>
-              <p>
-                Words use our prototype English Speller Database dictionary,
-                including UK, Canadian and US spellings. It is not an official
-                tournament dictionary. A word check appears beside your score as
-                you arrange tiles. If a word isn’t recognized, you can ask each
-                other to allow it. Words you both approve stay in your shared
-                dictionary for future games.{" "}
-                <a
-                  className="dictionary-credits"
-                  href={`${import.meta.env.BASE_URL}DICTIONARY-LICENSE.txt`}
-                  target="_blank"
-                  rel="noopener"
-                >
-                  Word list credits
-                </a>
-                .
-              </p>
-              <button
-                className="primary-button"
-                onClick={() => setDialog(null)}
-              >
-                Lovely, let’s play
-                <Icon name="check" />
-              </button>
-              <AppVersion />
-              <Changelog />
+              {helpPage === "settings" && (
+                <>
+                  <section className="device-settings" aria-label="This device">
+                    <h3 className="help-section-title">This device</h3>
+                    <label className="debug-toggle">
+                      <input
+                        type="checkbox"
+                        data-testid="keep-screen-awake"
+                        checked={screenAwake.enabled}
+                        disabled={!screenAwake.supported}
+                        onChange={(event) =>
+                          void screenAwake.setEnabled(event.target.checked)
+                        }
+                      />{" "}
+                      Keep screen awake
+                    </label>
+                    <p className="setup-note" data-testid="screen-awake-status">
+                      {!screenAwake.supported
+                        ? "This browser does not support keeping the screen awake."
+                        : !screenAwake.enabled
+                          ? "Off. Your device uses its usual screen timer."
+                          : game?.status !== "active"
+                            ? "This setting applies while an active game is visible."
+                            : screenAwake.status ||
+                              "Your device may ask for permission to keep the screen awake."}
+                    </p>
+                  </section>
+                  <fieldset className="theme-options">
+                    <legend>Your table colours</legend>
+                    <p>
+                      Choose a look for this device. Your partner can choose
+                      their own.
+                    </p>
+                    {themeChoices.map(([value, label]) => (
+                      <label
+                        className={`choice-card theme-choice ${theme === value ? "chosen" : ""}`}
+                        key={value}
+                      >
+                        <input
+                          type="radio"
+                          name="table-theme"
+                          value={value}
+                          checked={theme === value}
+                          onChange={() => setTheme(value)}
+                          data-testid={`theme-${value}`}
+                        />
+                        <span
+                          className={`theme-swatch swatch-${value}`}
+                          aria-hidden="true"
+                        >
+                          <i />
+                          <i />
+                          <i />
+                        </span>
+                        <strong>{label}</strong>
+                      </label>
+                    ))}
+                  </fieldset>
+                </>
+              )}
+              {helpPage === "debug" && (
+                <>
+                  {import.meta.env.DEV && (
+                    <section className="debug-settings">
+                      <label className="debug-toggle">
+                        <input
+                          type="checkbox"
+                          checked={debugEnabled}
+                          onChange={(event) =>
+                            setDebugEnabled(event.target.checked)
+                          }
+                          data-testid="debug-enabled"
+                        />{" "}
+                        Enable local preview tools
+                      </label>
+                      {debugEnabled && (
+                        <div className="debug-panel" data-testid="debug-panel">
+                          <p>
+                            Preview scoring, game endings and turn announcements
+                            over the board. Sample data never changes your game.
+                          </p>
+                          <button
+                            className="secondary-button"
+                            data-testid="debug-end-game"
+                            onClick={() => setDialog("debug-tools")}
+                          >
+                            Open preview tools
+                          </button>
+                        </div>
+                      )}
+                    </section>
+                  )}
+                </>
+              )}
+              {helpPage === "play" && (
+                <>
+                  <h3 className="help-section-title">Playing together</h3>
+                  <ol className="help-steps">
+                    <li>
+                      <b>Choose a tile.</b> Tap a letter in your rack.
+                    </li>
+                    <li>
+                      <b>Find its place.</b> Tap an empty square. Your first
+                      word crosses the centre star.
+                    </li>
+                    <li>
+                      <b>Make a word.</b> Place letters in a straight line,
+                      joining words already on the board.
+                    </li>
+                    <li>
+                      <b>Play when you’re ready.</b> We check the words and save
+                      the turn for both of you.
+                    </li>
+                  </ol>
+                  <p>
+                    To move a tentative tile, tap it and then another square.
+                    Tap it twice to return it to your rack. You can also drag
+                    tiles onto empty squares or back to the rack.{" "}
+                    <b>Recall tiles</b> brings them all back.
+                  </p>
+                  <p>
+                    Arrange your tiles on any empty squares, in any order. Red
+                    outlines show a draft that needs adjusting: fill its gaps,
+                    line up the tiles and connect the word before playing. The
+                    first word must cover the centre star. While waiting, your
+                    draft stays private until you play it on your turn.
+                  </p>
+                  <p>
+                    Drag a letter between letters in your hand to arrange them
+                    in any order, even while waiting. The outlined gap shows
+                    where it will go. With a keyboard, focus a rack tile and
+                    hold Alt while pressing the left or right arrow. Your order
+                    is saved on this device.
+                  </p>
+                  <p>
+                    A blank can be any letter and scores zero. Use all seven
+                    tiles in one turn for 50 extra points.
+                  </p>
+                  <section
+                    className="bonus-legend"
+                    data-testid="bonus-legend"
+                    aria-label="Bonus squares"
+                  >
+                    <h3 className="help-section-title">Bonus squares</h3>
+                    <div>
+                      <span>
+                        <i className="bonus-dl" /> DL · Double letter
+                      </span>
+                      <span>
+                        <i className="bonus-tl" /> TL · Triple letter
+                      </span>
+                      <span>
+                        <i className="bonus-dw" /> DW · Double word
+                      </span>
+                      <span>
+                        <i className="bonus-tw" /> TW · Triple word
+                      </span>
+                    </div>
+                  </section>
+                  <p data-testid="game-ending-help">
+                    In every mode, using your last tile ends the game only when
+                    the bag is empty; otherwise, you draw replacement tiles.
+                    Your partner’s remaining tile values are deducted from their
+                    score and added to yours.
+                  </p>
+                  <p>
+                    Six consecutive turns without points also end the game: six
+                    turns total, or three passes each if you both keep passing.
+                    Passes, exchanges and zero-point words count; a scoring word
+                    resets the count. Each player’s remaining tile values are
+                    deducted from their score.
+                  </p>
+                  <p>
+                    You can close the app and come back later. Your game is
+                    saved after every accepted turn. You need a connection to
+                    send a turn.
+                  </p>
+                  <p data-testid="facetime-help">
+                    If you use FaceTime in picture in picture, move its floating
+                    window into the clear area beside the game controls. That
+                    space is kept free so you can see each other while playing.
+                  </p>
+                  <p data-testid="presence-help">
+                    The dot beside your partner’s name shows whether they are at
+                    the table on any device. It updates about once a minute, so
+                    Away can take up to two minutes to appear. The indicator is
+                    hidden when their status cannot be checked.
+                  </p>
+                  <p>
+                    <b>New game</b> asks your partner to start fresh. Your
+                    current board stays until you both agree.
+                  </p>
+                  <p>
+                    Choose Classic, 10 turns each, First to 150, or a timed
+                    game. In ten-turn games, all 20 plays, passes or exchanges
+                    count; the highest score wins. Reaching a short-game limit
+                    keeps scores as played. The usual tile and
+                    six-scoreless-turn endings can happen sooner.
+                    {game && (
+                      <>
+                        {" "}
+                        Your current game is{" "}
+                        <b>{gameModes[activeMode].title}</b>.
+                      </>
+                    )}
+                  </p>
+                  <p>
+                    A timed game starts when your partner agrees, with 25
+                    minutes by default or a duration you choose. The clock keeps
+                    running while the app is closed. When time is up, reconnect
+                    to confirm the final score; the highest score wins. In every
+                    mode, the game can finish sooner when the bag is empty and a
+                    player uses their last tile.
+                  </p>
+                </>
+              )}
+              {helpPage === "dictionary" && (
+                <>
+                  <p>
+                    Words use our prototype English Speller Database dictionary,
+                    including UK, Canadian and US spellings. It is not an
+                    official tournament dictionary. A word check appears beside
+                    your score as you arrange tiles. If a word isn’t recognized,
+                    you can ask each other to allow it. Words approved at any
+                    table join the family dictionary for everyone’s future
+                    games.{" "}
+                    <a
+                      className="dictionary-credits"
+                      href={`${import.meta.env.BASE_URL}DICTIONARY-LICENSE.txt`}
+                      target="_blank"
+                      rel="noopener"
+                    >
+                      Word list credits
+                    </a>
+                    .
+                  </p>
+                  {wordRequests("help-", true)}
+                </>
+              )}
+              {helpPage === "about" && (
+                <>
+                  <p>A quiet game of words with family.</p>
+                  <div className="dialog-actions">
+                    <button
+                      className="secondary-button"
+                      data-testid="check-for-updates"
+                      disabled={appUpdate.checking}
+                      onClick={() => void appUpdate.check()}
+                    >
+                      {appUpdate.checking ? "Checking…" : "Check for updates"}
+                    </button>
+                    {appUpdate.available && (
+                      <button
+                        className="secondary-button"
+                        data-testid="help-apply-update"
+                        disabled={
+                          !!pending ||
+                          busy ||
+                          enrolling ||
+                          !!drag ||
+                          !!settling ||
+                          recallAnimation.active ||
+                          !!wordBusy ||
+                          newGameBusy ||
+                          endGameBusy ||
+                          hasIncomingDecision
+                        }
+                        onClick={() => void appUpdate.apply()}
+                      >
+                        Update app
+                      </button>
+                    )}
+                  </div>
+                  <p className="setup-note" data-testid="app-update-status">
+                    {appUpdate.error || appUpdate.status}
+                  </p>
+                  <AppVersion />
+                  <Changelog />
+                </>
+              )}
             </Modal>
           )}
           {dialog === "pass" && (

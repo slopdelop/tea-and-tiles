@@ -27,6 +27,7 @@ import {
   browserLocalPersistence,
   onAuthStateChanged,
   signInAnonymously,
+  signOut as firebaseSignOut,
 } from "firebase/auth";
 import {
   initializeFirestore,
@@ -65,6 +66,8 @@ export type PublicGame = Omit<Game, "racks" | "bag"> & {
   rackCounts: Record<Slot, number>;
   bagCount: number;
 };
+import type { PairSummary } from "../shared/players";
+export type { PairSummary } from "../shared/players";
 const emulator = import.meta.env.VITE_USE_EMULATORS !== "false";
 const projectId =
   import.meta.env.VITE_FIREBASE_PROJECT_ID || "demo-tea-and-tiles";
@@ -135,6 +138,17 @@ const message = (e: unknown) =>
     ? e.message
     : "Unable to reach the game. Please try again.";
 export function useGameSession() {
+  const [playerId, setPlayerId] = useState<string | null>(null);
+  const [displayName, setDisplayName] = useState("");
+  const [pairsReady, setPairsReady] = useState(false);
+  const [profileReady, setProfileReady] = useState(false);
+  const [defaultPairId, setDefaultPairId] = useState<string | null>(null);
+  const [pairs, setPairs] = useState<PairSummary[]>([]);
+  const [pairId, setPairId] = useState<string | null>(null);
+  const [mutationBusy, setMutationBusy] = useState(false);
+  const contextRef = useRef("");
+  const mutationOperations = useRef(new Set<symbol>());
+  const busyOwner = useRef<symbol | null>(null);
   const [slot, setSlot] = useState<Slot | null>(null),
     [names, setNames] = useState<Record<Slot, string>>({
       mom: "Elizabeth",
@@ -170,17 +184,32 @@ export function useGameSession() {
   const pendingRef = useRef<Command | null>(null),
     busy = useRef(false);
   const confirmedRef = useRef<CommandResult | null>(null);
+  const selectedPair = pairs.find((pair) => pair.id === pairId);
+  const activeGameId = selectedPair?.activeGameId;
+  const selectedSlot: Slot | null =
+    selectedPair?.seatPlayers?.mom === playerId
+      ? "mom"
+      : selectedPair?.seatPlayers?.aunt === playerId
+        ? "aunt"
+        : null;
   const diagnostics = useRef<ReturnType<typeof startBrowserDiagnostics>>(null);
   useEffect(() => {
-    if (!uid || !slot) return;
+    if (!uid || !selectedSlot) return;
     const active = startBrowserDiagnostics(
-      `${projectId}:${uid}`,
+      `${projectId}:${uid}:${pairId}`,
       async (input) => {
         const reply = await httpsCallable<
-          | { action: "clock" }
-          | { action: "report"; report: MoveDiagnosticReport },
+          | { action: "clock"; pairId: string | null }
+          | {
+              action: "report";
+              report: MoveDiagnosticReport;
+              pairId: string | null;
+            },
           DiagnosticReply
-        >(functions, "reportMoveDiagnostics", { timeout: 15000 })(input);
+        >(functions, "reportMoveDiagnostics", { timeout: 15000 })({
+          ...input,
+          pairId,
+        });
         return reply.data;
       },
       describeFirestoreTransport(firestoreTransport(emulator, navigator)),
@@ -190,7 +219,7 @@ export function useGameSession() {
       active?.dispose();
       diagnostics.current = null;
     };
-  }, [uid, slot]);
+  }, [uid, selectedSlot, pairId]);
   const noteMoveDisplayed = useCallback(
     (gameId: string, revision: number) =>
       diagnostics.current?.recorder.displayed(gameId, revision),
@@ -208,6 +237,7 @@ export function useGameSession() {
     !!game,
     connected,
     game?.startedAt,
+    pairId,
   );
   const [sharedPause, setSharedPause] = useState<SharedActionPause | null>(
     null,
@@ -235,18 +265,36 @@ export function useGameSession() {
   }, [sharedPause, resumeSharedActions]);
   const callShared = useCallback(
     async <Input, Output>(name: string, input: Input): Promise<Output> => {
+      const operationContext = contextRef.current;
+      const unscoped = name === "loginPlayer" || name === "enrollPlayer";
+      if (busy.current && unscoped)
+        throw new Error("Please wait for your move to finish.");
       const pause = sharedPauseRef.current;
       if (pause && (!pause.resumeAt || pause.resumeAt > Date.now()))
         throw new Error(pause.message);
       if (pause) resumeSharedActions();
+      const operation = Symbol(name);
+      mutationOperations.current.add(operation);
+      setMutationBusy(true);
       try {
         const result = await httpsCallable<Input, Output>(
           functions,
           name,
-        )(input);
+        )(
+          unscoped
+            ? input
+            : {
+                ...input,
+                pairId,
+                gameId: (input as { gameId?: string }).gameId || game?.id,
+              },
+        );
         return result.data;
       } catch (failure) {
-        const issue = noteServiceFailure(failure);
+        const issue =
+          operationContext === contextRef.current
+            ? noteServiceFailure(failure)
+            : null;
         if (issue) {
           const original = failure as { code?: string; details?: unknown };
           throw Object.assign(new Error(issue.message), {
@@ -255,36 +303,44 @@ export function useGameSession() {
           });
         }
         throw failure;
+      } finally {
+        mutationOperations.current.delete(operation);
+        setMutationBusy(mutationOperations.current.size > 0);
       }
     },
-    [noteServiceFailure, resumeSharedActions],
+    [noteServiceFailure, resumeSharedActions, pairId, game?.id],
   );
   const [timedClock, setTimedClock] = useState<{
     gameId: string;
     offset: number;
   } | null>(null);
   const storageKey = useRef("");
-  const savePending = useCallback((command: Command | null) => {
-    if (storageKey.current) {
-      if (command) {
-        try {
-          localStorage.setItem(storageKey.current, JSON.stringify(command));
-        } catch {
-          throw new Error(
-            "Your iPad could not save this move for recovery. Free some storage and try again.",
-          );
-        }
-      } else {
-        try {
-          localStorage.removeItem(storageKey.current);
-        } catch {
-          /* A stored confirmed command will reconcile again on reload. */
+  const savePending = useCallback(
+    (command: Command | null, key = storageKey.current) => {
+      if (key) {
+        if (command) {
+          try {
+            localStorage.setItem(key, JSON.stringify(command));
+          } catch {
+            throw new Error(
+              "Your iPad could not save this move for recovery. Free some storage and try again.",
+            );
+          }
+        } else {
+          try {
+            localStorage.removeItem(key);
+          } catch {
+            /* A stored confirmed command will reconcile again on reload. */
+          }
         }
       }
-    }
-    pendingRef.current = command;
-    setPending(command);
-  }, []);
+      if (key === storageKey.current) {
+        pendingRef.current = command;
+        setPending(command);
+      }
+    },
+    [],
+  );
   useEffect(() => {
     const online = () => setConnected(navigator.onLine);
     window.addEventListener("online", online);
@@ -303,6 +359,25 @@ export function useGameSession() {
       return;
     }
     return onAuthStateChanged(auth, async (user) => {
+      contextRef.current = "auth-changing";
+      busy.current = false;
+      busyOwner.current = null;
+      mutationOperations.current.clear();
+      setMutationBusy(false);
+      resumeSharedActions();
+      // Clear private account state before replacing an anonymous session.
+      setUid(null);
+      setPlayerId(null);
+      setSlot(null);
+      setPairId(null);
+      setPairs([]);
+      setGame(null);
+      setRack([]);
+      setDisplayName("");
+      setDefaultPairId(null);
+      storageKey.current = "";
+      pendingRef.current = null;
+      setPending(null);
       if (!user) {
         try {
           await signInAnonymously(auth);
@@ -312,120 +387,237 @@ export function useGameSession() {
         }
         return;
       }
-      storageKey.current = `tea-pending:${projectId}:${user.uid}`;
-      try {
-        const stored = localStorage.getItem(storageKey.current);
-        savePending(stored ? JSON.parse(stored) : null);
-      } catch {
-        savePending(null);
-      }
       setUid(user.uid);
     });
-  }, [savePending]);
+  }, [savePending, resumeSharedActions]);
   useEffect(() => {
     if (!uid) return;
-    return onSnapshot(
+    let disposed = false;
+    const stop = onSnapshot(
       doc(db, "bindings", uid),
       (snapshot) => {
-        const next = snapshot.data()?.slot;
-        setSlot(next === "mom" || next === "aunt" ? next : null);
+        if (disposed || auth.currentUser?.uid !== uid) return;
+        const binding = snapshot.data();
+        setPlayerId(
+          typeof binding?.playerId === "string"
+            ? binding.playerId
+            : typeof binding?.slot === "string"
+              ? binding.slot
+              : null,
+        );
         setLoading(false);
       },
       (e) => {
+        if (disposed || auth.currentUser?.uid !== uid) return;
         setError(message(e));
         setLoading(false);
       },
     );
+    return () => {
+      disposed = true;
+      stop();
+    };
   }, [uid]);
   useEffect(() => {
-    if (!slot) {
-      setGame(null);
-      setRack([]);
-      return;
-    }
-    let gameStop = () => {},
-      rackStop = () => {};
-    let activeId: string | null = null;
-    const pairStop = onSnapshot(
-      doc(db, "pairs", "family"),
+    setProfileReady(false);
+    setPairsReady(false);
+    setPairs([]);
+    setPairId(null);
+    setSlot(null);
+    setGame(null);
+    setRack([]);
+    if (!playerId) return;
+    let disposed = false;
+    const profileStop = onSnapshot(
+      doc(db, "players", playerId),
       (snapshot) => {
-        const pair = snapshot.data();
-        if (!pair) return;
-        setNames(pair.names || { mom: "Elizabeth", aunt: "Rita" });
-        if (pair.activeGameId !== activeId) {
-          if (activeId)
-            diagnostics.current?.recorder.record("listener-stop", {
-              gameId: activeId,
-            });
-          activeId = pair.activeGameId;
-          diagnostics.current?.recorder.listenerStart(pair.activeGameId);
-          gameStop();
-          rackStop();
-          setGame(null);
-          setRack([]);
-          gameStop = onSnapshot(
-            doc(db, "games", pair.activeGameId),
-            { includeMetadataChanges: true },
-            (s) => {
-              if (s.exists()) {
-                diagnostics.current?.recorder.snapshot(
-                  s.data() as PublicGame,
-                  s.metadata.fromCache,
-                );
-                setGame(s.data() as PublicGame);
-                if (!s.metadata.fromCache) {
-                  setConnected(navigator.onLine);
-                  setError(null);
-                }
-              }
-            },
-            (e) => {
-              diagnostics.current?.recorder.record("listener-error", {
-                gameId: pair.activeGameId,
-                detail: e.code,
-              });
-              setError(message(e));
-              setConnected(false);
-            },
-          );
-          rackStop = onSnapshot(
-            doc(db, "games", pair.activeGameId, "racks", slot),
-            (s) => {
-              diagnostics.current?.recorder.record("rack-snapshot", {
-                gameId: pair.activeGameId,
-              });
-              setRack(s.data()?.tiles || []);
-            },
-            (e) => setError(message(e)),
-          );
+        if (disposed || auth.currentUser?.uid !== uid) return;
+        setDisplayName(
+          snapshot.data()?.displayName || snapshot.data()?.name || playerId,
+        );
+        setDefaultPairId(snapshot.data()?.defaultPairId || null);
+        setProfileReady(true);
+      },
+      (e) => {
+        if (!disposed && auth.currentUser?.uid === uid) {
+          setError(message(e));
+          setProfileReady(true);
         }
       },
-      (e) => setError(message(e)),
+    );
+    const listStop = onSnapshot(
+      query(
+        collection(db, "pairs"),
+        where("memberIds", "array-contains", playerId),
+      ),
+      (snapshot) => {
+        if (disposed || auth.currentUser?.uid !== uid) return;
+        const next = snapshot.docs
+          .map((record) => ({ ...record.data(), id: record.id }) as PairSummary)
+          .sort((a, b) => a.id.localeCompare(b.id));
+        setPairs(next);
+        setPairsReady(true);
+        setLoading(false);
+      },
+      (e) => {
+        if (!disposed && auth.currentUser?.uid === uid) {
+          setError(message(e));
+          setPairsReady(true);
+          setLoading(false);
+        }
+      },
     );
     return () => {
-      if (activeId)
-        diagnostics.current?.recorder.record("listener-stop", {
-          gameId: activeId,
+      disposed = true;
+      profileStop();
+      listStop();
+    };
+  }, [playerId, uid]);
+  useEffect(() => {
+    if (!playerId || !pairs.length) {
+      setPairId(null);
+      return;
+    }
+    if (!profileReady) return;
+    setPairId((current) => {
+      if (current && pairs.some((pair) => pair.id === current)) return current;
+      let saved: string | null = null;
+      try {
+        saved = localStorage.getItem(`tea-last-pair:${projectId}:${playerId}`);
+      } catch {
+        /* optional */
+      }
+      return (
+        pairs.find((pair) => pair.id === saved)?.id ||
+        pairs.find((pair) => pair.id === defaultPairId)?.id ||
+        pairs[0].id
+      );
+    });
+  }, [playerId, pairs, defaultPairId, profileReady]);
+  useEffect(() => {
+    setSlot(selectedSlot);
+    if (selectedPair?.names) setNames(selectedPair.names);
+  }, [selectedSlot, selectedPair?.names]);
+  useEffect(() => {
+    if (playerId && pairId)
+      try {
+        localStorage.setItem(`tea-last-pair:${projectId}:${playerId}`, pairId);
+      } catch {
+        /* optional */
+      }
+  }, [playerId, pairId]);
+  const contextKey = `${projectId}:${playerId || ""}:${pairId || ""}:${activeGameId || ""}`;
+  contextRef.current = `${uid || ""}:${contextKey}`;
+  useEffect(() => {
+    setGame(null);
+    setRack([]);
+    setError(null);
+    setTimedClock(null);
+    confirmedRef.current = null;
+    storageKey.current =
+      uid && pairId && activeGameId
+        ? `tea-pending:${projectId}:${uid}:${pairId}:${activeGameId}`
+        : "";
+    const key = storageKey.current;
+    let restored: Command | null = null;
+    try {
+      const stored = key && localStorage.getItem(key);
+      if (stored) restored = JSON.parse(stored);
+      // Preserve recovery for a move saved by the previous single-table build.
+      if (!restored && uid && pairId === "family") {
+        const legacy = localStorage.getItem(`tea-pending:${projectId}:${uid}`);
+        const candidate = legacy ? JSON.parse(legacy) : null;
+        if (candidate?.gameId === activeGameId) restored = candidate;
+      }
+    } catch {
+      /* A malformed recovery record is ignored. */
+    }
+    if (restored && restored.gameId !== activeGameId) restored = null;
+    try {
+      savePending(restored, key);
+    } catch (e) {
+      // Reading an existing recovery record must not crash the table when storage is full.
+      pendingRef.current = restored;
+      setPending(restored);
+      setError(message(e));
+    }
+    if (restored && uid && pairId === "family")
+      try {
+        localStorage.removeItem(`tea-pending:${projectId}:${uid}`);
+      } catch {
+        /* Recovery remains safe. */
+      }
+    if (!activeGameId || !selectedSlot || !pairId) return;
+    let disposed = false;
+    const listenerContext = contextRef.current;
+    diagnostics.current?.recorder.listenerStart(activeGameId);
+    const gameStop = onSnapshot(
+      doc(db, "games", activeGameId),
+      { includeMetadataChanges: true },
+      (snapshot) => {
+        if (disposed || listenerContext !== contextRef.current) return;
+        if (snapshot.exists()) {
+          diagnostics.current?.recorder.snapshot(
+            snapshot.data() as PublicGame,
+            snapshot.metadata.fromCache,
+          );
+          setGame(snapshot.data() as PublicGame);
+          if (!snapshot.metadata.fromCache) {
+            setConnected(navigator.onLine);
+            setError(null);
+          }
+        }
+      },
+      (e) => {
+        if (disposed || listenerContext !== contextRef.current) return;
+        diagnostics.current?.recorder.record("listener-error", {
+          gameId: activeGameId,
+          detail: e.code,
         });
-      pairStop();
+        setError(message(e));
+        setConnected(false);
+      },
+    );
+    const rackStop = onSnapshot(
+      doc(db, "games", activeGameId, "racks", selectedSlot),
+      (snapshot) => {
+        if (disposed || listenerContext !== contextRef.current) return;
+        diagnostics.current?.recorder.record("rack-snapshot", {
+          gameId: activeGameId,
+        });
+        setRack(snapshot.data()?.tiles || []);
+      },
+      (e) => {
+        if (!disposed && listenerContext === contextRef.current)
+          setError(message(e));
+      },
+    );
+    return () => {
+      disposed = true;
       gameStop();
       rackStop();
+      diagnostics.current?.recorder.record("listener-stop", {
+        gameId: activeGameId,
+      });
     };
-  }, [slot]);
+  }, [contextKey, uid, selectedSlot, savePending]);
   useEffect(() => {
     setEndGameRequests([]);
     setEndGameRequestsForGame(null);
     setEndGameRequestsReady(false);
     setEndGameRequestsError(null);
-    if (!slot || !game?.id) return;
+    if (!slot || !pairId || !game?.id) return;
     let knownRequests = false;
-    return onSnapshot(
+    let disposed = false;
+    const listenerContext = contextRef.current;
+    const stop = onSnapshot(
       query(
-        collection(db, "pairs", "family", "endGameRequests"),
+        collection(db, "pairs", pairId!, "endGameRequests"),
         where("gameId", "==", game.id),
       ),
       { includeMetadataChanges: true },
       (snapshot) => {
+        if (disposed || listenerContext !== contextRef.current) return;
         setEndGameRequests(
           snapshot.docs.map(
             (record) => ({ ...record.data(), id: record.id }) as EndGameRequest,
@@ -437,27 +629,35 @@ export function useGameSession() {
         setEndGameRequestsError(null);
       },
       () => {
+        if (disposed || listenerContext !== contextRef.current) return;
         setEndGameRequestsReady(false);
         setEndGameRequestsError(
           "End-game requests are unavailable. Please reconnect and reload.",
         );
       },
     );
-  }, [slot, game?.id]);
+    return () => {
+      disposed = true;
+      stop();
+    };
+  }, [slot, pairId, game?.id]);
   useEffect(() => {
     setNewGameRequests([]);
     setNewGameRequestsForGame(null);
     setNewGameRequestsReady(false);
     setNewGameRequestsError(null);
-    if (!slot || !game?.id) return;
+    if (!slot || !pairId || !game?.id) return;
     let knownRequests = false;
-    return onSnapshot(
+    let disposed = false;
+    const listenerContext = contextRef.current;
+    const stop = onSnapshot(
       query(
-        collection(db, "pairs", "family", "gameRequests"),
+        collection(db, "pairs", pairId!, "gameRequests"),
         where("gameId", "==", game.id),
       ),
       { includeMetadataChanges: true },
       (snapshot) => {
+        if (disposed || listenerContext !== contextRef.current) return;
         setNewGameRequests(
           snapshot.docs.map(
             (record) => ({ ...record.data(), id: record.id }) as NewGameRequest,
@@ -469,24 +669,31 @@ export function useGameSession() {
         setNewGameRequestsError(null);
       },
       () => {
+        if (disposed || listenerContext !== contextRef.current) return;
         setNewGameRequestsReady(false);
         setNewGameRequestsError(
           "New game requests are unavailable. Please reconnect and reload.",
         );
       },
     );
-  }, [slot, game?.id]);
+    return () => {
+      disposed = true;
+      stop();
+    };
+  }, [slot, pairId, game?.id]);
   useEffect(() => {
     setHouseWords([]);
     setWordRequests([]);
     setDictionaryReady(false);
     setDictionaryError(null);
-    if (!slot) return;
+    if (!playerId) return;
     let knownSharedWords = false;
+    let disposed = false;
     const stopWords = onSnapshot(
-      collection(db, "pairs", "family", "houseWords"),
+      collection(db, "houseWords"),
       { includeMetadataChanges: true },
       (snapshot) => {
+        if (disposed || auth.currentUser?.uid !== uid) return;
         setHouseWords(
           snapshot.docs.map(
             (record) => ({ ...record.data(), word: record.id }) as HouseWord,
@@ -499,35 +706,62 @@ export function useGameSession() {
         setDictionaryError(null);
       },
       (e) => {
+        if (disposed || auth.currentUser?.uid !== uid) return;
         setHouseWords([]);
         setDictionaryReady(false);
         setDictionaryError("Shared word check unavailable.");
         setError(message(e));
       },
     );
-    const stopRequests = onSnapshot(
-      collection(db, "pairs", "family", "wordRequests"),
-      (snapshot) =>
-        setWordRequests(
-          snapshot.docs.map(
-            (record) => ({ ...record.data(), id: record.id }) as WordRequest,
-          ),
-        ),
+    return () => {
+      disposed = true;
+      stopWords();
+    };
+  }, [playerId, uid]);
+  useEffect(() => {
+    setWordRequests([]);
+    if (!pairId || !game?.id || !slot) return;
+    let disposed = false;
+    const listenerContext = contextRef.current;
+    const stop = onSnapshot(
+      query(
+        collection(db, "pairs", pairId, "wordRequests"),
+        where("gameId", "==", game.id),
+      ),
+      (snapshot) => {
+        if (!disposed && listenerContext === contextRef.current)
+          setWordRequests(
+            snapshot.docs.map(
+              (record) => ({ ...record.data(), id: record.id }) as WordRequest,
+            ),
+          );
+      },
       (e) => {
-        setWordRequests([]);
-        setError(message(e));
+        if (!disposed && listenerContext === contextRef.current) {
+          setWordRequests([]);
+          setError(message(e));
+        }
       },
     );
     return () => {
-      stopWords();
-      stopRequests();
+      disposed = true;
+      stop();
     };
-  }, [slot]);
+  }, [pairId, game?.id, slot]);
   useEffect(() => {
     if (!pending || !uid || !slot) return;
-    return onSnapshot(
+    let disposed = false;
+    const operationKey = storageKey.current;
+    const operationContext = contextRef.current;
+    const stop = onSnapshot(
       doc(db, "games", pending.gameId, "commands", pending.id),
       (s) => {
+        if (
+          disposed ||
+          operationContext !== contextRef.current ||
+          auth.currentUser?.uid !== uid
+        )
+          return;
         diagnostics.current?.recorder.record("receipt", {
           gameId: pending.gameId,
           moveId: pending.id,
@@ -535,7 +769,7 @@ export function useGameSession() {
         });
         if (s.exists() && s.data()?.uid === uid) {
           confirmedRef.current = s.data()?.result as CommandResult;
-          savePending(null);
+          savePending(null, operationKey);
           setError(null);
         }
       },
@@ -543,28 +777,36 @@ export function useGameSession() {
         /* Retry callable if receipt listener is temporarily unavailable. */
       },
     );
+    return () => {
+      disposed = true;
+      stop();
+    };
   }, [pending, uid, slot, savePending]);
   const enroll = useCallback(
     async (code: string) => {
       setError(null);
+      let operationUid = auth.currentUser?.uid;
       try {
         if (!auth.currentUser) await signInAnonymously(auth);
+        operationUid = auth.currentUser?.uid;
         await callShared("enrollPlayer", { code });
       } catch (e) {
-        setError(message(e));
+        if (auth.currentUser?.uid === operationUid) setError(message(e));
         throw e;
       }
     },
     [callShared],
   );
   const signInPlayer = useCallback(
-    async (playerId: "mom" | "aunt", passphrase: string) => {
+    async (playerId: string, passphrase: string) => {
       setError(null);
+      let operationUid = auth.currentUser?.uid;
       try {
         if (!auth.currentUser) await signInAnonymously(auth);
+        operationUid = auth.currentUser?.uid;
         await callShared("loginPlayer", { playerId, passphrase });
       } catch (e) {
-        setError(message(e));
+        if (auth.currentUser?.uid === operationUid) setError(message(e));
         throw e;
       }
     },
@@ -575,12 +817,21 @@ export function useGameSession() {
       if (busy.current) throw new Error("A move is already being sent.");
       if (!navigator.onLine)
         throw new Error("Reconnect before saving your move.");
-      savePending(command);
-      diagnostics.current?.recorder.submitStart(
+      const operationKey = storageKey.current;
+      const operationContext = contextRef.current;
+      const operationUid = auth.currentUser?.uid;
+      const current = () =>
+        operationContext === contextRef.current &&
+        auth.currentUser?.uid === operationUid;
+      const recorder = diagnostics.current?.recorder;
+      savePending(command, operationKey);
+      recorder?.submitStart(
         command.gameId,
         command.id,
         command.expectedRevision,
       );
+      const owner = Symbol("submit");
+      busyOwner.current = owner;
       busy.current = true;
       confirmedRef.current = null;
       setError(null);
@@ -589,21 +840,22 @@ export function useGameSession() {
           "submitCommand",
           command,
         );
-        savePending(null);
-        diagnostics.current?.recorder.submitEnd(command.id);
+        savePending(null, operationKey);
+        recorder?.submitEnd(command.id);
         return result;
       } catch (e) {
-        diagnostics.current?.recorder.submitEnd(
+        recorder?.submitEnd(
           command.id,
           (e as { code?: string }).code || "unknown",
         );
+        if (!current()) throw e;
         const confirmed = confirmedRef.current as CommandResult | null;
         if (confirmed?.commandId === command.id) {
           resumeSharedActions();
           setError(null);
           return confirmed;
         }
-        if (!retryable(e)) savePending(null);
+        if (!retryable(e)) savePending(null, operationKey);
         const explainedRejection =
           !retryable(e) &&
           ["dictionary", "timed"].includes(
@@ -618,7 +870,10 @@ export function useGameSession() {
         );
         throw e;
       } finally {
-        busy.current = false;
+        if (busyOwner.current === owner) {
+          busy.current = false;
+          busyOwner.current = null;
+        }
       }
     },
     [savePending, callShared, resumeSharedActions],
@@ -759,13 +1014,17 @@ export function useGameSession() {
     )
       return;
     const gameId = game.id;
+    const timedContext = contextRef.current;
     const sync = createTimedGameSync({
       deadlineAt: game.deadlineAt,
       request: () => finishTimedGame(gameId),
       online: () => navigator.onLine,
       visible: () => document.visibilityState !== "hidden",
       paused: () => !!sharedPauseRef.current,
-      onClock: (offset) => setTimedClock({ gameId, offset }),
+      onClock: (offset) => {
+        if (contextRef.current === timedContext)
+          setTimedClock({ gameId, offset });
+      },
     });
     const resume = sync.resume;
     sync.start();
@@ -788,11 +1047,68 @@ export function useGameSession() {
     sharedPause,
     finishTimedGame,
   ]);
+  const canLeaveTable = !pending && !mutationBusy && !busy.current;
+  const selectPair = useCallback(
+    (id: string) => {
+      if (
+        pendingRef.current ||
+        busy.current ||
+        mutationOperations.current.size > 0
+      )
+        throw new Error(
+          "Please wait for your move to finish before changing tables.",
+        );
+      if (!pairs.some((pair) => pair.id === id))
+        throw new Error("That table is unavailable.");
+      setGame(null);
+      setRack([]);
+      setWordRequests([]);
+      setNewGameRequests([]);
+      setEndGameRequests([]);
+      setPairId(id);
+    },
+    [pairs, mutationBusy],
+  );
+  const signOut = useCallback(async () => {
+    if (
+      pendingRef.current ||
+      busy.current ||
+      mutationOperations.current.size > 0
+    )
+      throw new Error(
+        "Please wait for your move to finish before signing out.",
+      );
+    contextRef.current = "signed-out";
+    setPlayerId(null);
+    setSlot(null);
+    setPairId(null);
+    setPairs([]);
+    setGame(null);
+    setRack([]);
+    setHouseWords([]);
+    setWordRequests([]);
+    setNewGameRequests([]);
+    setEndGameRequests([]);
+    setDisplayName("");
+    setUid(null);
+    setError(null);
+    resumeSharedActions();
+    await firebaseSignOut(auth);
+  }, [mutationBusy, resumeSharedActions]);
   return {
+    playerId,
+    displayName,
+    pairs,
+    pairId,
+    selectPair,
+    signOut,
+    canLeaveTable,
+    mutationBusy,
+    contextKey,
     noteMoveDisplayed,
     noteMovePresentation,
     slot,
-    names,
+    names: selectedPair?.names || names,
     game,
     rack,
     houseWords,
@@ -816,7 +1132,7 @@ export function useGameSession() {
     timedClockReady: !!game && timedClock?.gameId === game.id,
     serverTimeOffset:
       timedClock && timedClock.gameId === game?.id ? timedClock.offset : 0,
-    loading,
+    loading: loading || (!!playerId && (!profileReady || !pairsReady)),
     connected,
     presenceStatus,
     configured,

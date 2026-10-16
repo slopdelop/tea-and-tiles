@@ -1,17 +1,11 @@
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { assertCloudTestTarget, cloudTest } from "./cloud-test-project.mjs";
+import { cloudSourceSelection } from "./cloud-test-source.mjs";
+import { requireCloudTestDeployment } from "./cloud-test-deployment.mjs";
 assertCloudTestTarget();
-const root = resolve(".tools/cloud-test-release");
-const source = JSON.parse(
-  readFileSync(resolve(root, "cloud-test-source.json"), "utf8"),
-);
-if (
-  source.revision !== "d71f3869388604acf2ec68c00e972490bbd3e70c" ||
-  source.projectId !== cloudTest.projectId
-)
-  throw new Error("Run the guarded prepare-cloud-test script first.");
+const { root } = cloudSourceSelection();
+requireCloudTestDeployment();
 const env = Object.fromEntries(
   Object.entries(process.env).filter(([key]) => !key.startsWith("VITE_")),
 );
