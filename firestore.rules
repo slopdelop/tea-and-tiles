@@ -37,10 +37,18 @@ service cloud.firestore {
       match /presence/{uid} {
         function validHeartbeat() {
           return request.resource.data.keys().hasAll(['slot', 'lastSeen'])
-            && request.resource.data.keys().hasOnly(['slot', 'lastSeen'])
+            && request.resource.data.keys().hasOnly(['slot', 'lastSeen', 'onlineSince', 'onlineTrackedFrom', 'onlineIntervals'])
             && request.resource.data.slot == slot()
             && request.resource.data.lastSeen is timestamp
-            && request.resource.data.lastSeen == request.time;
+            && request.resource.data.lastSeen == request.time
+            && (!request.resource.data.keys().hasAny(['onlineSince', 'onlineTrackedFrom', 'onlineIntervals'])
+              || (request.resource.data.keys().hasAll(['onlineSince', 'onlineTrackedFrom', 'onlineIntervals'])
+                && request.resource.data.onlineSince is timestamp
+                && request.resource.data.onlineTrackedFrom is timestamp
+                && request.resource.data.onlineTrackedFrom <= request.resource.data.onlineSince
+                && request.resource.data.onlineSince <= request.time
+                && request.resource.data.onlineIntervals is list
+                && request.resource.data.onlineIntervals.size() <= 256));
         }
         allow get, list: if member();
         allow create: if member() && uid == request.auth.uid && validHeartbeat();

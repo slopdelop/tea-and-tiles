@@ -44,7 +44,8 @@ const args = [
 if (!process.argv.includes("--start"))
   args.push(
     (process.argv.includes("--backend") ? "npm run test:backend && " : "") +
-      "npm exec -- playwright test --config playwright.ui.config.ts",
+      "npm exec -- playwright test --config playwright.ui.config.ts" +
+      (process.env.SOAK_HEADED === "true" ? " --headed" : ""),
   );
 const child = spawn(
   process.execPath,

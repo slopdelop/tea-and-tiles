@@ -2676,6 +2676,109 @@ describe.skipIf(!enabled)(
         (await db.collection(`games/${game.id}/commands`).get()).size,
       ).toBe(0);
     }, 30000);
+    it("accepts bounded online-activity heartbeats and rejects malformed extra activity fields", async () => {
+      const client = env.authenticatedContext(uids.mom).firestore();
+      const ref = doc(client, `pairs/family/presence/${uids.mom}`);
+      await assertSucceeds(
+        setDoc(ref, {
+          slot: "mom",
+          lastSeen: serverTimestamp(),
+          onlineSince: serverTimestamp(),
+          onlineTrackedFrom: serverTimestamp(),
+          onlineIntervals: [],
+        }),
+      );
+      const saved = (
+        await getFirestore().doc(`pairs/family/presence/${uids.mom}`).get()
+      ).data()!;
+      expect(saved.onlineSince.toMillis()).toBe(saved.lastSeen.toMillis());
+      // A new UID avoids conflating shape validation with the 55-second throttle.
+      await getFirestore().doc("bindings/online-other").set({ slot: "mom" });
+      const other = doc(
+        env.authenticatedContext("online-other").firestore(),
+        "pairs/family/presence/online-other",
+      );
+      await assertFails(
+        setDoc(other, {
+          slot: "mom",
+          lastSeen: serverTimestamp(),
+          onlineIntervals: [],
+        }),
+      );
+      await assertFails(
+        setDoc(other, {
+          slot: "mom",
+          lastSeen: serverTimestamp(),
+          onlineSince: serverTimestamp(),
+          onlineTrackedFrom: serverTimestamp(),
+          onlineIntervals: new Array(257).fill({ start: 1, end: 2 }),
+        }),
+      );
+    });
+    it("saves unioned online duration at scoreless, timed and agreed endings without counting an overnight gap", async () => {
+      const db = getFirestore(),
+        now = Date.now(),
+        start = now - 17 * 3600000;
+      const setActivity = async () => {
+        for (const [id, slot] of [
+          ["clock-mom", "mom"],
+          ["clock-aunt", "aunt"],
+          ["clock-second-device", "mom"],
+        ])
+          await db.doc(`pairs/family/presence/${id}`).set({
+            slot,
+            onlineTrackedFrom: AdminTimestamp.fromMillis(start),
+            onlineSince: AdminTimestamp.fromMillis(start + 16 * 3600000),
+            lastSeen: AdminTimestamp.fromMillis(
+              start + 16 * 3600000 + 8 * 60000,
+            ),
+            onlineIntervals: [{ start, end: start + 15 * 60000 }],
+          });
+      };
+      for (const reason of ["scoreless", "timed", "agreed-end"] as const) {
+        game = createGame(
+          game.id,
+          () => 0.5,
+          reason === "timed" ? "timed" : "classic",
+          1,
+          start,
+        );
+        game.turn = "mom";
+        if (reason === "agreed-end") game.bag = [];
+        await writeGame(game);
+        await setActivity();
+        if (reason === "scoreless") {
+          for (let i = 0; i < 6; i++)
+            await submit(
+              i % 2 === 0 ? uids.mom : uids.aunt,
+              command("pass", i),
+            );
+        } else if (reason === "timed")
+          await finishGameTimer(uids.mom, { gameId: game.id });
+        else {
+          const request = {
+            id: randomUUID(),
+            gameId: game.id,
+            expectedRevision: 0,
+          };
+          await requestGameEnd(uids.mom, request);
+          await respondGameEnd(uids.aunt, {
+            requestId: request.id,
+            approve: true,
+          });
+        }
+        const ended = (await db.doc(`games/${game.id}`).get()).data()!;
+        expect(ended.status).toBe("finished");
+        expect(ended.onlineDurationMs).toBe(
+          reason === "timed" ? 60000 : 25 * 60000,
+        );
+        expect(ended.onlineTimeTrackedFrom).toBe(start);
+        expect(ended.endedReason).toBe(reason);
+        // Use fresh receipts/request IDs for the next ending scenario.
+        game.id = randomUUID();
+        await db.doc("pairs/family").update({ activeGameId: game.id });
+      }
+    }, 30000);
     it("commits timeout before rejecting late play, pass and exchange without any fabricated command receipt", async () => {
       const db = getFirestore();
       game = createGame(game.id, () => 0.5, "timed", 1, Date.now() - 120000);

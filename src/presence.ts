@@ -1,6 +1,7 @@
 import type { Slot } from "../shared/engine";
+import { ONLINE_LEASE_MS } from "../shared/online-time";
 export const PRESENCE_HEARTBEAT_MS = 60_000;
-export const PRESENCE_FRESH_MS = 120_000;
+export const PRESENCE_FRESH_MS = ONLINE_LEASE_MS;
 export type PresenceStatus = "present" | "away" | "unknown";
 export type PresenceDevice = { slot: Slot; lastSeen: number };
 export const UNKNOWN_PRESENCE: Record<Slot, PresenceStatus> = {

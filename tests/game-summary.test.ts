@@ -11,18 +11,26 @@ describe("game length", () => {
     [1440, "1 day"],
     [3061, "2 days 3 hours 1 minute"],
   ])("formats %i minutes without empty units", (minutes, text) => {
-    expect(
-      gameDuration({ startedAt: 1000, endedAt: 1000 + minutes * 60_000 }),
-    ).toEqual({ label: "Game length", text });
+    expect(gameDuration({ onlineDurationMs: minutes * 60_000 })).toEqual({
+      label: "Online play time",
+      text,
+    });
   });
-  it("uses an honest first-turn label for older games without a start timestamp", () => {
+  it("hides wall-clock history for older games and labels partial online tracking honestly", () => {
     expect(
       gameDuration({
         endedAt: 121000,
         historyComplete: true,
         history: [{ at: 1000 } as HistoryRecord],
       }),
-    ).toEqual({ label: "Time since first turn", text: "2 minutes" });
+    ).toBeNull();
+    expect(
+      gameDuration({
+        startedAt: 1000,
+        onlineTimeTrackedFrom: 200000,
+        onlineDurationMs: 120000,
+      }),
+    ).toEqual({ label: "Recorded online time", text: "2 minutes" });
     expect(
       gameDuration({
         endedAt: 121000,
@@ -35,6 +43,8 @@ describe("game length", () => {
     expect(gameDuration({ startedAt: 10 })).toBeNull();
     expect(gameDuration({ startedAt: 10, endedAt: 5 })).toBeNull();
     expect(gameDuration({ startedAt: NaN, endedAt: 15 })).toBeNull();
+    expect(gameDuration({ onlineDurationMs: -1 })).toBeNull();
+    expect(gameDuration({ onlineDurationMs: Infinity })).toBeNull();
   });
 });
 

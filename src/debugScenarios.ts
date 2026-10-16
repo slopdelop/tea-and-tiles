@@ -196,6 +196,8 @@ export function debugEndingGame(
         : "classic",
     turnsPlayed: history.length,
     startedAt: scenarioTime - 25 * 60_000,
+    onlineDurationMs: 25 * 60_000,
+    onlineTimeTrackedFrom: scenarioTime - 25 * 60_000,
     ...(timed ? { durationMinutes: 25, deadlineAt: scenarioTime } : {}),
     endedReason: reason,
     endedAt: scenarioTime,

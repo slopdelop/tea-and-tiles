@@ -12,6 +12,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createCredential } from "../functions/player-login";
 import { debugEndingGame } from "../src/debugScenarios";
+import { runSoak } from "./soak-scenario";
 import {
   applyCommand,
   createGame,
@@ -53,6 +54,54 @@ const themes = [
   "blue-ink",
 ] as const;
 const darkThemes = new Set<string>(["ink", "midnight"]);
+
+test("automated receive soak", async ({ page, browser }, info) => {
+  test.skip(process.env.TEA_SOAK_TEST !== "true", "Opt-in: npm run test:soak");
+  const turnLimit = Number(process.env.SOAK_TURNS || 60);
+  test.setTimeout(turnLimit * 90_000 + 120_000);
+  const dictionary = new Set(
+    readFileSync(new URL("../shared/words.txt", import.meta.url), "utf8")
+      .trim()
+      .split(/\s+/),
+  );
+  let seed = 1234567;
+  const random = () =>
+    (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296;
+  const initial = createGame("ui-table", random);
+  initial.turn = "mom";
+  await writeFixture(initial);
+  await enroll(page);
+  const { aunt, auntContext } = await joinRita(browser, 7, "no-preference");
+  try {
+    await runSoak({
+      page,
+      aunt,
+      info,
+      dictionary,
+      environment: "isolated local emulators; Chrome; normal animations",
+      readGame: async () => {
+        const [publicState, mom, rita, bag] = await authoritativeState();
+        return {
+          ...publicState,
+          racks: { mom: mom.tiles, aunt: rita.tiles },
+          bag: bag.bag,
+        } as Game;
+      },
+      readPublicGame: async () =>
+        (await db.doc("games/ui-table").get()).data() as Game,
+      onCommitted: async (game, placements) => {
+        expectedRevision = game.revision + 1;
+        expectedCommandCount++;
+        expectedBoardKeys = [
+          ...Object.keys(game.board),
+          ...(placements || []).map((p) => `${p.row},${p.col}`),
+        ];
+      },
+    });
+  } finally {
+    await auntContext.close();
+  }
+});
 
 test.beforeEach(async () => {
   expectedBoardKeys = ["0,0"];
@@ -7530,6 +7579,13 @@ test("opponent presence follows foreground heartbeats, expiry, extra devices and
   const requests: string[] = [];
   const observe = (target: Page) =>
     target.on("request", (request) => {
+      // Startup/resume diagnostics may calibrate independently of presence.
+      // Continue rejecting every other callable, including diagnostic uploads.
+      if (
+        request.url().endsWith("/reportMoveDiagnostics") &&
+        request.postDataJSON()?.data?.action === "clock"
+      )
+        return;
       if (request.method() === "POST" && request.url().includes(":5101/"))
         requests.push(request.url());
     });
@@ -7770,7 +7826,7 @@ test("game duration appears in the local ending report without changing the real
   await page.getByTestId("local-debug-tools").click();
   await page.getByTestId("debug-scene-game-over").click();
   await expect(page.getByTestId("game-duration")).toHaveText(
-    "Game length: 25 minutes",
+    "Online play time: 25 minutes",
   );
   expect(await authoritativeState()).toEqual(before);
 });

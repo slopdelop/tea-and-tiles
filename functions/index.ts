@@ -13,6 +13,7 @@ import { WORD_FAILURE_BUCKET } from "./setup-words.js";
 import { callablePolicy } from "./callable-policy.js";
 import { validLoginSecret, verifyCredential } from "./player-login.js";
 import { scoreAdjustments } from "../shared/scoring.js";
+import { onlineGameTime, readOnlinePresence } from "../shared/online-time.js";
 import {
   applyCommand,
   createGame,
@@ -176,6 +177,26 @@ function writeGame(tx: FirebaseFirestore.Transaction, game: Game) {
   tx.set(ref.collection("racks").doc("mom"), { tiles: game.racks.mom });
   tx.set(ref.collection("racks").doc("aunt"), { tiles: game.racks.aunt });
   tx.set(ref.collection("private").doc("state"), { bag: game.bag });
+}
+/** Read only at game end; reuse the existing heartbeat writes for activity. */
+async function readOnlineGameTime(
+  tx: FirebaseFirestore.Transaction,
+  game: FirebaseFirestore.DocumentData,
+  endedAt: number,
+) {
+  const presence = await tx.get(db.collection("pairs/family/presence"));
+  const devices = presence.docs.flatMap((doc) => {
+    const data = doc.data();
+    const activity = slots.includes(data.slot)
+      ? readOnlinePresence(data)
+      : null;
+    return activity ? [activity] : [];
+  });
+  const cutoff =
+    game.winCondition === "timed" && Number.isFinite(game.deadlineAt)
+      ? Math.min(endedAt, game.deadlineAt)
+      : endedAt;
+  return onlineGameTime(devices, game.startedAt, cutoff);
 }
 function sameTiles(before: readonly Tile[], after: readonly Tile[]) {
   return (
@@ -776,6 +797,10 @@ export async function respondGameRestart(
       approve && old.data()!.status === "active" && !expiredFields
         ? await readScoreAdjustments(tx, oldRef, old.data()!, "new-game")
         : null;
+    const abandonedTime =
+      approve && old.data()!.status === "active" && !expiredFields
+        ? await readOnlineGameTime(tx, old.data()!, at)
+        : {};
     tx.update(ref, {
       status,
       respondedBy: slot,
@@ -814,6 +839,7 @@ export async function respondGameRestart(
             revision: old.data()!.revision + 1,
             endedReason: "new-game",
             endedAt: at,
+            ...abandonedTime,
             finalScoreAdjustments: abandonedAdjustments,
           })
         : {}),
@@ -1062,6 +1088,7 @@ export async function respondGameEnd(
               : "aunt",
         endedReason: reason,
         endedAt: at,
+        ...(await readOnlineGameTime(tx, game.data()!, at)),
         finalScoreAdjustments,
       };
     }
@@ -1142,6 +1169,7 @@ async function timerFinishFields(
     revision: game.revision + 1,
     endedReason: "timed" as const,
     endedAt: now,
+    ...(await readOnlineGameTime(tx, game, now)),
     finalScoreAdjustments,
   };
 }
@@ -1386,6 +1414,15 @@ export async function submit(
           command.kind,
         );
         if (expiredBeforeCommit) return expiredBeforeCommit;
+        if (accepted.status === "finished" && game.status !== "finished")
+          Object.assign(
+            accepted,
+            await readOnlineGameTime(
+              tx,
+              saved.data()!,
+              accepted.endedAt ?? serverNow,
+            ),
+          );
         const next =
           command.kind === "rematch"
             ? createGame(

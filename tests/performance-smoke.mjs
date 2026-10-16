@@ -169,9 +169,9 @@ const presenceBuild = await bundle(
   import React,{useSyncExternalStore} from 'react';import{createRoot}from'react-dom/client';
   import{usePlayerPresence}from'./src/hooks/usePlayerPresence';
   const db={app:{options:{projectId:'mock-presence-only'}}};
-  window.presenceConnected=true;window.presenceRenders=0;window.presenceWrites=0;
+  window.presenceConnected=true;window.presenceRenders=0;window.presenceWrites=0;window.presencePayloads=[];
   window.setPresenceConnected=value=>{window.presenceConnected=value;window.dispatchEvent(new Event('presence-connected'))};
-  window.emitPresence=(devices,fromCache=false)=>window.presenceSnapshot({metadata:{fromCache},docs:devices.map(device=>({id:device.id,metadata:{hasPendingWrites:!!device.pending},data:()=>({slot:device.slot,lastSeen:{toMillis:()=>device.lastSeen}})}))});
+  window.emitPresence=(devices,fromCache=false)=>window.presenceSnapshot({metadata:{fromCache},docs:devices.map(device=>({id:device.id,metadata:{hasPendingWrites:!!device.pending},data:()=>({slot:device.slot,lastSeen:{toMillis:()=>device.lastSeen},...(device.onlineSince===undefined?{}:{onlineSince:{toMillis:()=>device.onlineSince},onlineTrackedFrom:{toMillis:()=>device.onlineTrackedFrom},onlineIntervals:device.onlineIntervals})})}))});
   const subscribe=f=>{window.addEventListener('presence-connected',f);return()=>window.removeEventListener('presence-connected',f)};
   function Probe(){const connected=useSyncExternalStore(subscribe,()=>window.presenceConnected);const status=usePlayerPresence(db,'device-mom','mom',true,connected);window.presenceRenders++;return <div data-testid="presence">{JSON.stringify(status)}</div>}
   createRoot(document.getElementById('root')).render(<Probe/>);
@@ -187,8 +187,9 @@ const presenceBuild = await bundle(
         builder.onLoad({ filter: /.*/, namespace: "fake-firestore" }, () => ({
           contents: `
       export const collection=(...args)=>args,doc=(...args)=>args,serverTimestamp=()=>null;
+      export const Timestamp={fromMillis:value=>({toMillis:()=>value})};
       export function onSnapshot(_ref,_options,next,error){window.presenceSnapshot=next;window.presenceError=error;return()=>{window.presenceSnapshot=null}};
-      export function setDoc(){window.presenceWrites++;return Promise.resolve()};
+      export function setDoc(_ref,payload){window.presenceWrites++;window.presencePayloads.push(payload);return Promise.resolve()};
     `,
         }));
       },
@@ -759,6 +760,85 @@ try {
     "Disconnected presence continued writing",
   );
   await presence.close();
+  const onlineClock = await openFixture(browser, presenceBuild, true);
+  await onlineClock.getByTestId("presence").waitFor();
+  const clockBase = await onlineClock.evaluate(() => Date.now());
+  await onlineClock.evaluate(
+    (base) =>
+      window.emitPresence([
+        {
+          id: "device-mom",
+          slot: "mom",
+          lastSeen: base - 300000,
+          onlineSince: base - 600000,
+          onlineTrackedFrom: base - 600000,
+          onlineIntervals: [],
+        },
+      ]),
+    clockBase,
+  );
+  await onlineClock.clock.runFor(1);
+  const firstActivity = await onlineClock.evaluate(
+    () => window.presencePayloads[0],
+  );
+  assert.deepEqual(
+    firstActivity.onlineIntervals,
+    [{ start: clockBase - 600000, end: clockBase - 180000 }],
+    "Expired online session was not archived with its two-minute lease",
+  );
+  assert.equal(
+    firstActivity.onlineSince,
+    null,
+    "Resume did not start a new server-stamped session",
+  );
+  await onlineClock.evaluate(
+    ({ base, intervals }) =>
+      window.emitPresence([
+        {
+          id: "device-mom",
+          slot: "mom",
+          lastSeen: base,
+          onlineSince: base,
+          onlineTrackedFrom: base - 600000,
+          onlineIntervals: intervals,
+        },
+      ]),
+    { base: clockBase, intervals: firstActivity.onlineIntervals },
+  );
+  await onlineClock.evaluate(() => {
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "hidden",
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await onlineClock.clock.runFor(2 * 3600000);
+  assert.equal(
+    await onlineClock.evaluate(() => window.presenceWrites),
+    1,
+    "Backgrounded app continued clock writes",
+  );
+  await onlineClock.evaluate(() => {
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "visible",
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await onlineClock.clock.runFor(1);
+  assert.equal(await onlineClock.evaluate(() => window.presenceWrites), 2);
+  const afterBreak = await onlineClock.evaluate(
+    () => window.presencePayloads.at(-1).onlineIntervals,
+  );
+  assert.deepEqual(
+    afterBreak,
+    [
+      ...firstActivity.onlineIntervals,
+      { start: clockBase, end: clockBase + 120000 },
+    ],
+    "Offline hours were added to online history",
+  );
+  await onlineClock.close();
   console.log(
     JSON.stringify(
       {

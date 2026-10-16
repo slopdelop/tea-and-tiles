@@ -51,6 +51,8 @@ export interface Game {
   turnsPlayed?: number;
   durationMinutes?: number;
   startedAt?: number;
+  onlineDurationMs?: number;
+  onlineTimeTrackedFrom?: number;
   deadlineAt?: number;
   endedReason?:
     | "new-game"

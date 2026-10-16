@@ -89,3 +89,106 @@ describe("player presence", () => {
     expect(corrected.nextChangeAt).toBe(130_000);
   });
 });
+
+import {
+  mergeOnlineIntervals,
+  nextOnlineHeartbeat,
+  onlineGameTime,
+  readOnlinePresence,
+  MAX_ONLINE_INTERVALS,
+  ONLINE_LEASE_MS,
+  type OnlinePresence,
+} from "../shared/online-time";
+const onlineStamp = (value: number) => ({ toMillis: () => value });
+const device = (
+  since: number,
+  lastSeen: number,
+  intervals: { start: number; end: number }[] = [],
+): OnlinePresence => ({ since, lastSeen, trackedFrom: 0, intervals });
+describe("online game duration", () => {
+  it("excludes an overnight gap and counts overlapping players/devices only once", () => {
+    const hour = 3600000;
+    expect(
+      onlineGameTime(
+        [
+          device(0, 10 * 60000 - ONLINE_LEASE_MS),
+          device(5 * 60000, 15 * 60000 - ONLINE_LEASE_MS),
+          device(16 * hour, 16 * hour + 10 * 60000 - ONLINE_LEASE_MS),
+        ],
+        0,
+        17 * hour,
+      ),
+    ).toEqual({ onlineDurationMs: 25 * 60000, onlineTimeTrackedFrom: 0 });
+  });
+  it("clips current leases to the actual game start/end and ignores invalid/overlapping ranges", () => {
+    expect(
+      onlineGameTime(
+        [device(1000, 100000, [{ start: 0, end: 70000 }])],
+        2000,
+        62000,
+      ),
+    ).toEqual({ onlineDurationMs: 60000, onlineTimeTrackedFrom: 2000 });
+    expect(
+      mergeOnlineIntervals(
+        [
+          { start: 10, end: 20 },
+          { start: 15, end: 30 },
+          { start: NaN, end: 40 },
+          { start: 30, end: 29 },
+        ],
+        0,
+        25,
+      ),
+    ).toEqual([{ start: 10, end: 25 }]);
+    expect(onlineGameTime([], 0, 10000)).toEqual({});
+  });
+  it("retains confirmed server timestamps during a continuous visit and archives an expired visit", () => {
+    const previous = device(1000, 61000);
+    expect(nextOnlineHeartbeat(previous, 121000)).toMatchObject({
+      continuing: true,
+      intervals: [],
+    });
+    expect(nextOnlineHeartbeat(previous, 181000)).toMatchObject({
+      continuing: false,
+      intervals: [{ start: 1000, end: 181000 }],
+    });
+    expect(nextOnlineHeartbeat(previous, 1e7, 200000)).toMatchObject({
+      continuing: false,
+      intervals: [],
+    });
+    expect(nextOnlineHeartbeat(null, 1000)).toEqual({
+      continuing: false,
+      intervals: [],
+      trackedFrom: null,
+    });
+  });
+  it("reads only valid server-stamped records and bounds accumulated history", () => {
+    const data = {
+      lastSeen: onlineStamp(60000),
+      onlineSince: onlineStamp(0),
+      onlineTrackedFrom: onlineStamp(0),
+      onlineIntervals: [],
+    };
+    expect(readOnlinePresence(data)).toEqual(device(0, 60000));
+    expect(readOnlinePresence({ lastSeen: onlineStamp(60000) })).toBeNull();
+    expect(
+      readOnlinePresence({ ...data, onlineSince: onlineStamp(60001) }),
+    ).toBeNull();
+    expect(
+      readOnlinePresence({
+        ...data,
+        onlineIntervals: new Array(MAX_ONLINE_INTERVALS + 1).fill({
+          start: 0,
+          end: 1,
+        }),
+      }),
+    ).toBeNull();
+    const intervals = Array.from({ length: MAX_ONLINE_INTERVALS }, (_, i) => ({
+      start: i * 1000,
+      end: i * 1000 + 1,
+    }));
+    const next = nextOnlineHeartbeat(device(1e6, 1e6, intervals), 2e6);
+    expect(next.intervals).toHaveLength(MAX_ONLINE_INTERVALS);
+    expect(next.trackedFrom).toBe(1000);
+  });
+});

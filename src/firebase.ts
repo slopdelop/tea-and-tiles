@@ -201,7 +201,14 @@ export function useGameSession() {
       diagnostics.current?.recorder.record(name, { gameId, moveId }),
     [],
   );
-  const presenceStatus = usePlayerPresence(db, uid, slot, !!game, connected);
+  const presenceStatus = usePlayerPresence(
+    db,
+    uid,
+    slot,
+    !!game,
+    connected,
+    game?.startedAt,
+  );
   const [sharedPause, setSharedPause] = useState<SharedActionPause | null>(
     null,
   );

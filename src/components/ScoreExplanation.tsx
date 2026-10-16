@@ -333,6 +333,8 @@ type SummaryGame = Pick<
   | "finalScoreAdjustments"
   | "scores"
   | "startedAt"
+  | "onlineDurationMs"
+  | "onlineTimeTrackedFrom"
   | "endedAt"
 >;
 export function GameSummary({

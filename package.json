@@ -10,7 +10,7 @@
     "dev": "vite --host 127.0.0.1",
     "build": "tsc -p tsconfig.json && vite build && npm run build:functions",
     "build:functions": "tsc -p tsconfig.functions.json && node scripts/copy-dictionary.mjs",
-    "test": "vitest run tests/engine.test.ts tests/placement-guide.test.ts tests/timer-display.test.ts tests/rack-target.test.ts tests/callable-policy.test.ts tests/shared-availability.test.ts tests/firestore-transport.test.ts tests/score-timeline.test.ts tests/sign-in-link.test.ts tests/presence.test.ts tests/dictionary-import.test.ts tests/game-summary.test.ts tests/resume-zoom.test.ts tests/ending-presentation.test.ts tests/debug-scenarios.test.ts tests/submission-feedback.test.ts tests/new-game-update.test.ts tests/network-checks.test.ts tests/move-diagnostics.test.ts",
+    "test": "vitest run tests/engine.test.ts tests/placement-guide.test.ts tests/timer-display.test.ts tests/rack-target.test.ts tests/callable-policy.test.ts tests/shared-availability.test.ts tests/firestore-transport.test.ts tests/score-timeline.test.ts tests/sign-in-link.test.ts tests/presence.test.ts tests/dictionary-import.test.ts tests/game-summary.test.ts tests/resume-zoom.test.ts tests/ending-presentation.test.ts tests/debug-scenarios.test.ts tests/submission-feedback.test.ts tests/new-game-update.test.ts tests/network-checks.test.ts tests/move-diagnostics.test.ts tests/cloud-test-target.test.ts",
     "test:backend": "vitest run tests/backend.test.ts",
     "test:e2e": "playwright test",
     "emulators": "npm run build:functions && node scripts/emulators.mjs",
@@ -20,7 +20,9 @@
     "format": "prettier --write src shared/engine.ts functions/*.ts tests/*.ts scripts/*.mjs *.ts *.json",
     "test:pwa": "node tests/pwa-smoke.mjs",
     "test:performance": "node tests/performance-smoke.mjs",
-    "test:ui": "npm run build:functions && node scripts/ui-tests.mjs"
+    "test:ui": "npm run build:functions && node scripts/ui-tests.mjs",
+    "test:soak": "npm run build:functions && node scripts/soak-tests.mjs",
+    "test:soak:cloud": "node scripts/cloud-soak-tests.mjs"
   },
   "dependencies": {
     "firebase": "^12.19.0",

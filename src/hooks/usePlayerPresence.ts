@@ -5,9 +5,15 @@ import {
   onSnapshot,
   serverTimestamp,
   setDoc,
+  Timestamp,
   type Firestore,
 } from "firebase/firestore";
 import type { Slot } from "../../shared/engine";
+import {
+  nextOnlineHeartbeat,
+  readOnlinePresence,
+  type OnlinePresence,
+} from "../../shared/online-time";
 import {
   PRESENCE_HEARTBEAT_MS,
   presenceUpdate,
@@ -20,6 +26,7 @@ export function usePlayerPresence(
   slot: Slot | null,
   enabled: boolean,
   connected: boolean,
+  gameStartedAt?: number,
 ) {
   const [status, setStatus] = useState(UNKNOWN_PRESENCE);
   const publishedStatus = useRef(status);
@@ -28,6 +35,8 @@ export function usePlayerPresence(
   const serverOffset = useRef(0);
   const pendingOwnWrite = useRef(false);
   const sentAt = useRef(0);
+  const gameStart = useRef(gameStartedAt);
+  gameStart.current = gameStartedAt;
   useEffect(() => {
     if (publishedStatus.current !== UNKNOWN_PRESENCE) {
       publishedStatus.current = UNKNOWN_PRESENCE;
@@ -41,6 +50,9 @@ export function usePlayerPresence(
       /* Storage is optional. */
     }
     let disposed = false;
+    let ownReady = false;
+    let ownActivity: OnlinePresence | null = null;
+    let wakeHeartbeat = () => {};
     let devices: PresenceDevice[] | null = null;
     let expiryTimer: ReturnType<typeof setTimeout> | undefined;
     const refreshPresence = () => {
@@ -68,6 +80,15 @@ export function usePlayerPresence(
         const own = snapshot.docs.find((device) => device.id === uid);
         if (own?.metadata.hasPendingWrites) pendingOwnWrite.current = true;
         const ownSeen = own?.data().lastSeen?.toMillis?.();
+        if (!snapshot.metadata.fromCache && !own?.metadata.hasPendingWrites) {
+          ownActivity = readOnlinePresence(own?.data());
+          const first = !ownReady;
+          ownReady = true;
+          if (first)
+            queueMicrotask(() => {
+              if (!disposed) wakeHeartbeat();
+            });
+        }
         if (
           pendingOwnWrite.current &&
           own &&
@@ -103,7 +124,8 @@ export function usePlayerPresence(
         !connected ||
         !navigator.onLine ||
         document.visibilityState !== "visible" ||
-        inFlight.current
+        inFlight.current ||
+        !ownReady
       )
         return PRESENCE_HEARTBEAT_MS;
       const time = Date.now();
@@ -131,9 +153,23 @@ export function usePlayerPresence(
         /* In-memory throttling remains. */
       }
       inFlight.current = true;
+      const activity = nextOnlineHeartbeat(
+        ownActivity,
+        time + serverOffset.current,
+        gameStart.current,
+      );
       void setDoc(doc(db, "pairs", "family", "presence", uid), {
         slot,
         lastSeen: serverTimestamp(),
+        onlineSince:
+          activity.continuing && ownActivity
+            ? Timestamp.fromMillis(ownActivity.since)
+            : serverTimestamp(),
+        onlineTrackedFrom:
+          activity.trackedFrom === null
+            ? serverTimestamp()
+            : Timestamp.fromMillis(activity.trackedFrom),
+        onlineIntervals: activity.intervals,
       })
         .catch(() => {
           /* Presence failure never blocks a game command. */
@@ -154,6 +190,7 @@ export function usePlayerPresence(
     const wake = () => {
       cycle();
     };
+    wakeHeartbeat = cycle;
     document.addEventListener("visibilitychange", wake);
     window.addEventListener("pageshow", wake);
     window.addEventListener("online", wake);
