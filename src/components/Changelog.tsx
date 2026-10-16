@@ -1,5 +1,15 @@
 const releases = [
   {
+    version: "1.7.0",
+    items: [
+      "Play private games with more family members, with a Games menu and sign out.",
+      "Games badges and gentle notices show activity and requests at other tables.",
+      "Clearer word review, larger controls and text, and simpler Help navigation.",
+      "A family dictionary everyone can contribute to, and game duration based on online play time.",
+      "Refined scoring, results and tablet layouts, with more local preview tools.",
+    ],
+  },
+  {
     version: "1.6.1",
     items: [
       "Less repeated screen rendering while dragging tiles, with more direct touch tracking.",

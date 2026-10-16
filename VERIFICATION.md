@@ -650,3 +650,7 @@ hit testing, results disclosure, short-screen sign-in and code masking, and both
 notice durations without clearing unread state. Visual captures of sign-in,
 results and tablet layouts were reviewed. Physical-iPad review remains manual.
 No production publication or Firebase deployment was performed.
+
+## Release 1.7.0 — 2026-10-16
+
+Release unit suite: 213 passed. Frontend and Functions build passed. Backend/security suite: 92 passed with a 15-second test timeout after one emulator transaction-retry test exceeded the default five seconds on the first run (91 passed on that run). UI polish was previously verified with 19 focused browser regressions. A fresh private production Firestore export, typed snapshot (376 documents) and Auth export (14 users) were verified under `.tools/backups/production-2026-10-16T19-53-11Z`; the active game remained unchanged during backup. Applied 18 additive identity/table metadata updates; a repeat dry run reports zero updates. Existing credentials and bindings were retained. Added Justin, Mabel and Caroline, private pair tables, and private production credentials saved only under ignored `.tools/` files.

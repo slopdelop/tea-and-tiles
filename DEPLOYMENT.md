@@ -152,3 +152,15 @@ node scripts/admin.mjs names --project demo-tea-and-tiles --mom-name Elizabeth -
 
 For an existing cloud project, use its real ID and `--cloud`. Changing names does not change the active seat, tiles, scores or saved moves.
 
+
+## Multiplayer upgrade (1.7.0)
+
+Before publishing the client, back up production, then run the additive migration:
+
+```powershell
+node scripts/admin.mjs upgrade-multiplayer --project tea-and-tiles --cloud
+node scripts/admin.mjs upgrade-multiplayer --project tea-and-tiles --cloud --apply
+npx firebase deploy --project tea-and-tiles --only functions:tea-and-tiles,firestore:rules,firestore:indexes
+```
+
+Admin commands use Application Default Credentials. The migration retains existing credentials, device bindings and games. Add profiles with `add-player --id ID --name NAME`, create private tables with `create-pair --player-a ID --player-b ID`, and issue private credentials with `issue-pin --player NAME --app-url https://slopdelop.github.io/tea-and-tiles/`; include `--project tea-and-tiles --cloud` on each command. Do not run reset or local prepare commands against production. Existing profile IDs `mom` and `aunt` are compatibility identifiers for Elizabeth and Rita. Additional words are stored in the family-wide `houseWords` collection.
