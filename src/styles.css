@@ -1206,6 +1206,8 @@ button {
 }
 .hand-row {
   --shuffle-size: 60px;
+  --hand-action-gap: 10px;
+  --hand-action-clearance: 10px;
   position: relative;
   width: 100%;
   max-width: 100%;
@@ -1222,7 +1224,7 @@ button {
   top: 50%;
   transform: translateY(-50%);
   display: flex;
-  gap: 10px;
+  gap: var(--hand-action-gap);
   width: max-content;
 }
 .hand-row[data-actions-below="true"] .hand-actions {
@@ -3730,13 +3732,13 @@ button {
   margin: 0;
 }
 .table-toolbar .header-actions {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 44px 44px;
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   width: 100%;
 }
 .table-toolbar .table-utility-meta {
-  grid-column: 1 / -1;
+  width: 100%;
   justify-content: space-between;
   gap: 8px;
   min-height: 20px;
@@ -3754,12 +3756,6 @@ button {
 .table-toolbar .header-actions .header-new-game {
   grid-column: 1;
   margin: 0;
-}
-.table-toolbar .sound-control {
-  grid-column: 2;
-}
-.table-toolbar .help-control {
-  grid-column: 3;
 }
 .board-focus .table-toolbar {
   display: none;
@@ -4187,7 +4183,6 @@ button {
   margin-right: 0;
 }
 .table-toolbar .header-actions:has(.header-update) {
-  grid-template-columns: repeat(2, minmax(0, 1fr)) 44px 44px;
   gap: 6px;
 }
 .table-toolbar .header-update {
@@ -4198,13 +4193,7 @@ button {
   min-width: 0;
   width: 100%;
   padding: 8px 4px;
-  font-size: 11px;
-}
-.table-toolbar .header-actions:has(.header-update) .sound-control {
-  grid-column: 3;
-}
-.table-toolbar .header-actions:has(.header-update) .help-control {
-  grid-column: 4;
+  font-size: 14px;
 }
 .table-toolbar .header-actions:not(:has(.header-new-game)) .header-update {
   grid-column: 1 / 3;
@@ -5751,5 +5740,46 @@ html.tablet-page-fitted,
   }
   .welcome-copy {
     margin: 12px 0 16px;
+  }
+}
+
+/* Keep table navigation together, with Help out of the gameplay controls. */
+.game-navigation {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+}
+.header-actions .game-navigation .header-new-game {
+  margin-right: 0;
+}
+.header-actions .game-navigation :is(.games-control, .header-new-game) {
+  height: 48px;
+  min-height: 48px;
+  padding: 8px 12px;
+}
+.corner-help-control {
+  position: fixed;
+  right: max(12px, env(safe-area-inset-right));
+  bottom: max(10px, env(safe-area-inset-bottom));
+  z-index: 10;
+  width: 44px;
+  height: 44px;
+}
+@media (any-pointer: coarse) and (min-width: 700px) {
+  .hand-row {
+    --shuffle-size: 44px;
+    --hand-action-gap: 6px;
+    --hand-action-clearance: 6px;
+  }
+  .hand-action-button {
+    gap: 2px;
+    padding: 2px;
+    font-size: 12px;
+  }
+  .hand-action-button svg {
+    width: 20px;
+    height: 20px;
   }
 }

@@ -1,5 +1,13 @@
 const releases = [
   {
+    version: "1.7.1",
+    items: [
+      "Games and New game stay side by side, with Help in the bottom-right corner.",
+      "Smaller iPad Recall and Shuffle controls fit beside the centered tile rack, including shorter Safari views.",
+      "Audio is disabled and the sound toggle has been removed.",
+    ],
+  },
+  {
     version: "1.7.0",
     items: [
       "Play private games with more family members, with a Games menu and sign out.",

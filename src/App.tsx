@@ -376,29 +376,9 @@ function TeaMark({ large = false }: { large?: boolean }) {
 function Icon({
   name,
 }: {
-  name:
-    | "sound"
-    | "mute"
-    | "help"
-    | "shuffle"
-    | "recall"
-    | "arrow"
-    | "close"
-    | "check";
+  name: "help" | "shuffle" | "recall" | "arrow" | "close" | "check";
 }) {
   const paths: Record<typeof name, ReactNode> = {
-    sound: (
-      <>
-        <path d="m11 5-5 4H3v6h3l5 4V5Z" />
-        <path d="M15 8a6 6 0 0 1 0 8M18 5a10 10 0 0 1 0 14" />
-      </>
-    ),
-    mute: (
-      <>
-        <path d="m11 5-5 4H3v6h3l5 4V5Z" />
-        <path d="m16 9 6 6m0-6-6 6" />
-      </>
-    ),
     help: (
       <>
         <circle cx="12" cy="12" r="9" />
@@ -841,16 +821,12 @@ function TableApp({
     key: "",
     ids: [],
   });
-  const [sound, setSound] = useState(
-    () => localStorage.getItem("tea-tiles-sound") === "true",
-  );
   const [theme, setTheme] = useState<Theme>(() => {
     const saved = localStorage.getItem("tea-tiles-theme");
     return themeChoices.some(([id]) => id === saved)
       ? (saved as Theme)
       : "blue-ink";
   });
-  const audio = useRef<AudioContext | null>(null);
   const [draft, setDraft] = useState<Draft>({
     key: "",
     revision: 0,
@@ -1173,10 +1149,17 @@ function TableApp({
         7 * value("--hand-slot-width") +
         6 * value("--hand-slot-gap") +
         2 * value("--hand-padding");
-      const actionsWidth = 2 * value("--shuffle-size") + 10;
-      // Controls need their full width on the right of an independently centered rack.
-      const below = width < rackWidth + 2 * (actionsWidth + 10);
-      const nextWidth = `${width}px`;
+      const actionsWidth =
+        2 * value("--shuffle-size") + value("--hand-action-gap");
+      // A short viewport can make the board narrower than the unchanged rack
+      // and its touch targets. Use the empty play-area margins before adding
+      // a second row, which would shrink the board further.
+      const required =
+        rackWidth + 2 * (actionsWidth + value("--hand-action-clearance"));
+      const available = board.parentElement?.clientWidth ?? width;
+      const handWidth = Math.min(available, Math.max(width, required));
+      const below = handWidth < required;
+      const nextWidth = `${handWidth}px`;
       if (hand.style.width !== nextWidth) hand.style.width = nextWidth;
       const nextBelow = String(below);
       if (hand.dataset.actionsBelow !== nextBelow)
@@ -1224,7 +1207,7 @@ function TableApp({
           edit(placements.filter((p) => p.tileId !== tileId));
         }
         setSelected(null);
-        tick();
+
         return;
       }
       const tile = rack.find((t) => t.id === tileId);
@@ -2045,30 +2028,6 @@ function TableApp({
     newGameBusy,
   ]);
 
-  function tick() {
-    if (!sound) return;
-    try {
-      audio.current ??= new AudioContext();
-      const context = audio.current;
-      void context.resume();
-      const oscillator = context.createOscillator(),
-        gain = context.createGain();
-      oscillator.type = "sine";
-      oscillator.frequency.setValueAtTime(610, context.currentTime);
-      oscillator.frequency.exponentialRampToValueAtTime(
-        310,
-        context.currentTime + 0.055,
-      );
-      gain.gain.setValueAtTime(0.035, context.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, context.currentTime + 0.07);
-      oscillator.connect(gain);
-      gain.connect(context.destination);
-      oscillator.start();
-      oscillator.stop(context.currentTime + 0.08);
-    } catch {
-      /* Sound is optional. */
-    }
-  }
   function edit(next: Placement[]) {
     setDraft({
       key: draftKey,
@@ -2103,7 +2062,6 @@ function TableApp({
     recallAnimation.begin(sources);
     edit(tileId ? placements.filter((p) => p.tileId !== tileId) : []);
     setSelected(null);
-    tick();
   }
   function place(
     tileId: string,
@@ -2133,7 +2091,6 @@ function TableApp({
       { tileId, row, col, ...(letter ? { letter } : {}) },
     ]);
     setSelected(null);
-    tick();
   }
   function tapSquare(row: number, col: number) {
     if (!canEdit || game?.board[`${row},${col}`]) return;
@@ -2143,7 +2100,7 @@ function TableApp({
         edit(placements.filter((p) => p.tileId !== existing.tileId));
         setSelected(null);
       } else setSelected(existing.tileId);
-      tick();
+
       return;
     }
     if (!selected) {
@@ -2195,7 +2152,6 @@ function TableApp({
       edit([]);
       setSelected(null);
       setExchange([]);
-      tick();
     } catch (error) {
       if (latestGameContext.current !== submittedContext) return;
       const rejectedWords = rejectedDictionaryWords(error);
@@ -2432,7 +2388,6 @@ function TableApp({
       [ids[i], ids[j]] = [ids[j], ids[i]];
     }
     setRackOrder({ key: rackOrderKey, ids });
-    tick();
   }
   function reorderRack(tileId: string, beforeTileId?: string) {
     const ids = orderedRack
@@ -2970,83 +2925,85 @@ function TableApp({
             )}
           </div>
         )}
-        {session.playerId && (
-          <div className="games-control-anchor" ref={gamesAnchor}>
+        <div className="game-navigation" data-testid="game-navigation">
+          {session.playerId && (
+            <div className="games-control-anchor" ref={gamesAnchor}>
+              <button
+                className={`secondary-button games-control ${repliesNeeded ? "games-reply-needed" : ""}`}
+                data-testid="open-games"
+                aria-label={`Games${unreadTableCount ? `, updates in ${unreadTableCount} other ${unreadTableCount === 1 ? "game" : "games"}` : ""}${repliesNeeded ? ", a reply is needed" : ""}`}
+                disabled={!canNavigateTables}
+                onClick={() => setDialog("games")}
+              >
+                Games
+                {unreadTableCount > 0 && (
+                  <span
+                    className="games-badge"
+                    data-testid="games-activity-count"
+                    aria-hidden="true"
+                  >
+                    {unreadTableCount}
+                  </span>
+                )}
+              </button>
+              <GameActivityNotice
+                anchor={gamesAnchor}
+                event={activity.notice}
+                text={
+                  activity.notice
+                    ? activityText(
+                        activity.notice,
+                        (() => {
+                          const pair = activity.pairs.find(
+                            (p) => p.id === activity.notice!.pairId,
+                          );
+                          return pair
+                            ? pair.names[
+                                pair.seatPlayers.mom === session.playerId
+                                  ? "aunt"
+                                  : "mom"
+                              ]
+                            : "Your partner";
+                        })(),
+                      )
+                    : ""
+                }
+                show={!activityBlocked}
+                open={() =>
+                  activity.notice && openActivityTable(activity.notice.pairId)
+                }
+                dismiss={activity.dismiss}
+              />
+            </div>
+          )}
+          {game && slot && (
             <button
-              className={`secondary-button games-control ${repliesNeeded ? "games-reply-needed" : ""}`}
-              data-testid="open-games"
-              aria-label={`Games${unreadTableCount ? `, updates in ${unreadTableCount} other ${unreadTableCount === 1 ? "game" : "games"}` : ""}${repliesNeeded ? ", a reply is needed" : ""}`}
-              disabled={!canNavigateTables}
-              onClick={() => setDialog("games")}
+              className={`secondary-button header-new-game ${nextGameCue ? "new-game-next-action" : ""}`}
+              data-testid="new-game"
+              disabled={
+                !canUseNewGame ||
+                appUpdate.applying ||
+                !!currentGameRequest ||
+                waitingForNewGame ||
+                !!debugBoardMove
+              }
+              title={
+                waitingForNewGame
+                  ? `Waiting for ${partnerName} to agree.`
+                  : currentGameRequest
+                    ? "A new game request is waiting for a decision."
+                    : newGameUnavailable ||
+                      "Ask your partner to start a new game."
+              }
+              onClick={() => {
+                setNewGameError("");
+                setDialog("new-game");
+              }}
             >
-              Games
-              {unreadTableCount > 0 && (
-                <span
-                  className="games-badge"
-                  data-testid="games-activity-count"
-                  aria-hidden="true"
-                >
-                  {unreadTableCount}
-                </span>
-              )}
+              New game
             </button>
-            <GameActivityNotice
-              anchor={gamesAnchor}
-              event={activity.notice}
-              text={
-                activity.notice
-                  ? activityText(
-                      activity.notice,
-                      (() => {
-                        const pair = activity.pairs.find(
-                          (p) => p.id === activity.notice!.pairId,
-                        );
-                        return pair
-                          ? pair.names[
-                              pair.seatPlayers.mom === session.playerId
-                                ? "aunt"
-                                : "mom"
-                            ]
-                          : "Your partner";
-                      })(),
-                    )
-                  : ""
-              }
-              show={!activityBlocked}
-              open={() =>
-                activity.notice && openActivityTable(activity.notice.pairId)
-              }
-              dismiss={activity.dismiss}
-            />
-          </div>
-        )}
-        {game && slot && (
-          <button
-            className={`secondary-button header-new-game ${nextGameCue ? "new-game-next-action" : ""}`}
-            data-testid="new-game"
-            disabled={
-              !canUseNewGame ||
-              appUpdate.applying ||
-              !!currentGameRequest ||
-              waitingForNewGame ||
-              !!debugBoardMove
-            }
-            title={
-              waitingForNewGame
-                ? `Waiting for ${partnerName} to agree.`
-                : currentGameRequest
-                  ? "A new game request is waiting for a decision."
-                  : newGameUnavailable ||
-                    "Ask your partner to start a new game."
-            }
-            onClick={() => {
-              setNewGameError("");
-              setDialog("new-game");
-            }}
-          >
-            New game
-          </button>
-        )}
+          )}
+        </div>
         {import.meta.env.DEV && debugEnabled && game && (
           <button
             className="secondary-button"
@@ -3098,30 +3055,6 @@ function TableApp({
             </button>
           </div>
         )}
-        <button
-          className="icon-button sound-control"
-          onClick={() => {
-            const next = !sound;
-            setSound(next);
-            localStorage.setItem("tea-tiles-sound", String(next));
-          }}
-          aria-label={sound ? "Turn sound off" : "Turn sound on"}
-          aria-pressed={sound}
-          title={sound ? "Sound on" : "Sound off"}
-        >
-          <Icon name={sound ? "sound" : "mute"} />
-        </button>
-        <button
-          className="icon-button help-control"
-          onClick={() => {
-            setHelpPage("root");
-            setDialog("help");
-          }}
-          aria-label="Help & settings"
-          data-testid="help-settings"
-        >
-          <Icon name="help" />
-        </button>
       </div>
     </header>
   );
@@ -3138,6 +3071,17 @@ function TableApp({
         className={`app-shell ${game && slot ? "active-game" : ""} ${compactTable ? "compact-table" : ""} ${tabletFits ? "tablet-viewport-fit" : ""} ${zoomed ? "board-focus" : ""}`}
       >
         {!compactTable && appHeader}
+        <button
+          className="icon-button help-control corner-help-control"
+          onClick={() => {
+            setHelpPage("root");
+            setDialog("help");
+          }}
+          aria-label="Help & settings"
+          data-testid="help-settings"
+        >
+          <Icon name="help" />
+        </button>
 
         {session.loading && !game ? (
           <main className="welcome loading-state">
@@ -3755,14 +3699,12 @@ function TableApp({
                                           (event.key === "ArrowRight" ? 1 : 0)
                                       ]?.id,
                                     );
-                                    tick();
                                   }}
                                   onClick={() => {
                                     setSelected(
                                       selected === tile.id ? null : tile.id,
                                     );
                                     setMessage("");
-                                    tick();
                                   }}
                                   initial={
                                     settling?.tile.id === tile.id ||

@@ -1189,12 +1189,15 @@ test("wooden rack stays the same size as tiles leave and return and bonus legend
   }
 });
 
-test("the rack centers on the board while full-size hand controls follow its right edge", async ({
+test("iPad navigation stays together and compact hand controls share the centered rack row", async ({
   page,
-}) => {
+}, info) => {
   await enroll(page);
   for (const viewport of [
     { width: 1024, height: 768 },
+    { width: 1024, height: 660 },
+    { width: 1180, height: 820 },
+    { width: 768, height: 1024 },
     { width: 820, height: 1180 },
     { width: 1366, height: 1024 },
     { width: 1440, height: 1200 },
@@ -1212,9 +1215,7 @@ test("the rack centers on the board while full-size hand controls follow its rig
           const actions = document
             .querySelector(".hand-actions")!
             .getBoundingClientRect();
-          const tile = document
-            .querySelector(".rack-tile")!
-            .getBoundingClientRect();
+
           const controls = [
             ...document.querySelectorAll(".hand-action-button"),
           ];
@@ -1227,14 +1228,24 @@ test("the rack centers on the board while full-size hand controls follow its rig
             Math.abs(
               rack.left + rack.width / 2 - board.left - board.width / 2,
             ) < 1 &&
-            Math.abs(actions.right - board.right) < 1 &&
+            Math.abs(
+              actions.right -
+                document.querySelector(".hand-row")!.getBoundingClientRect()
+                  .right,
+            ) < 1 &&
+            actions.right <=
+              document.querySelector(".play-area")!.getBoundingClientRect()
+                .right +
+                1 &&
             !overlap &&
+            Math.abs(
+              actions.top + actions.height / 2 - rack.top - rack.height / 2,
+            ) < 1 &&
             controls.every((control) => {
               const rect = control.getBoundingClientRect();
               return (
-                rect.width >= tile.width &&
-                rect.height >= tile.height &&
-                getComputedStyle(control).fontSize === "15px" &&
+                rect.width >= 44 &&
+                rect.height >= 44 &&
                 control.scrollWidth <= control.clientWidth
               );
             }) &&
@@ -1243,6 +1254,37 @@ test("the rack centers on the board while full-size hand controls follow its rig
         }),
       )
       .toBe(true);
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const games = document
+            .querySelector('[data-testid="open-games"]')!
+            .getBoundingClientRect();
+          const newGame = document
+            .querySelector('[data-testid="new-game"]')!
+            .getBoundingClientRect();
+          const help = document
+            .querySelector('[data-testid="help-settings"]')!
+            .getBoundingClientRect();
+          const gap = newGame.left - games.right;
+          return (
+            Math.abs(games.top - newGame.top) < 1 &&
+            gap >= 0 &&
+            gap <= 10 &&
+            innerWidth - help.right <= 16 &&
+            innerHeight - help.bottom <= 16
+          );
+        }),
+      )
+      .toBe(true);
+    await expect(page.getByRole("button", { name: /Turn sound/ })).toHaveCount(
+      0,
+    );
+    await page.screenshot({
+      path: info.outputPath(
+        `controls-${viewport.width}x${viewport.height}.png`,
+      ),
+    });
   }
 });
 
