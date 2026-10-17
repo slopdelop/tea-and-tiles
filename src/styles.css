@@ -5769,9 +5769,9 @@ html.tablet-page-fitted,
 }
 @media (any-pointer: coarse) and (min-width: 700px) {
   .hand-row {
-    --shuffle-size: 44px;
-    --hand-action-gap: 6px;
-    --hand-action-clearance: 6px;
+    --shuffle-size: 48px;
+    --hand-action-gap: 4px;
+    --hand-action-clearance: 3px;
   }
   .hand-action-button {
     gap: 2px;

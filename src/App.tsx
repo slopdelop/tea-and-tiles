@@ -2926,6 +2926,33 @@ function TableApp({
           </div>
         )}
         <div className="game-navigation" data-testid="game-navigation">
+          {game && slot && (
+            <button
+              className={`secondary-button header-new-game ${nextGameCue ? "new-game-next-action" : ""}`}
+              data-testid="new-game"
+              disabled={
+                !canUseNewGame ||
+                appUpdate.applying ||
+                !!currentGameRequest ||
+                waitingForNewGame ||
+                !!debugBoardMove
+              }
+              title={
+                waitingForNewGame
+                  ? `Waiting for ${partnerName} to agree.`
+                  : currentGameRequest
+                    ? "A new game request is waiting for a decision."
+                    : newGameUnavailable ||
+                      "Ask your partner to start a new game."
+              }
+              onClick={() => {
+                setNewGameError("");
+                setDialog("new-game");
+              }}
+            >
+              New game
+            </button>
+          )}
           {session.playerId && (
             <div className="games-control-anchor" ref={gamesAnchor}>
               <button
@@ -2975,33 +3002,6 @@ function TableApp({
                 dismiss={activity.dismiss}
               />
             </div>
-          )}
-          {game && slot && (
-            <button
-              className={`secondary-button header-new-game ${nextGameCue ? "new-game-next-action" : ""}`}
-              data-testid="new-game"
-              disabled={
-                !canUseNewGame ||
-                appUpdate.applying ||
-                !!currentGameRequest ||
-                waitingForNewGame ||
-                !!debugBoardMove
-              }
-              title={
-                waitingForNewGame
-                  ? `Waiting for ${partnerName} to agree.`
-                  : currentGameRequest
-                    ? "A new game request is waiting for a decision."
-                    : newGameUnavailable ||
-                      "Ask your partner to start a new game."
-              }
-              onClick={() => {
-                setNewGameError("");
-                setDialog("new-game");
-              }}
-            >
-              New game
-            </button>
           )}
         </div>
         {import.meta.env.DEV && debugEnabled && game && (

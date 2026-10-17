@@ -1244,8 +1244,9 @@ test("iPad navigation stays together and compact hand controls share the centere
             controls.every((control) => {
               const rect = control.getBoundingClientRect();
               return (
-                rect.width >= 44 &&
-                rect.height >= 44 &&
+                rect.width >= 48 &&
+                rect.height >= 48 &&
+                getComputedStyle(control).fontSize === "12px" &&
                 control.scrollWidth <= control.clientWidth
               );
             }) &&
@@ -1266,7 +1267,7 @@ test("iPad navigation stays together and compact hand controls share the centere
           const help = document
             .querySelector('[data-testid="help-settings"]')!
             .getBoundingClientRect();
-          const gap = newGame.left - games.right;
+          const gap = games.left - newGame.right;
           return (
             Math.abs(games.top - newGame.top) < 1 &&
             gap >= 0 &&

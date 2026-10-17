@@ -1,5 +1,12 @@
 const releases = [
   {
+    version: "1.7.2",
+    items: [
+      "Slightly larger iPad Recall and Shuffle buttons, with the same text size and a single rack row.",
+      "New game appears to the left of Games.",
+    ],
+  },
+  {
     version: "1.7.1",
     items: [
       "Games and New game stay side by side, with Help in the bottom-right corner.",
