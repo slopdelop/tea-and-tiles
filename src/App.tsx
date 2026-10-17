@@ -65,6 +65,7 @@ import {
   unreadEvents,
 } from "./gameActivity";
 import { GameActivityNotice } from "./components/GameActivityNotice";
+import { canUseDebugTools } from "./debugAccess";
 import "./styles.css";
 
 type Dialog =
@@ -857,10 +858,14 @@ function TableApp({
   const [turnAnnouncement, setTurnAnnouncement] = useState<TurnNotice | null>(
     null,
   );
-  const [debugEnabled, setDebugEnabled] = useState(
-    () =>
-      import.meta.env.DEV && localStorage.getItem("tea-tiles-debug") === "true",
+  const debugAllowed = canUseDebugTools(session.playerId);
+  const debugPreferenceKey = import.meta.env.DEV
+    ? "tea-tiles-debug"
+    : "tea-tiles-debug:justin";
+  const [debugOptIn, setDebugEnabled] = useState(
+    () => debugAllowed && localStorage.getItem(debugPreferenceKey) === "true",
   );
+  const debugEnabled = debugAllowed && debugOptIn;
   const [debugWinner, setDebugWinner] = useState<Slot | "tie">("mom");
   const [debugFrameMeter, setDebugFrameMeter] = useState(false);
   const [debugExchange, setDebugExchange] = useState<
@@ -963,8 +968,8 @@ function TableApp({
     return () => clearTimeout(timer);
   }, [debugSubmission?.id]);
   useEffect(() => {
-    if (import.meta.env.DEV)
-      localStorage.setItem("tea-tiles-debug", String(debugEnabled));
+    if (debugAllowed)
+      localStorage.setItem(debugPreferenceKey, String(debugEnabled));
     if (!debugEnabled) {
       setDebugFrameMeter(false);
       setDebugStarter(null);
@@ -975,7 +980,7 @@ function TableApp({
       setDebugSubmission(null);
       setDebugFinishedBoard(null);
     }
-  }, [debugEnabled]);
+  }, [debugEnabled, debugAllowed, debugPreferenceKey]);
   useEffect(() => {
     setDebugBoardMove(null);
     setDebugStarter(null);
@@ -3061,12 +3066,9 @@ function TableApp({
 
   return (
     <MotionConfig reducedMotion="user">
-      {import.meta.env.DEV &&
-        debugEnabled &&
-        debugFrameMeter &&
-        dialog !== "debug-performance" && (
-          <DebugFrameMeter floating close={() => setDebugFrameMeter(false)} />
-        )}
+      {debugEnabled && debugFrameMeter && dialog !== "debug-performance" && (
+        <DebugFrameMeter floating close={() => setDebugFrameMeter(false)} />
+      )}
       <div
         className={`app-shell ${game && slot ? "active-game" : ""} ${compactTable ? "compact-table" : ""} ${tabletFits ? "tablet-viewport-fit" : ""} ${zoomed ? "board-focus" : ""}`}
       >
@@ -3408,8 +3410,7 @@ function TableApp({
                         setFadingMove(freshMove);
                     }}
                   >
-                    {import.meta.env.DEV &&
-                      debugEnabled &&
+                    {debugEnabled &&
                       debugBoardMove &&
                       debugScoringReady === debugBoardMove.move.id && (
                         <motion.div
@@ -4521,9 +4522,11 @@ function TableApp({
               )}
             </Modal>
           )}
-          {import.meta.env.DEV && debugEnabled && dialog === "debug-tools" && (
+          {debugEnabled && dialog === "debug-tools" && (
             <Modal
-              title="Local preview tools"
+              title={
+                import.meta.env.DEV ? "Local preview tools" : "Debug & previews"
+              }
               testId="local-debug-popup"
               close={() => setDialog(null)}
             >
@@ -4802,54 +4805,50 @@ function TableApp({
               </button>
             </Modal>
           )}
-          {import.meta.env.DEV &&
-            debugEnabled &&
-            dialog === "debug-performance" && (
-              <Modal
-                title="Drag performance"
-                testId="debug-performance-popup"
-                close={() => setDialog(null)}
-              >
-                <DragPerformanceLab />
-              </Modal>
-            )}
-          {import.meta.env.DEV &&
-            debugEnabled &&
-            dialog === "debug-end-request" && (
-              <Modal
-                title="Finish this game together?"
-                testId="debug-end-request-popup"
-                close={() => setDialog(null)}
-                footer={
-                  <div className="dialog-actions">
-                    <button
-                      className="secondary-button"
-                      onClick={() => setDialog("debug-tools")}
-                    >
-                      Keep playing
-                    </button>
-                    <button
-                      className="primary-button"
-                      data-testid="debug-agree-end"
-                      onClick={() => {
-                        setDebugEnding(
-                          debugEndingGame("agreed-end", debugWinner),
-                        );
-                        setDialog("debug-result");
-                      }}
-                    >
-                      Agree & end game
-                    </button>
-                  </div>
-                }
-              >
-                <p>
-                  The bag is empty. Agreeing finishes the game and subtracts
-                  each player’s remaining tile values.
-                </p>
-              </Modal>
-            )}
-          {import.meta.env.DEV && debugEnabled && dialog === "debug-result" && (
+          {debugEnabled && dialog === "debug-performance" && (
+            <Modal
+              title="Drag performance"
+              testId="debug-performance-popup"
+              close={() => setDialog(null)}
+            >
+              <DragPerformanceLab />
+            </Modal>
+          )}
+          {debugEnabled && dialog === "debug-end-request" && (
+            <Modal
+              title="Finish this game together?"
+              testId="debug-end-request-popup"
+              close={() => setDialog(null)}
+              footer={
+                <div className="dialog-actions">
+                  <button
+                    className="secondary-button"
+                    onClick={() => setDialog("debug-tools")}
+                  >
+                    Keep playing
+                  </button>
+                  <button
+                    className="primary-button"
+                    data-testid="debug-agree-end"
+                    onClick={() => {
+                      setDebugEnding(
+                        debugEndingGame("agreed-end", debugWinner),
+                      );
+                      setDialog("debug-result");
+                    }}
+                  >
+                    Agree & end game
+                  </button>
+                </div>
+              }
+            >
+              <p>
+                The bag is empty. Agreeing finishes the game and subtracts each
+                player’s remaining tile values.
+              </p>
+            </Modal>
+          )}
+          {debugEnabled && dialog === "debug-result" && (
             <Modal
               title="Game complete"
               testId="debug-end-game-popup"
@@ -5369,7 +5368,9 @@ function TableApp({
                       settings: "Colours & device settings",
                       dictionary: "Shared dictionary",
                       about: "About & updates",
-                      debug: "Local preview tools",
+                      debug: import.meta.env.DEV
+                        ? "Local preview tools"
+                        : "Debug & previews",
                     }[helpPage]
               }
               close={() => setDialog(null)}
@@ -5414,13 +5415,15 @@ function TableApp({
                     >
                       About & updates
                     </button>
-                    {import.meta.env.DEV && (
+                    {debugAllowed && (
                       <button
                         className="secondary-button"
                         data-testid="help-debug"
                         onClick={() => setHelpPage("debug")}
                       >
-                        Local preview tools
+                        {import.meta.env.DEV
+                          ? "Local preview tools"
+                          : "Debug & previews"}
                       </button>
                     )}
                   </div>
@@ -5526,7 +5529,7 @@ function TableApp({
               )}
               {helpPage === "debug" && (
                 <>
-                  {import.meta.env.DEV && (
+                  {debugAllowed && (
                     <section className="debug-settings">
                       <label className="debug-toggle">
                         <input
@@ -5537,7 +5540,9 @@ function TableApp({
                           }
                           data-testid="debug-enabled"
                         />{" "}
-                        Enable local preview tools
+                        {import.meta.env.DEV
+                          ? "Enable local preview tools"
+                          : "Enable preview tools"}
                       </label>
                       {debugEnabled && (
                         <div className="debug-panel" data-testid="debug-panel">

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { PairSummary } from "../../shared/players";
+import { canUseDebugTools } from "../debugAccess";
 import {
   acknowledgeActivity,
   observeActivity,
@@ -211,7 +212,7 @@ export function useGameActivity(input: {
   );
   const showPreview = useCallback(
     (kind: "turn" | "request" | "two") => {
-      if (!import.meta.env.DEV || !scope || !playerId) return;
+      if (!canUseDebugTools(playerId) || !scope || !playerId) return;
       const targets = pairs
         .filter((p) => p.id !== selectedPairId)
         .slice(0, kind === "two" ? 2 : 1);

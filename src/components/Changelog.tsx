@@ -1,5 +1,11 @@
 const releases = [
   {
+    version: "1.7.3",
+    items: [
+      "Justin can open Debug & previews from Help to try sample scenes without changing saved games.",
+    ],
+  },
+  {
     version: "1.7.2",
     items: [
       "Slightly larger iPad Recall and Shuffle buttons, with the same text size and a single rack row.",

@@ -24,7 +24,10 @@ export default defineConfig({
     screenshot: "only-on-failure",
   },
   webServer: {
-    command: "npm run dev -- --port 5183 --strictPort",
+    command:
+      process.env.UI_TEST_PRODUCTION === "true"
+        ? "npm run build && npm exec -- vite preview --host 127.0.0.1 --port 5183 --strictPort"
+        : "npm run dev -- --port 5183 --strictPort",
     url: "http://127.0.0.1:5183",
     reuseExistingServer: false,
     timeout: 60_000,

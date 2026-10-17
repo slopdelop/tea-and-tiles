@@ -9833,3 +9833,173 @@ for (const [scene, visibleMs] of [
     }
   });
 }
+
+test("production debug previews are Justin-only and clear when changing accounts", async ({
+  page,
+}, info) => {
+  test.skip(
+    process.env.UI_TEST_PRODUCTION !== "true",
+    "Runs against the actual production build with isolated emulators.",
+  );
+  test.setTimeout(120_000);
+  const batch = db.batch();
+  for (const [id, name] of [
+    ["mom", "Elizabeth"],
+    ["aunt", "Rita"],
+    ["justin", "Justin"],
+    ["mabel", "Mabel"],
+    ["caroline", "Caroline"],
+  ]) {
+    batch.set(db.doc(`playerCredentials/${id}`), {
+      ...(await createCredential("123456")),
+      enabled: true,
+    });
+    if (["mom", "aunt"].includes(id)) continue;
+    batch.set(db.doc(`players/${id}`), {
+      displayName: name,
+      loginName: id,
+      sessionVersion: 0,
+    });
+    const game = createGame(`ui-debug-${id}`, () => 0.42);
+    game.turn = "mom";
+    const { racks, bag, ...state } = game;
+    batch.set(db.doc(`pairs/debug-${id}`), {
+      schemaVersion: 2,
+      memberIds: [id, "mom"],
+      seatPlayers: { mom: id, aunt: "mom" },
+      names: { mom: name, aunt: "Elizabeth" },
+      activeGameId: game.id,
+      activeGame: {
+        id: game.id,
+        status: game.status,
+        turn: game.turn,
+        scores: game.scores,
+        revision: 0,
+        updatedAt: Date.now(),
+      },
+    });
+    batch.set(db.doc(`games/${game.id}`), {
+      ...state,
+      pairId: `debug-${id}`,
+      bagCount: bag.length,
+      rackCounts: { mom: 7, aunt: 7 },
+    });
+    for (const slot of ["mom", "aunt"] as const)
+      batch.set(db.doc(`games/${game.id}/racks/${slot}`), {
+        tiles: racks[slot],
+      });
+    batch.set(db.doc(`games/${game.id}/private/state`), { bag });
+
+    if (id === "justin") {
+      const extraId = "ui-debug-justin-extra";
+      batch.set(db.doc("pairs/zzz-debug-justin-extra"), {
+        schemaVersion: 2,
+        memberIds: ["justin", "aunt"],
+        seatPlayers: { mom: "justin", aunt: "aunt" },
+        names: { mom: "Justin", aunt: "Rita" },
+        activeGameId: extraId,
+        activeGame: {
+          id: extraId,
+          status: game.status,
+          turn: game.turn,
+          scores: game.scores,
+          revision: 0,
+          updatedAt: Date.now(),
+        },
+      });
+      batch.set(db.doc(`games/${extraId}`), {
+        ...state,
+        id: extraId,
+        pairId: "zzz-debug-justin-extra",
+        bagCount: bag.length,
+        rackCounts: { mom: 7, aunt: 7 },
+      });
+      for (const slot of ["mom", "aunt"] as const)
+        batch.set(db.doc(`games/${extraId}/racks/${slot}`), {
+          tiles: racks[slot],
+        });
+      batch.set(db.doc(`games/${extraId}/private/state`), { bag });
+    }
+  }
+  await batch.commit();
+  await page.addInitScript(() => {
+    localStorage.setItem("tea-tiles-debug", "true");
+    localStorage.setItem("tea-tiles-debug:justin", "true");
+  });
+  const signIn = async (name: string) => {
+    await page.getByTestId("login-player").fill(name);
+    await page.getByTestId("login-password").fill("123456");
+    await page.getByTestId("enroll-submit").click();
+    await expect(page.getByTestId("game-board")).toBeVisible();
+  };
+  await page.goto("/");
+  await signIn("Justin");
+  const before = (await db.doc("games/ui-debug-justin").get()).data();
+  for (const viewport of [
+    { width: 1024, height: 768 },
+    { width: 768, height: 1024 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.getByTestId("help-settings").click();
+    await expect(page.getByTestId("help-debug")).toBeVisible();
+    await expect(page.getByRole("dialog")).toHaveCSS("opacity", "1");
+    await expect(page.locator(".modal-backdrop")).toHaveCSS("opacity", "1");
+    await page.screenshot({
+      path: info.outputPath(`justin-debug-help-${viewport.width}.png`),
+    });
+    await page.getByRole("button", { name: "Close dialog" }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+  }
+  await expect(page.getByTestId("local-debug-tools")).toHaveCount(0);
+  await page.getByTestId("help-settings").click();
+  await page.getByTestId("help-debug").click();
+  await expect(page.getByTestId("debug-enabled")).toBeChecked();
+  await page.getByTestId("debug-end-game").click();
+  await page.getByTestId("debug-scene-normal").click();
+  await expect(page.getByTestId("debug-board-scoring")).toBeVisible();
+  await expect(page.getByTestId("debug-board-scoring")).toBeHidden({
+    timeout: 25_000,
+  });
+  await expect(page.locator(".debug-settings")).toHaveCount(0);
+  expect((await db.doc("games/ui-debug-justin").get()).data()).toEqual(before);
+  expect(
+    (await db.collection("games/ui-debug-justin/commands").get()).size,
+  ).toBe(0);
+  await page.getByTestId("help-settings").click();
+  await page.getByTestId("help-debug").click();
+  await page.getByTestId("debug-end-game").click();
+  await page.getByTestId("debug-activity-turn").click();
+  await expect(page.getByTestId("game-activity-notice")).toContainText(
+    "Rita finished their turn",
+  );
+  expect(
+    (await db.doc("games/ui-debug-justin-extra").get()).data()?.revision,
+  ).toBe(0);
+  await page.getByTestId("help-settings").click();
+  await page.getByTestId("help-debug").click();
+  await page.getByTestId("debug-end-game").click();
+  await page.getByTestId("debug-activity-clear").click();
+  await expect(page.getByTestId("game-activity-notice")).toHaveCount(0);
+  // Sign out while a sample finished board is open: no preview may leak into
+  // the next account, even though the same browser remembers Justin's opt-in.
+  await page.getByTestId("help-settings").click();
+  await page.getByTestId("help-debug").click();
+  await page.getByTestId("debug-end-game").click();
+  await page.getByTestId("debug-scene-game-over").click();
+  await page.getByRole("button", { name: "Close dialog" }).click();
+  await page.getByTestId("help-settings").click();
+  await page.getByTestId("sign-out").click();
+  for (const name of ["Elizabeth", "Rita", "Mabel", "Caroline"]) {
+    await signIn(name);
+    await page.getByTestId("help-settings").click();
+    await expect(page.getByTestId("help-debug")).toHaveCount(0);
+    await expect(page.getByTestId("debug-panel")).toHaveCount(0);
+    await expect(page.getByTestId("local-debug-tools")).toHaveCount(0);
+    await page.getByTestId("sign-out").click();
+  }
+  await signIn("Justin");
+  await page.getByTestId("help-settings").click();
+  await page.getByTestId("help-debug").click();
+  await expect(page.getByTestId("debug-enabled")).toBeChecked();
+  expect((await db.doc("games/ui-debug-justin").get()).data()).toEqual(before);
+});
