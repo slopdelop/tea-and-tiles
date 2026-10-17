@@ -99,6 +99,7 @@ const themeChoices = [
   ["coastal", "Coastal blue"],
   ["rose", "Rose & plum"],
   ["forest", "Forest & wood"],
+  ["vintage", "Vintage board"],
   ["sunshine", "Blue & sunshine"],
   ["blue-ink", "Blue & ink"],
   ["terracotta", "Terracotta & cream"],
@@ -822,11 +823,22 @@ function TableApp({
     key: "",
     ids: [],
   });
+  const themePreferenceKey = `tea-tiles-theme:${session.playerId || "welcome"}`;
   const [theme, setTheme] = useState<Theme>(() => {
-    const saved = localStorage.getItem("tea-tiles-theme");
+    const personal = localStorage.getItem(themePreferenceKey);
+    const legacy = localStorage.getItem("tea-tiles-theme");
+    const vintageDefault = ["aunt", "caroline"].includes(
+      session.playerId || "",
+    );
+    // Previous builds saved Blue & Ink even when nobody chose a theme.
+    // Keep explicit personal choices, and migrate other existing palettes.
+    const saved =
+      personal || (vintageDefault && legacy === "blue-ink" ? null : legacy);
     return themeChoices.some(([id]) => id === saved)
       ? (saved as Theme)
-      : "blue-ink";
+      : vintageDefault
+        ? "vintage"
+        : "blue-ink";
   });
   const [draft, setDraft] = useState<Draft>({
     key: "",
@@ -1301,11 +1313,6 @@ function TableApp({
     document.documentElement.dataset.theme = theme;
     document.documentElement.dataset.colorScheme =
       theme === "ink" || theme === "midnight" ? "dark" : "light";
-    try {
-      localStorage.setItem("tea-tiles-theme", theme);
-    } catch {
-      /* The selected theme still works for this visit. */
-    }
   }, [theme]);
   useEffect(() => {
     if (!game || !slot) return;
@@ -5510,7 +5517,14 @@ function TableApp({
                           name="table-theme"
                           value={value}
                           checked={theme === value}
-                          onChange={() => setTheme(value)}
+                          onChange={() => {
+                            setTheme(value);
+                            try {
+                              localStorage.setItem(themePreferenceKey, value);
+                            } catch {
+                              /* The selected theme still works for this visit. */
+                            }
+                          }}
                           data-testid={`theme-${value}`}
                         />
                         <span

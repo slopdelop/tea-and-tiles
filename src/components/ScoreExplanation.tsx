@@ -381,8 +381,10 @@ export function GameSummary({
           );
         })}
       </div>
-      <details className="game-history" data-testid="game-history">
-        <summary>Turn-by-turn history and score adjustments</summary>
+      <section className="game-history" data-testid="game-history">
+        <h3 className="game-history-heading">
+          Turn-by-turn history and score adjustments
+        </h3>
         {game.historyComplete !== true && (
           <p className="history-note" data-testid="partial-history">
             Only recorded turns are shown. Earlier turns from this game may be
@@ -473,7 +475,7 @@ export function GameSummary({
             );
           })}
         </div>
-      </details>
+      </section>
     </section>
   );
 }

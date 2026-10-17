@@ -43,6 +43,7 @@ let expectedRevision = 0;
 let expectedCommandCount = 0;
 let fixtureGame: Game;
 const themes = [
+  "vintage",
   "linen",
   "coastal",
   "rose",
@@ -2120,7 +2121,7 @@ test("themes stay readable in tablet layouts, persist per device and leave a pri
   await expect(page.locator("html")).toHaveAttribute("data-theme", "midnight");
   await expect(page.locator(".has-tentative")).toHaveCount(2);
   expect(
-    await page.evaluate(() => localStorage.getItem("tea-tiles-theme")),
+    await page.evaluate(() => localStorage.getItem("tea-tiles-theme:mom")),
   ).toBe("midnight");
   const auntContext = await browser.newContext({
     baseURL: "http://127.0.0.1:5183",
@@ -2136,10 +2137,7 @@ test("themes stay readable in tablet layouts, persist per device and leave a pri
     await expect(aunt.getByTestId("game-board")).toBeVisible({
       timeout: 45_000,
     });
-    await expect(aunt.locator("html")).toHaveAttribute(
-      "data-theme",
-      "blue-ink",
-    );
+    await expect(aunt.locator("html")).toHaveAttribute("data-theme", "vintage");
     await chooseTheme(aunt, "forest");
     await aunt.reload();
     await expect(aunt.locator("html")).toHaveAttribute("data-theme", "forest");
@@ -9731,7 +9729,7 @@ test("audit polish keeps sign-in together and reveals the private code only on r
   await expect(codeInput).toHaveAttribute("type", "password");
 });
 
-test("audit polish layers dialogs above Games and keeps results history optional", async ({
+test("audit polish layers dialogs above Games and always shows results history", async ({
   page,
 }, info) => {
   await seedActivityTables();
@@ -9780,16 +9778,14 @@ test("audit polish layers dialogs above Games and keeps results history optional
   await expect(result).toContainText("seven-tile bonuses");
   await expect(result).not.toContainText("bingo");
   const history = result.getByTestId("game-history");
-  await expect(history).toHaveJSProperty("open", false);
+  await expect(history.locator("summary")).toHaveCount(0);
   await expect(result.getByTestId("top-word-scores-mom")).toBeVisible();
-  await history.locator("summary").click();
-  await expect(history).toHaveJSProperty("open", true);
+
   await expect(result.getByTestId("history-mom")).toBeVisible();
   await expectControlInsideViewport(
     page,
     result.getByRole("button", { name: "Play a new game?" }),
   );
-  await history.locator("summary").click();
   await result.getByRole("heading", { name: "Game complete" }).click();
   await page.screenshot({ path: info.outputPath("readable-game-results.png") });
 });
@@ -10002,4 +9998,64 @@ test("production debug previews are Justin-only and clear when changing accounts
   await page.getByTestId("help-debug").click();
   await expect(page.getByTestId("debug-enabled")).toBeChecked();
   expect((await db.doc("games/ui-debug-justin").get()).data()).toEqual(before);
+});
+
+test("player theme defaults follow Rita and Caroline accounts and preserve explicit choices", async ({
+  browser,
+}) => {
+  await seedActivityTables();
+  for (const id of ["aunt", "mom"])
+    await db
+      .doc(`playerCredentials/${id}`)
+      .set({ ...(await createCredential("123456")), enabled: true });
+  for (const [name, id, expected] of [
+    ["Rita", "aunt", "vintage"],
+    ["Caroline", "caroline", "vintage"],
+    ["Elizabeth", "mom", "blue-ink"],
+    ["Mabel", "mabel", "blue-ink"],
+  ]) {
+    const context = await browser.newContext({
+      baseURL: "http://127.0.0.1:5183",
+      hasTouch: true,
+      viewport: { width: 1024, height: 768 },
+    });
+    try {
+      await context.addInitScript(() =>
+        localStorage.setItem("tea-tiles-theme", "blue-ink"),
+      );
+      const view = await context.newPage();
+      await view.goto("/");
+      await view.getByTestId("login-player").fill(name);
+      await view.getByTestId("login-password").fill("123456");
+      await view.getByTestId("enroll-submit").click();
+      await expect(view.getByTestId("game-board")).toBeVisible();
+      await expect(view.locator("html")).toHaveAttribute(
+        "data-theme",
+        expected,
+      );
+      await view.getByTestId("help-settings").click();
+      await view.getByTestId("help-settings-page").click();
+      await view.getByTestId("theme-blue-ink").check();
+      await view.getByRole("button", { name: "Close dialog" }).click();
+      // An explicit Blue & Ink choice must survive, even for vintage-default players.
+      if (expected === "vintage") {
+        await expect
+          .poll(() =>
+            view.evaluate(
+              (key) => localStorage.getItem(key),
+              `tea-tiles-theme:${id}`,
+            ),
+          )
+          .toBe("blue-ink");
+        await view.reload();
+        await expect(view.getByTestId("game-board")).toBeVisible();
+        await expect(view.locator("html")).toHaveAttribute(
+          "data-theme",
+          "blue-ink",
+        );
+      }
+    } finally {
+      await context.close();
+    }
+  }
 });

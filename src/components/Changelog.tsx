@@ -1,5 +1,13 @@
 const releases = [
   {
+    version: "1.7.4",
+    items: [
+      "The complete word history and score adjustments stay visible in game results.",
+      "New Vintage board colours, inspired by the family board, are the default for Rita and Caroline.",
+      "Theme choices are remembered separately for each player on this device.",
+    ],
+  },
+  {
     version: "1.7.3",
     items: [
       "Justin can open Debug & previews from Help to try sample scenes without changing saved games.",

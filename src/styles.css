@@ -3445,6 +3445,50 @@ button {
   --avatar-first: #c1d7b6;
   --avatar-second: #e3bea3;
 }
+/* Colours drawn from the family board photograph. */
+:root[data-theme="vintage"] {
+  --paper: #f0ede4;
+  --ink: #272d29;
+  --muted: #56615b;
+  --surface: #fcf8ee;
+  --line: #c7c8b9;
+  --green: #285c57;
+  --soft: #e0e8de;
+  --choice-line: #a6b7ad;
+  --tile-hover: #316c65;
+  --accent-hover: #204843;
+  --frame: #727e73;
+  --frame-edge: #354f49;
+  --board-line: #f2ead6;
+  --square: #a4a69a;
+  --dl: #91c6d0;
+  --tl: #087b9d;
+  --dw: #eea095;
+  --tw: #e94e43;
+  --premium-ink: #172e32;
+  --tl-ink: #fffdf0;
+  --warm-ink: #36251f;
+  --tw-ink: #171a15;
+  --tile-top: #fff2d0;
+  --tile-bottom: #e6d0a0;
+  --tile-border: #b39b6d;
+  --tile-ink: #252820;
+  --ghost-top: #fff8df;
+  --ghost-bottom: #eedcb4;
+  --rack-top: #b2956b;
+  --rack-bottom: #907149;
+  --avatar-first: #cad9cb;
+  --avatar-second: #efd0bd;
+}
+.swatch-vintage i:nth-child(1) {
+  background: #a4a69a;
+}
+.swatch-vintage i:nth-child(2) {
+  background: #91c6d0;
+}
+.swatch-vintage i:nth-child(3) {
+  background: #e94e43;
+}
 :root[data-theme="sunshine"] {
   --paper: #edf3fc;
   --ink: #253d64;
@@ -5659,22 +5703,17 @@ html.tablet-page-fitted,
   border: 1px solid var(--line);
   border-radius: 10px;
 }
-.game-history > summary {
+.game-history-heading {
   min-height: 48px;
   padding: 12px;
   font-size: 16px;
   font-weight: 600;
   line-height: 1.5;
-  cursor: pointer;
 }
-.game-history > :not(summary) {
+.game-history > * {
   margin-inline: 14px;
 }
-.game-history > summary:focus-visible {
-  outline: 2px solid var(--green);
-  outline-offset: 3px;
-  border-radius: 8px;
-}
+
 .enroll-form label,
 .enroll-form input,
 .enroll-form input::placeholder {
